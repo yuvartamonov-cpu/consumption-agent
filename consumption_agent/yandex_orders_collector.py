@@ -123,7 +123,35 @@ def collect_orders(driver, service_id, url, max_pages=50):
         # Проверяем, не ушли ли мы за 6 месяцев по датам
         if orders and date_str:
             # Парсим дату — если она старше 6 мес, останавливаемся
-            pass  # TODO: нормальный парсинг даты
+            from datetime import datetime, timedelta
+            try:
+                # Формат: '31 марта 2025' или '01.01.2025' или ISO
+                for fmt in ('%d %B %Y', '%d.%m.%Y', '%Y-%m-%d'):
+                    try:
+                        order_date = datetime.strptime(date_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    # Русские месяца — грубая замена
+                    ru_months = {'января': '01', 'февраля': '02', 'марта': '03',
+                                 'апреля': '04', 'мая': '05', 'июня': '06',
+                                 'июля': '07', 'августа': '08', 'сентября': '09',
+                                 'октября': '10', 'ноября': '11', 'декабря': '12'}
+                    for ru, num in ru_months.items():
+                        if ru in date_str.lower():
+                            normalized = date_str.lower().replace(ru, num)
+                            order_date = datetime.strptime(normalized, '%d %m %Y')
+                            break
+                    else:
+                        order_date = datetime.now()
+                
+                six_months_ago = datetime.now() - timedelta(days=180)
+                if order_date < six_months_ago:
+                    print(f"  Достигнут предел 6 месяцев ({date_str}), останавливаемся")
+                    break
+            except Exception as e:
+                print(f"  Не удалось распарсить дату '{date_str}': {e}")
     
     return orders
 
