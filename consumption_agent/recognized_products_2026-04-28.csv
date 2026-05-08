@@ -1,0 +1,11 @@
+source_file,source_type,recognized_product,confidence,notes
+"downloadCheque---6464ce8b-f60e-4ede-b7a1-c2f282f40ed8.pdf","pdf_cheque","Симпарика 40 мг жевательные таблетки для собак весом 10–20 кг №3","high","Из текста кассового чека"
+"temp3790024603363907474---908fb609-c798-4de6-9174-a212d281c2fb.pdf","pdf_cheque","Симпарика 40 мг жевательные таблетки для собак весом 10–20 кг №3","high","Дубликат более позднего чека"
+"temp8660436857699861555---e3d34f75-7d4b-474e-9500-4cdbb27c4ff2.pdf","pdf_cheque","Симпарика 40 мг жевательные таблетки для собак весом 10–20 кг №3","high","Дубликат того же чека"
+"5_6305295608693398696---be36fea2-cfa5-40e4-8e59-5d0518aa4ce7.pdf","pdf_cheque","Симпарика 40 мг жевательные таблетки для собак весом 10–20 кг №3","high","Дубликат того же чека"
+"downloadCheque_1---cc8d7ba1-67ef-4e79-a746-250023f51eba.pdf","pdf_cheque","Ozon Premium Ежемесячный","high","Подписка"
+"downloadCheque_2---16974581-6e71-4197-b333-8f9023b735ec.pdf","pdf_cheque","Ozon Premium Ежемесячный","high","Повторный/дублирующий чек"
+"downloadCheque_3---2f87d289-825d-4a23-ae37-c7eff0724629.pdf","pdf_cheque","Сухой корм Grandorf Fresh для собак мелких пород, ягненок и батат, 3 кг","high","В чеке указано как Грандорф Фреш / Grandorf Fresh"
+"downloadCheque_4---08060f82-664b-495a-9b34-7104de7296b1.pdf","pdf_cheque","Сухой корм Grandorf Fresh для собак мелких пород, ягненок и батат, 3 кг","high","Повторная покупка / дублирующий чек"
+"downloadCheque_5---b352159d-0b55-4eb7-b75e-75436b1ebfca.pdf","pdf_cheque","Туалетный столик с гримерным зеркалом и подсветкой, гримерный стол с ящиком Light","high","Из текста чека"
+"downloadCheque_6---bd3fa00b-f20e-4cfe-b11b-9c4966fae92f.pdf","pdf_cheque","Циркуль школьный для черчения, готовальня Faber-Castell","high","Из текста чека"

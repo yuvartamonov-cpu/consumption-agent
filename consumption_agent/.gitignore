@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+.env
+.ozon_cookies.txt
+*.bak
+logs/

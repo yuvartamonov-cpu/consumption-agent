@@ -1,0 +1,41 @@
+# Венев
+consumption_agent/venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Базы данных
+*.db
+*.sqlite
+
+# Конфиги с секретами
+.env
+.ozon_cookies.txt
+
+# Бэкапы
+*.bak
+
+# Логи
+consumption_agent/logs/
+logs/
+*.log
+
+# Временные файлы
+tmp/
+tmp_*
+venv/
+
+# PDF и прочие файлы проекта
+*.pdf
+*.txt
+update-check.json
+
+# HTML export Yandex
+consumption_agent/Yandex_Lavka_orders_files/
+consumption_agent/Yandex_Lavka_orders_files.html
+consumption_agent/Yandex_Lavka_orders_files.html:Zone.Identifier
+consumption_agent/.env.save
+
+# Zone.Identifier
+*:Zone.Identifier
+consumption_agent/Yandex_Lavka_orders_files_files/
