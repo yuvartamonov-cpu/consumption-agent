@@ -505,77 +505,25 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 log = logging.getLogger(__name__)
 
 def generate_alerts() -> int:
-    """Генерация алертов по гарантиям. Запускать при старте и по крону."""
+    """Generate daily alerts: warranty + expiry + low_stock."""
     try:
+        from warranty_check import run_daily_alert_checks
+
         conn = get_db()
-        today = date.today().isoformat()
-        generated = 0
-
-        # Гарантия истекает через 30 дней
-        rows = conn.execute("""
-            SELECT id, name, purchase_date, warranty_months
-            FROM items
-            WHERE warranty_months > 0
-              AND deleted_at IS NULL
-              AND (purchase_date IS NOT NULL AND purchase_date != '')
-        """).fetchall()
-
-        for r in rows:
-            try:
-                from datetime import datetime as dt_mod
-                raw = (r['purchase_date'] or '').strip()
-                # Универсальный парсер: DD.MM.YYYY / YYYY-MM-DD / YYYY-MM / YYYY
-                pd_dt = None
-                for fmt in ('%d.%m.%Y', '%Y-%m-%d', '%Y-%m', '%Y'):
-                    try:
-                        parsed = dt_mod.strptime(raw, fmt)
-                        pd_dt = parsed.date()
-                        break
-                    except ValueError:
-                        continue
-                if pd_dt is None:
-                    continue
-                month = pd_dt.month + r['warranty_months']
-                year = pd_dt.year + (month - 1) // 12
-                month = ((month - 1) % 12) + 1
-                w_until = pd_dt.replace(year=year, month=month)
-                days_left = (w_until - date.today()).days
-
-                # Если дата покупки техническая (только месяц) и товар реально старый — не спамим
-                if len(raw) <= 7 and days_left > 180:
-                    continue
-
-                title = f"{r['name'][:40]} — гарантия"
-                if days_left < 0:
-                    # Просрочена
-                    exists = conn.execute(
-                        "SELECT id FROM alerts WHERE title=? AND alert_type='warranty_expired' AND status='pending'",
-                        (title,)).fetchone()
-                    if not exists:
-                        conn.execute(
-                            "INSERT INTO alerts (title, message, alert_type, status, item_id) VALUES (?, ?, 'warranty_expired', 'pending', ?)",
-                            (title, f"Гарантия истекла {w_until.isoformat()}. Пора проверить товар.", r['id']))
-                        generated += 1
-                elif days_left <= 30:
-                    exists = conn.execute(
-                        "SELECT id FROM alerts WHERE title=? AND alert_type='warranty_expiring' AND status='pending'",
-                        (title,)).fetchone()
-                    if not exists:
-                        conn.execute(
-                            "INSERT INTO alerts (title, message, alert_type, status, item_id) VALUES (?, ?, 'warranty_expiring', 'pending', ?)",
-                            (title, f"Осталось {days_left} дн. до конца гарантии ({w_until.isoformat()}).", r['id']))
-                        generated += 1
-            except Exception:
-                continue
-
-        conn.commit()
+        generated = run_daily_alert_checks(conn)
         conn.close()
         if generated:
-            log.info(f"Сгенерировано {generated} алертов")
+            log.info(f"Generated {generated} alerts")
         return generated
     except Exception as e:
         log.warning(f"generate_alerts failed: {e}")
         return 0
+
+
+async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
+    """Daily task for alert generation (09:00 local by default)."""
+    generated = generate_alerts()
+    log.info(f"daily alert job completed (new alerts: {generated})")
 
 
 def get_db(max_retries=3, delay=1):
@@ -597,6 +545,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         'Команды:\n'
         '/list — инвентарь по категориям\n'
         '/alerts — алерты (гарантии, сроки)\n'
+        '/find_car — последние поездки Яндекс Драйв\n'
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
         '/add_photo — загрузить фото чека (OCR)\n'
         '/check — статистика\n'
@@ -838,6 +787,87 @@ async def cmd_alerts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if r['message']:
             lines.append(f'   {r["message"]}')
     await update.message.reply_text('\n'.join(lines))
+
+
+def _extract_drive_field(patterns: list[str], text: str | None) -> str | None:
+    if not text:
+        return None
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /find_car — показывает последние поездки Яндекс Драйв."""
+    conn = get_db()
+    limit = 5
+    if ctx.args and ctx.args[0].isdigit():
+        limit = max(1, min(int(ctx.args[0]), 20))
+
+    rows = conn.execute(
+        """
+        SELECT purchase_date, total_amount, source, store_name, notes
+        FROM purchases
+        WHERE deleted_at IS NULL
+          AND (
+            lower(COALESCE(source, '')) LIKE '%yandex_drive%'
+            OR lower(COALESCE(source, '')) LIKE '%yandex%drive%'
+            OR lower(COALESCE(store_name, '')) LIKE '%драйв%'
+            OR lower(COALESCE(store_name, '')) LIKE '%drive%'
+            OR lower(COALESCE(notes, '')) LIKE '%драйв%'
+            OR lower(COALESCE(notes, '')) LIKE '%drive%'
+          )
+        ORDER BY COALESCE(purchase_date, created_at) DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        await update.message.reply_text(
+            "🚗 Поездки Яндекс Драйв не найдены.\n"
+            "Импортируйте письма/чеки Яндекс и попробуйте снова: /find_car 10"
+        )
+        return
+
+    lines = [f"🚗 Последние поездки Яндекс Драйв ({len(rows)}):", ""]
+    for idx, row in enumerate(rows, start=1):
+        notes = row["notes"] or ""
+        model = _extract_drive_field(
+            [
+                r"(?:авто|машин[аы]|модель)\s*[:\-]\s*([^\n,;]+)",
+                r"(Volkswagen|Skoda|Kia|Hyundai|BMW|Mercedes|Audi|Renault|Nissan|Toyota|Haval|Geely)\s+[A-Za-zА-Яа-я0-9\- ]+",
+            ],
+            notes,
+        ) or "не указано"
+        route = _extract_drive_field(
+            [
+                r"(?:маршрут|поездка|откуда\s*[-–]\s*куда)\s*[:\-]\s*([^\n]+)",
+                r"(?:из|от)\s+([^\n,;]+?\s+(?:в|до)\s+[^\n,;]+)",
+            ],
+            notes,
+        ) or "не указан"
+        duration = _extract_drive_field(
+            [
+                r"(?:длительность|время)\s*[:\-]\s*([^\n,;]+)",
+                r"(\d+\s*(?:мин|ч|час(?:а|ов)?)(?:\s*\d+\s*мин)?)",
+            ],
+            notes,
+        ) or "не указана"
+        amount = f'{row["total_amount"]:.0f} ₽' if row["total_amount"] else "не указана"
+        dt = (row["purchase_date"] or "дата не указана")[:16]
+
+        lines.append(f"{idx}. {dt}")
+        lines.append(f"   Модель: {model}")
+        lines.append(f"   Маршрут: {route}")
+        lines.append(f"   Длительность: {duration}")
+        lines.append(f"   Стоимость: {amount}")
+        lines.append("")
+
+    await update.message.reply_text("\n".join(lines).rstrip())
 
 async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /check — расширенный PDF-отчёт."""
@@ -1122,15 +1152,22 @@ def main():
     app.add_handler(CommandHandler('alerts', cmd_alerts))
     app.add_handler(CommandHandler('parse', cmd_parse))
     app.add_handler(CommandHandler('check', cmd_check))
+    app.add_handler(CommandHandler('find_car', cmd_find_car))
     app.add_handler(CommandHandler('add', cmd_add))
     app.add_handler(CommandHandler('add_photo', add_photo))
     app.add_handler(CommandHandler('parse', cmd_parse))
     app.add_handler(CommandHandler('warranties', cmd_warranties))
     app.add_handler(CommandHandler('help', cmd_help))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-    # Генерация алертов при старте
+
+    # Generate alerts once at startup
     gen = generate_alerts()
-    log.info(f'Bot started, polling... (alerts: {gen})')
+
+    # Schedule daily checks at 09:00 local server time
+    from datetime import time as dt_time
+    app.job_queue.run_daily(run_daily_alert_job, time=dt_time(hour=9, minute=0, second=0), name='daily_alert_checks')
+
+    log.info(f'Bot started, polling... (alerts at startup: {gen})')
     app.run_polling()
 
 if __name__ == '__main__':

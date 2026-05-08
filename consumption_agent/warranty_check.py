@@ -1,301 +1,268 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-Модуль проверки гарантий и генерации алертов.
-Фаза 1 — consumption_agent roadmap.
+Warranty/expiry/low-stock checks and alert generation.
 
-Запуск: python3 warranty_check.py [--notify]
-  --notify  отправить уведомления в Telegram
+Usage: python3 warranty_check.py [--notify]
 """
+import os
 import sqlite3
 import sys
-import os
 from datetime import datetime, timedelta
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'consumption.db')
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "consumption.db")
+WARRANTY_WARN_DAYS = 30
+EXPIRY_WARN_DAYS = 7
 
-# Пороги для алертов
-WARRANTY_WARN_DAYS = 30   # предупреждение за 30 дней до конца гарантии
-EXPIRY_WARN_DAYS = 7      # предупреждение за 7 дней до конца срока годности
 
-def parse_date(s):
-    """Парсинг даты в разных форматах."""
-    if not s:
+def parse_date(value):
+    if not value:
         return None
-    for fmt in ('%Y-%m-%d', '%d.%m.%Y', '%Y-%m-%d %H:%M:%S'):
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%d %H:%M:%S"):
         try:
-            return datetime.strptime(s.strip(), fmt)
+            return datetime.strptime(str(value).strip(), fmt)
         except ValueError:
             continue
     return None
 
+
 def calc_warranty_until(purchase_date, warranty_months):
-    """Расчёт даты окончания гарантии."""
     dt = parse_date(purchase_date)
     if not dt or not warranty_months:
         return None
-    return dt + timedelta(days=warranty_months * 30)
+    return dt + timedelta(days=int(warranty_months) * 30)
+
+
+def ensure_items_schema(conn):
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
+    if "warranty_until" not in existing:
+        conn.execute("ALTER TABLE items ADD COLUMN warranty_until TEXT")
+    if "min_quantity" not in existing:
+        conn.execute("ALTER TABLE items ADD COLUMN min_quantity INTEGER DEFAULT 0")
+    conn.commit()
+
 
 def update_warranty_until(conn):
-    """Пересчёт warranty_until для всех товаров с warranty_months."""
-    rows = conn.execute('''
-        SELECT id, purchase_date, warranty_months 
-        FROM items 
-        WHERE warranty_months IS NOT NULL 
-          AND purchase_date IS NOT NULL 
+    ensure_items_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT id, purchase_date, warranty_months
+        FROM items
+        WHERE warranty_months IS NOT NULL
+          AND purchase_date IS NOT NULL
           AND deleted_at IS NULL
           AND (warranty_until IS NULL OR warranty_until = '')
-    ''').fetchall()
-    
+    """
+    ).fetchall()
+
     updated = 0
     for item_id, pdate, wmonths in rows:
         wu = calc_warranty_until(pdate, wmonths)
         if wu:
-            conn.execute('UPDATE items SET warranty_until = ? WHERE id = ?',
-                         (wu.strftime('%Y-%m-%d'), item_id))
+            conn.execute("UPDATE items SET warranty_until = ? WHERE id = ?", (wu.strftime("%Y-%m-%d"), item_id))
             updated += 1
-    
+
     conn.commit()
     return updated
 
+
 def check_warranties(conn):
-    """Проверка гарантий. Возвращает список алертов."""
+    ensure_items_schema(conn)
     now = datetime.now()
     alerts = []
-    
-    rows = conn.execute('''
-        SELECT id, name, warranty_until, warranty_months, purchase_date
-        FROM items 
-        WHERE warranty_until IS NOT NULL 
+
+    rows = conn.execute(
+        """
+        SELECT id, name, warranty_until
+        FROM items
+        WHERE warranty_until IS NOT NULL
           AND deleted_at IS NULL
           AND status = 'in_use'
-    ''').fetchall()
-    
-    for item_id, name, wu_str, wm, pdate in rows:
+    """
+    ).fetchall()
+
+    for item_id, name, wu_str in rows:
         wu = parse_date(wu_str)
         if not wu:
             continue
-        
+
         days_left = (wu - now).days
-        
         if days_left < 0:
             alerts.append({
-                'item_id': item_id,
-                'name': name,
-                'type': 'warranty_expired',
-                'days': abs(days_left),
-                'warranty_until': wu_str,
-                'message': f'❌ Гарантия истекла {abs(days_left)}д назад: {name} (до {wu_str})'
+                "item_id": item_id,
+                "name": name,
+                "type": "warranty_expired",
+                "message": f"Warranty expired {abs(days_left)}d ago: {name} (until {wu_str})",
             })
         elif days_left <= WARRANTY_WARN_DAYS:
             alerts.append({
-                'item_id': item_id,
-                'name': name,
-                'type': 'warranty_expiring',
-                'days': days_left,
-                'warranty_until': wu_str,
-                'message': f'⚠️ Гарантия истекает через {days_left}д: {name} (до {wu_str})'
+                "item_id": item_id,
+                "name": name,
+                "type": "warranty_expiring",
+                "message": f"Warranty expires in {days_left}d: {name} (until {wu_str})",
             })
-    
+
     return alerts
 
+
 def check_expiry_dates(conn):
-    """Проверка сроков годности."""
     now = datetime.now()
     alerts = []
-    
-    rows = conn.execute('''
+
+    rows = conn.execute(
+        """
         SELECT id, name, expiry_date
-        FROM items 
-        WHERE expiry_date IS NOT NULL 
+        FROM items
+        WHERE expiry_date IS NOT NULL
           AND deleted_at IS NULL
           AND status = 'in_use'
-    ''').fetchall()
-    
+    """
+    ).fetchall()
+
     for item_id, name, exp_str in rows:
         exp = parse_date(exp_str)
         if not exp:
             continue
-        
+
         days_left = (exp - now).days
-        
         if days_left < 0:
             alerts.append({
-                'item_id': item_id,
-                'name': name,
-                'type': 'expired',
-                'days': abs(days_left),
-                'message': f'🗑️ Срок годности истёк {abs(days_left)}д назад: {name} (до {exp_str})'
+                "item_id": item_id,
+                "name": name,
+                "type": "expired",
+                "message": f"Expiry date passed {abs(days_left)}d ago: {name} (until {exp_str})",
             })
         elif days_left <= EXPIRY_WARN_DAYS:
             alerts.append({
-                'item_id': item_id,
-                'name': name,
-                'type': 'expiring',
-                'days': days_left,
-                'message': f'⏰ Срок годности через {days_left}д: {name} (до {exp_str})'
+                "item_id": item_id,
+                "name": name,
+                "type": "expiry_approaching",
+                "message": f"Expiry in {days_left}d: {name} (until {exp_str})",
             })
-    
+
     return alerts
 
+
+def check_low_stock(conn):
+    ensure_items_schema(conn)
+    alerts = []
+
+    rows = conn.execute(
+        """
+        SELECT id, name, COALESCE(quantity, 0) AS quantity, COALESCE(min_quantity, 0) AS min_quantity
+        FROM items
+        WHERE deleted_at IS NULL
+          AND COALESCE(min_quantity, 0) > 0
+          AND COALESCE(quantity, 0) <= COALESCE(min_quantity, 0)
+          AND status IN ('in_use', 'low_stock', 'storage')
+    """
+    ).fetchall()
+
+    for item_id, name, quantity, min_quantity in rows:
+        alerts.append({
+            "item_id": item_id,
+            "name": name,
+            "type": "low_stock",
+            "message": f"Low stock: {name} (qty {quantity}, min {min_quantity})",
+        })
+
+    return alerts
+
+
 def save_alerts(conn, alerts):
-    """Сохраняет новые алерты в БД, не дублируя существующие."""
     saved = 0
-    for a in alerts:
-        # Проверяем дубликат
-        existing = conn.execute('''
-            SELECT id FROM alerts 
-            WHERE item_id = ? AND alert_type = ? AND status = 'pending'
-        ''', (a['item_id'], a['type'])).fetchone()
-        
+    for alert in alerts:
+        existing = conn.execute(
+            "SELECT id FROM alerts WHERE item_id = ? AND alert_type = ? AND status = 'pending'",
+            (alert["item_id"], alert["type"]),
+        ).fetchone()
         if existing:
             continue
-        
-        conn.execute('''
+
+        conn.execute(
+            """
             INSERT INTO alerts (item_id, alert_type, title, message, scheduled_at, status)
             VALUES (?, ?, ?, ?, ?, 'pending')
-        ''', (a['item_id'], a['type'], a['name'], a['message'], datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        """,
+            (
+                alert["item_id"],
+                alert["type"],
+                alert["name"],
+                alert["message"],
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
         saved += 1
-    
+
     conn.commit()
     return saved
 
+
+def run_daily_alert_checks(conn):
+    update_warranty_until(conn)
+    alerts = check_warranties(conn) + check_expiry_dates(conn) + check_low_stock(conn)
+    return save_alerts(conn, alerts)
+
+
 def get_warranties_report(conn):
-    """Формирует текстовый отчёт по гарантиям для Telegram."""
+    ensure_items_schema(conn)
     now = datetime.now()
-    
-    rows = conn.execute('''
-        SELECT id, name, warranty_until, purchase_date, warranty_months
-        FROM items 
-        WHERE warranty_until IS NOT NULL 
+
+    rows = conn.execute(
+        """
+        SELECT id, name, warranty_until
+        FROM items
+        WHERE warranty_until IS NOT NULL
           AND deleted_at IS NULL
         ORDER BY warranty_until ASC
-    ''').fetchall()
-    
+    """
+    ).fetchall()
+
     if not rows:
-        return "📋 Нет товаров с гарантиями."
-    
+        return "No warranty-tracked items."
+
     expired = []
     warning = []
     ok = []
-    
-    for item_id, name, wu_str, pdate, wm in rows:
+
+    for _item_id, name, wu_str in rows:
         wu = parse_date(wu_str)
         if not wu:
             continue
         days_left = (wu - now).days
-        
-        line = f"• {name[:45]} — до {wu_str}"
+
+        line = f"- {name[:45]} until {wu_str}"
         if days_left < 0:
-            expired.append(f"❌ {line} (истекла {abs(days_left)}д назад)")
+            expired.append(f"[EXPIRED] {line} ({abs(days_left)}d ago)")
         elif days_left <= WARRANTY_WARN_DAYS:
-            warning.append(f"⚠️ {line} (осталось {days_left}д)")
+            warning.append(f"[WARN] {line} ({days_left}d left)")
         else:
-            ok.append(f"✅ {line} ({days_left}д)")
-    
-    parts = ["🔧 *Гарантии*\n"]
-    
+            ok.append(f"[OK] {line} ({days_left}d)")
+
+    parts = ["Warranty report", ""]
     if expired:
-        parts.append("*Истекшие:*")
+        parts.append("Expired:")
         parts.extend(expired)
         parts.append("")
-    
     if warning:
-        parts.append("*Скоро истекут (< 30 дней):*")
+        parts.append("Expiring soon (<30d):")
         parts.extend(warning)
         parts.append("")
-    
     if ok:
-        parts.append("*Активные:*")
+        parts.append("Active:")
         parts.extend(ok)
-    
-    parts.append(f"\n📊 Всего: {len(rows)} | ❌ {len(expired)} | ⚠️ {len(warning)} | ✅ {len(ok)}")
-    
     return "\n".join(parts)
 
-def send_telegram_notification(message, chat_id='1477860192'):
-    """Отправка уведомления через Telegram API consumption бота."""
-    import urllib.request
-    import json
-    
-    token_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-    bot_token = None
-    
-    # Читаем токен из .env
-    if os.path.exists(token_file):
-        with open(token_file) as f:
-            for line in f:
-                if line.startswith('TELEGRAM_BOT_TOKEN='):
-                    bot_token = line.split('=', 1)[1].strip().strip('"\'')
-    
-    # Фоллбэк — из переменных окружения
-    if not bot_token:
-        bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
-    
-    if not bot_token:
-        print("⚠️ TELEGRAM_BOT_TOKEN не найден, уведомление не отправлено")
-        return False
-    
-    url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
-    data = json.dumps({
-        'chat_id': chat_id,
-        'text': message,
-        'parse_mode': 'Markdown'
-    }).encode()
-    
-    try:
-        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-        urllib.request.urlopen(req, timeout=10)
-        return True
-    except Exception as e:
-        print(f"⚠️ Ошибка отправки: {e}")
-        return False
 
 def main():
-    notify = '--notify' in sys.argv
-    
     conn = sqlite3.connect(DB_PATH)
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA busy_timeout=5000')
-    
-    # 1. Пересчёт warranty_until
-    updated = update_warranty_until(conn)
-    if updated:
-        print(f"📝 Обновлено warranty_until: {updated} товаров")
-    
-    # 2. Проверка гарантий
-    warranty_alerts = check_warranties(conn)
-    expiry_alerts = check_expiry_dates(conn)
-    all_alerts = warranty_alerts + expiry_alerts
-    
-    if all_alerts:
-        print(f"\n🔔 Найдено алертов: {len(all_alerts)}")
-        for a in all_alerts:
-            print(f"  {a['message']}")
-        
-        saved = save_alerts(conn, all_alerts)
-        print(f"💾 Сохранено новых: {saved}")
-        
-        # 3. Отправка в Telegram
-        if notify and all_alerts:
-            msg = "🔔 *Уведомления по гарантиям*\n\n"
-            msg += "\n".join(a['message'] for a in all_alerts)
-            if send_telegram_notification(msg):
-                print("📨 Уведомление отправлено в Telegram")
-                # Помечаем как отправленные
-                for a in all_alerts:
-                    conn.execute('''
-                        UPDATE alerts SET sent_at = ?, status = 'sent'
-                        WHERE item_id = ? AND alert_type = ? AND status = 'pending'
-                    ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), a['item_id'], a['type']))
-                conn.commit()
-    else:
-        print("✅ Алертов нет — все гарантии в порядке.")
-    
-    # 4. Отчёт
-    report = get_warranties_report(conn)
-    print(f"\n{report}")
-    
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+
+    saved = run_daily_alert_checks(conn)
+    print(f"Saved new alerts: {saved}")
+    print("\n" + get_warranties_report(conn))
     conn.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
