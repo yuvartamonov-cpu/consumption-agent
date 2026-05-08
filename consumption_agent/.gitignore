@@ -8,3 +8,14 @@ __pycache__/
 .ozon_cookies.txt
 *.bak
 logs/
+
+# Data dirs (added by CTO)
+Yandex_Lavka_orders_files_files/
+incoming_cheques/
+incoming_cheques_text/
+incoming_screenshots/
+media/
+receipts/
+*.csv
+*.jpg
+*.png
