@@ -13,3 +13,6 @@ cd "$SCRIPT_DIR"
 [ -f .env ] && set -a && source .env && set +a
 
 python3 consumption_agent_full_030526.py all
+
+# Проверка гарантий и уведомления
+python3 warranty_check.py --notify

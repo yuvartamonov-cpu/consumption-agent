@@ -1067,6 +1067,26 @@ async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'❌ Ошибка: {e}')
 
 
+async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /warranties — отчёт по гарантиям."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from warranty_check import get_warranties_report, update_warranty_until, check_warranties, save_alerts
+        conn = get_db()
+        # Пересчёт warranty_until
+        update_warranty_until(conn)
+        # Проверка и сохранение алертов
+        alerts = check_warranties(conn)
+        if alerts:
+            save_alerts(conn, alerts)
+        # Отчёт
+        report = get_warranties_report(conn)
+        conn.close()
+        await update.message.reply_text(report, parse_mode='Markdown')
+    except Exception as e:
+        log.error(f'cmd_warranties error: {e}')
+        await update.message.reply_text(f'❌ Ошибка: {e}')
+
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await start(update, ctx)
 
@@ -1105,6 +1125,7 @@ def main():
     app.add_handler(CommandHandler('add', cmd_add))
     app.add_handler(CommandHandler('add_photo', add_photo))
     app.add_handler(CommandHandler('parse', cmd_parse))
+    app.add_handler(CommandHandler('warranties', cmd_warranties))
     app.add_handler(CommandHandler('help', cmd_help))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     # Генерация алертов при старте
