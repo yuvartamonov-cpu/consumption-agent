@@ -523,7 +523,9 @@ def generate_alerts() -> int:
 
 async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
     """Daily task for alert generation (09:00 local by default)."""
-    job_started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # SQLite datetime('now') returns UTC, so we compare in UTC to avoid a
+    # 3h timezone gap (MSK is UTC+3) that would mask freshly created alerts.
+    job_started_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     generated = generate_alerts()
     sent = 0
     conn = None
@@ -1167,6 +1169,9 @@ async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if cur.rowcount == 0:
             await update.message.reply_text(f"❌ Item {item_id} not found")
             return
+        # Reset warranty_until so update_warranty_until() recomputes it even
+        # if it was already set (the helper skips non-NULL rows).
+        conn.execute("UPDATE items SET warranty_until=NULL WHERE id=?", (item_id,))
         from warranty_check import update_warranty_until
         update_warranty_until(conn)
         row = conn.execute("SELECT warranty_until FROM items WHERE id=?", (item_id,)).fetchone()
