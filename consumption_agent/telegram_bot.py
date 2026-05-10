@@ -572,6 +572,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/list — инвентарь по категориям\n'
         '/alerts — алерты (гарантии, сроки)\n'
         '/find_car — последние поездки Яндекс Драйв\n'
+        '/warranties — отчёт по гарантиям\n'
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
         '/add_photo — загрузить фото чека (OCR)\n'
         '/check — статистика\n'

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "profiles": {
+    "openai:default": {
+      "type": "api_key",
+      "provider": "openai",
+      "key": "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"
+    },
+    "mistral:default": {
+      "type": "api_key",
+      "provider": "mistral",
+      "key": "l2XqdG1lPTralaIFnYchGrF0zPnaeexq"
+    }
+  }
+}

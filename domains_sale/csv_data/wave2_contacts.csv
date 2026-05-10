@@ -1,0 +1,99 @@
+name,email,website,source,category,status,notes
+GMS Clinic,info@gmsclinic.ru,https://www.gmsclinic.ru,site_parse,клиники,target,основной контакт
+GMS Clinic,dental@gmsclinic.ru,https://www.gmsclinic.ru,site_parse,клиники,target,стоматология
+Европейский МЦ,info@emcmos.ru,https://www.emcmos.ru,site_parse,клиники,target,общий
+Медскан,office@medscangroup.ru,https://medscangroup.ru,site_parse,клиники,target,офис
+Медскан,info@medscannet.ru,https://medscannet.ru,site_parse,клиники,target,инфо
+Будь Здоров,info@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,основной
+К+31,appeal@k31.ru,https://www.k31.ru,site_parse,клиники,target,для обращений
+Ниармедик,info@nearmedic.ru,https://www.nearmedic.ru,site_parse,клиники,target,основной
+Семейный доктор,mailbox@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,официальные обращения
+Семейный доктор,corp@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,корпоративное
+Семейный доктор,zakupki@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,закупки
+Столица,info@stomed.ru,https://stomed.ru,site_parse,клиники,target,общий
+Столица,contact@stomed.ru,https://stomed.ru,site_parse,клиники,target,вопросы
+ОТТА,info@ott.ru,https://ott.ru,site_parse,клиники,target,институт
+Анадолу,info@anadolu-moscow.ru,https://anadolu-moscow.ru,site_parse,клиники,target,представительство
+Авиценна-Медика,avicennamed@mail.ru,https://avicenna-ug.ru,site_parse,поставщики,target,отдел продаж
+Матрикс,for@matrix-eng.ru,https://matrix-eng.ru,site_parse,поставщики,target,оборудование
+АльмаМед,info@almamed.su,https://almamed.su,site_parse,поставщики,target,дилер
+МедСнаб,,https://medsnab.ru,site_parse,поставщики,no_email,только форма связи
+АктивМед,,https://aktivmed.ru,site_parse,поставщики,no_email,только форма связи
+Тандер Мед,,https://tandermed.ru,site_parse,поставщики,no_email,только форма связи
+Медкомплект,,https://medkomplekt.ru,site_parse,поставщики,no_email,только форма связи
+Юнимед,partner@unimed.ru,https://unimed.ru,site_parse,поставщики,target,партнёрский отдел
+Галилео-Медикс,,https://galileo-med.ru,site_parse,поставщики,no_email,только форма связи
+Медикус,,https://medicus.ru,site_parse,поставщики,no_email,только форма связи
+Росмед,info@rosmed.ru,https://rosmed.ru,site_parse,тендерные,target,медзакупки
+Единая тендерная,,https://etp.ru,site_parse,тендерные,no_email,только форма для организаторов
+Сбербанк-АСТ,,https://sberbank-ast.ru,site_parse,тендерные,no_email,госзакупки мед
+РТС-Тендер,,https://rts-tender.ru,site_parse,тендерные,no_email,форма
+ЭТП ГПБ,,https://etpgpb.ru,site_parse,тендерные,no_email,форма
+Telderi,partner@telderi.ru,https://telderi.ru,auction,инвесторы,target,партнёрский отдел
+Domainer (пример),domains@investor.ru,https://telderi.ru,auction,инвесторы,target,куплю мед-домены
+Nic.ru,support@nic.ru,https://nic.ru,auction,инвесторы,target,аукционы
+Domainers.ru,,https://domainers.ru,web_search,инвесторы,no_email,"объявления ""куплю"""
+К+31 партнёры,partner@k31.ru,https://www.k31.ru,site_parse,клиники,target,раздел партнёры
+GMS partners,partners@gmsclinic.ru,https://www.gmsclinic.ru,site_parse,клиники,target,сотрудничество
+ЕМС сотрудничество,partnership@emcmos.ru,https://www.emcmos.ru,site_parse,клиники,target,раздел партнёры
+Медскан закупки,zakupki@medscangroup.ru,https://medscangroup.ru,site_parse,клиники,target,закупки
+Семейный доктор партнёры,partner@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,партнёрство
+Будь Здоров corp,corp@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,корпоративное
+Ниармедик закупки,zakupki@nearmedic.ru,https://www.nearmedic.ru,site_parse,клиники,target,закупки
+GMS Hospital,info@gmshospital.ru,https://gmshospital.ru,site_parse,клиники,target,госпиталь GMS — email подтверждён на сайте
+Будь Здоров партнёрам,partner@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,email для юрлиц — найден на сайте Сочи/Уфа
+Будь Здоров франчайзинг,franshiza@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,франшиза — найден на сайте
+СМ-Клиника (справочная),spravka289@smpost.ru,https://smclinic.ru,site_parse,клиники,target,email для справок — найден на странице info
+СМ-Клиника (PR),nurmuhambetova.ds@smpost.ru,https://smclinic.ru,habr_career,клиники,target,контакт PR — Хабр Карьера
+АО Медицина,info@medicina.ru,https://medicina.ru,assumed_pattern,клиники,target,клиника академика Ройтберга
+Мединцентр,info@mediccenter.ru,https://mediccenter.ru,assumed_pattern,клиники,target,ГлавУпДК при МИД
+Реавиз,info@reaviz.ru,https://reaviz.ru,assumed_pattern,клиники,target,медуниверситет и клиника
+НИЦ Матрикс (Лазмик),lmservis@mail.ru,https://matrix-med.ru,site_parse,поставщики,target,email подтверждён на matrix-med.ru/contacts
+МедНав (каталог медтехники),corp@mednav.ru,https://mednav.ru,site_parse,поставщики,target,каталог поставщиков — корп. email на сайте
+МедКомплекс АВК,info@medcomp.ru,https://medcomp.ru,assumed_pattern,поставщики,target,интернет-магазин медтехники Москва
+ДеалМед,info@dealmed.ru,https://dealmed.ru,assumed_pattern,поставщики,target,крупный поставщик медоборудования
+МедМарт,info@medmart.pro,https://medmart.pro,assumed_pattern,поставщики,target,профессиональное медоборудование
+Юни-тек,info@uni-tec.su,https://uni-tec.su,assumed_pattern,поставщики,target,эндовидеохирургия поставка/ТО
+Медремкомплект,info@medrk.ru,https://medrk.ru,assumed_pattern,поставщики,target,медоборудование и запчасти
+B2B-Center,info@b2b-center.ru,https://b2b-center.ru,assumed_pattern,тендерные,target,площадка электронных торгов
+Фабрикант,info@fabrikant.ru,https://fabrikant.ru,assumed_pattern,тендерные,target,система электронной торговли
+Национальная электронная площадка,info@etp-ets.ru,https://etp-ets.ru,assumed_pattern,тендерные,target,ЕТС — площадка госзакупок
+Domainer.ru,info@domainer.ru,https://domainer.ru,assumed_pattern,инвесторы,target,регистратор .ru/.рф — маркет доменов
+Reg.ru,info@reg.ru,https://reg.ru,assumed_pattern,инвесторы,target,крупный регистратор — аукцион доменов
+BackOrder.ru,support@backorder.ru,https://backorder.ru,assumed_pattern,инвесторы,target,сервис перехвата доменов
+Webnames.ru,support@webnames.ru,https://webnames.ru,assumed_pattern,инвесторы,target,регистратор с аукционами
+DomenForum.net,,https://domenforum.net,reference,инвесторы,no_email,форум домейнеров — размещать объявление о продаже
+SearchEngines.guru,,https://searchengines.guru/ru/forum/development/domain-names,reference,инвесторы,no_email,крупный форум — раздел доменов
+Webiomed,info@webiomed.ai,https://webiomed.ru,site_parse,medstartup,target,
+Webiomed,sales@webiomed.ru,https://webiomed.ru,site_parse,medstartup,target,
+Webiomed,nkozyakova@webiomed.ru,https://webiomed.ru,site_parse,medstartup,target,
+Webiomed,info@webiomed.ru,https://webiomed.ru,site_parse,medstartup,target,
+Webiomed,aguseva@webiomed.ru,https://webiomed.ru,site_parse,medstartup,target,
+Цельс,celsus@celsus.ai,https://celsus.ai,site_parse,medstartup,target,
+Botkin.AI,,https://botkin.ai,site_parse,medstartup,no_email,требует ручной проверки
+Платформа Третье Мнение,ask@3opinion.ai,https://thirdopinion.ai,site_parse,medstartup,target,
+СберМедИИ,contact@sbermed.ai,https://sbermed.ai,site_parse,medstartup,target,
+СберМедИИ,helpdesk@sbermed.ai,https://sbermed.ai,site_parse,medstartup,target,
+СберМедИИ,contact@mddc.ai,https://sbermed.ai,site_parse,medstartup,target,
+Care Mentor AI,,https://carementor.ai,site_parse,medstartup,no_email,требует ручной проверки
+Эйдос-Медицина,,https://eidos-medicine.ru,site_parse,medstartup,no_email,требует ручной проверки
+Моторика,ortho@motorica.org,https://motorica.org,site_parse,medstartup,target,
+Моторика,ir@motorica.org,https://motorica.org,site_parse,medstartup,target,
+Моторика,info@motorica.org,https://motorica.org,site_parse,medstartup,target,
+Моторика,pr@motorica.org,https://motorica.org,site_parse,medstartup,target,
+Сенсор-Тех,,https://sensor-tech.ru,site_parse,medstartup,no_email,требует ручной проверки
+Реатех,,https://reatech.tech,site_parse,medstartup,no_email,требует ручной проверки
+Checkme,,https://checkme.health,site_parse,medstartup,no_email,требует ручной проверки
+DocDoc,,https://docdoc.ru,site_parse,medstartup,no_email,требует ручной проверки
+Кнопка жизни,helpdesk@aimoto.tech,https://knopka24.ru,site_parse,medstartup,target,
+Breffi,,https://breffi.com,site_parse,medstartup,no_email,требует ручной проверки
+Долгожитель,,https://dolgozhitel.ru,site_parse,medstartup,no_email,требует ручной проверки
+Med VR,,https://medvr.pro,site_parse,medstartup,no_email,требует ручной проверки
+Dental Pro,,https://dentalpro.io,site_parse,medstartup,no_email,требует ручной проверки
+Ulybnis AI,,https://ulybnis.ai,site_parse,medstartup,no_email,требует ручной проверки
+re-feel,,https://re-feel.ru,site_parse,medstartup,no_email,требует ручной проверки
+BRAINPHONE,,https://brainphone.ru,site_parse,medstartup,no_email,требует ручной проверки
+Vizsionero,,https://vizsionero.com,site_parse,medstartup,no_email,требует ручной проверки
+Polyptron,,https://polyptron.com,site_parse,medstartup,no_email,требует ручной проверки
+Dentomo,,https://dentomo.com,site_parse,medstartup,no_email,требует ручной проверки
+ФтизисБиоМед,,https://ftizisbiomed.ru,site_parse,medstartup,no_email,требует ручной проверки

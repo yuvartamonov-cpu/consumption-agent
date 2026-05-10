@@ -37,10 +37,16 @@ REPORT_PATH = os.path.join(SCRIPT_DIR, 'report_consumption_agent.pdf')
 FONT_DIR = '/usr/share/fonts/truetype/dejavu'
 IMAP_CFG = {'host': 'imap.gmail.com', 'port': 993,
             'user': os.environ.get('IMAP_USER', 'yu.v.artamonov@gmail.com'),
-            'password': os.environ.get('IMAP_PASSWORD', '')}
+            'password': os.environ.get('GMAIL_PASSWORD', '')}
 IMAP_CFG_YANDEX = {'host': 'imap.yandex.ru', 'port': 993,
                    'user': os.environ.get('YANDEX_USER', 'HKID2021@yandex.ru'),
-                   'password': os.environ.get('YANDEX_PASSWORD', 'jmwegtxlztunrwua')}
+                   'password': os.environ.get('YANDEX_PASSWORD', '')}
+IMAP_CFG_ZOREA = {'host': 'imap.mail.ru', 'port': 993,
+                  'user': os.environ.get('ZOREA_USER', 'zorea2001@mail.ru'),
+                  'password': os.environ.get('ZOREA_PASSWORD', '')}
+IMAP_CFG_NEUTRINON = {'host': 'imap.mail.ru', 'port': 993,
+                      'user': os.environ.get('NEUTRINON_USER', 'neutrinon@mail.ru'),
+                      'password': os.environ.get('NEUTRINON_PASSWORD', '')}
 # Marketplace senders (add new senders here)
 # All known financial document senders
 FINANCIAL_SENDERS = [
@@ -65,17 +71,37 @@ FINANCIAL_SENDERS = [
     # Доставка еды
     {'id': 'yandex_lavka',      'from': 'lavka.yandex',        'doc_type': 'food',    'subject_marker': 'чек'},
     {'id': 'yandex_eda',        'from': 'noreply@eda.yandex.ru', 'doc_type': 'food',   'subject_marker': 'скидка'},
+    {'id': 'samokat',           'from': 'noreply@samokat.ru',    'doc_type': 'food',   'subject_marker': 'чек'},
+    {'id': 'samokat_retail',    'from': 'umnyj-retail.ru',       'doc_type': 'food',   'subject_marker': 'чек'},
+    {'id': 'samokat_ofd',       'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': ''},
     # Яндекс.Почта — свои отправители
     {'id': 'yandex_market',     'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек', 'mailbox': 'yandex'},
     {'id': 'yandex_lavka_ya',   'from': 'lavka.yandex.ru',     'doc_type': 'food',    'subject_marker': 'чек', 'mailbox': 'yandex'},
     {'id': 'yandex_eda_ya',     'from': 'eda.yandex.ru',       'doc_type': 'food',    'subject_marker': 'заказ', 'mailbox': 'yandex'},
     {'id': 'yandex_drive',      'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_drive_gmail', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'gmail'},
+    {'id': 'yandex_drive_zorea', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'zorea'},
+    {'id': 'yandex_drive_neutr', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'neutrinon'},
+    {'id': 'belkacar_zorea',    'from': 'no-reply@belkacar.ru',  'doc_type': 'cheque',  'subject_marker': 'кассовый', 'mailbox': 'zorea'},
+    {'id': 'belkacar_neutr',    'from': 'no-reply@belkacar.ru',  'doc_type': 'cheque',  'subject_marker': 'кассовый', 'mailbox': 'neutrinon'},
+    {'id': 'delimobil',         'from': 'delimobil.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'zorea'},
+    {'id': 'delimobil_neutr',   'from': 'delimobil.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'neutrinon'},
+    {'id': 'citydrive',         'from': 'citydrive.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'zorea'},
+    {'id': 'citydrive_neutr',   'from': 'citydrive.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'neutrinon'},
     {'id': 'yandex_plus',       'from': 'hello@plus.yandex.ru',    'doc_type': 'subscription', 'subject_marker': '', 'mailbox': 'yandex'},
     {'id': 'yandex_afisha',     'from': 'hello@afisha.yandex.ru',  'doc_type': 'ticket',  'subject_marker': 'билет', 'mailbox': 'yandex'},
     {'id': 'yandex_music',      'from': 'hello@music.yandex.ru',   'doc_type': 'subscription', 'subject_marker': '', 'mailbox': 'yandex'},
     {'id': 'yandex_kinopoisk',  'from': 'hello@kinopoisk.ru',      'doc_type': 'subscription', 'subject_marker': '', 'mailbox': 'yandex'},
     {'id': 'yandex_station',    'from': 'station@alice.yandex.ru',  'doc_type': 'order',    'subject_marker': '', 'mailbox': 'yandex'},
     {'id': 'yandex_sp',         'from': 'hello@sp.yandex.ru',      'doc_type': 'promo',    'subject_marker': '', 'mailbox': 'yandex'},
+    # Mail.ru mailboxes (zorea2001@mail.ru, neutrinon@mail.ru)
+    {'id': 'samokat_ofd_zorea', 'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': '', 'mailbox': 'zorea'},
+    {'id': 'samokat_ofd_neutr', 'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': '', 'mailbox': 'neutrinon'},
+    # Госуслуги (zorea + neutrinon)
+    {'id': 'gosuslugi',         'from': 'no-reply@gosuslugi.ru',  'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'zorea'},
+    {'id': 'gosuslugi_neutr',   'from': 'no-reply@gosuslugi.ru',  'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'neutrinon'},
+    {'id': 'nalog',             'from': 'nalog.gov.ru',          'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'zorea'},
+    {'id': 'nalog_neutr',       'from': 'nalog.gov.ru',          'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'neutrinon'},
     # Добавляйте новых отправителей сюда
 ]
 
@@ -193,18 +219,30 @@ def cmd_init(args):
 
 
 def cmd_import(args):
-    cfg = IMAP_CFG.copy()
+    # Select mailbox configuration
+    mailbox_map = {
+        'gmail': IMAP_CFG,
+        'yandex': IMAP_CFG_YANDEX,
+        'zorea': IMAP_CFG_ZOREA,
+        'neutrinon': IMAP_CFG_NEUTRINON,
+    }
+    cfg = mailbox_map.get(args.mailbox, IMAP_CFG).copy()
     if args.user: cfg['user'] = args.user
     if args.password: cfg['password'] = args.password
-    print('Подключаюсь...')
+    print(f'Подключаюсь к {args.mailbox} ({cfg["user"]})...')
     mail = imaplib.IMAP4_SSL(cfg['host'], cfg['port'])
     mail.login(cfg['user'], cfg['password']); mail.select('INBOX')
     conn = sqlite3.connect(args.db or DB_PATH); imported = 0
-    senders_to_process = FINANCIAL_SENDERS
+    # Filter senders by mailbox if specified
+    senders_to_process = [s for s in FINANCIAL_SENDERS if s.get('mailbox', 'gmail') == args.mailbox]
+    if not senders_to_process:
+        # Fallback: if no senders for this mailbox, try all (backward compatibility)
+        senders_to_process = [s for s in FINANCIAL_SENDERS if 'mailbox' not in s]
+    
     if args.sender:
-        senders_to_process = [s for s in FINANCIAL_SENDERS if s['id'] == args.sender]
+        senders_to_process = [s for s in senders_to_process if s['id'] == args.sender]
         if not senders_to_process:
-            print(f'Неизвестный отправитель: {args.sender}')
+            print(f'Неизвестный отправитель: {args.sender} для mailbox {args.mailbox}')
             print(f'Известные: {", ".join(set(s["id"] for s in FINANCIAL_SENDERS))}')
             return
     for sender in senders_to_process:
@@ -270,11 +308,38 @@ def cmd_import(args):
                     links = re.findall(r'href=["\']([^"\']*/e-check/download/[^"\']+)["\']', html)
                     if links: url = links[0].split('?')[0]
                 total_amount = _extract_amount_from_html(html, ms_id)
+                
+                # Parse items for Samokat OFD cheques
+                items = []
+                if ms_id == 'samokat_ofd' and html:
+                    items = _parse_samokat_items(html)
+                    
             except Exception as e:
                 if 'FETCH' not in str(e):  # игнорируем IMAP ошибки
                     pass
+            
+            # Insert purchase
             conn.execute("INSERT OR IGNORE INTO purchases (purchase_date,total_amount,source,email_message_id,receipt_url,notes,data_origin) VALUES (?,?,?,?,?,?,?)",
                          (iso, total_amount, src, uid_s, url, sj[:80], 'email_import'))
+            
+            # Get purchase_id for item insertion
+            purchase_id = conn.execute("SELECT id FROM purchases WHERE email_message_id = ?", (uid_s,)).fetchone()
+            purchase_id = purchase_id[0] if purchase_id else None
+            
+            # Insert items for Samokat
+            if purchase_id and items:
+                for item in items:
+                    # Check if item already exists
+                    existing = conn.execute(
+                        "SELECT id FROM items WHERE name = ? AND purchase_id = ?",
+                        (item['name'], purchase_id)
+                    ).fetchone()
+                    if not existing:
+                        conn.execute('''
+                            INSERT INTO items (name, category_id, quantity, unit, purchase_price, purchase_date, purchase_source, purchase_id, data_origin)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (item['name'], 'food_other', item['qty'], item['unit'], item['price'], iso, src, purchase_id, 'email_import'))
+            
             cheque_source = f'{src}_pdf' if url else src
             conn.execute("INSERT OR IGNORE INTO cheques_log (email_uid,cheque_date,subject,receipt_url,source) VALUES (?,?,?,?,?)",
                          (uid_s, ds[:20], sj[:80], url, cheque_source))
@@ -321,16 +386,40 @@ def _extract_amount_from_html(html, sender_id):
         text = re.sub(r'\n+', '\n', text).strip()
     
     # Ищем сумму: число с ₽/руб/rub или число после ИТОГ/Total/Сумма
+    # Приоритет: сначала сумма с валютой, потом другие форматы
+    # 1. Сначала ищем ИТОГО/ИТОГ с суммой (наиболее надёжно для чеков)
+    # Формат Самоката: ИТОГ\n=\n1802.00
+    total_match = re.search(r'ИТОГ[О]?\s*=\s*(\d[\d\s\u00a0]*[,\.]\d{2})', text, re.IGNORECASE)
+    if total_match:
+        num_str = re.sub(r'[^\d.,]', '', total_match.group(1))
+        num_str = num_str.replace(' ', '').replace('\u00a0', '')
+        try:
+            return float(num_str.replace(',', '.'))
+        except:
+            pass
+    # Альтернативный формат: ИТОГО 1 802,00
+    total_match = re.search(r'ИТОГ[О]?\s*(\d[\d\s\u00a0]*[,\.]\d{2})', text, re.IGNORECASE)
+    if total_match:
+        num_str = re.sub(r'[^\d.,]', '', total_match.group(1))
+        num_str = num_str.replace(' ', '').replace('\u00a0', '')
+        try:
+            return float(num_str.replace(',', '.'))
+        except:
+            pass
+    
     patterns = [
-        r'(\d+[\s\u00a0]*[₽]|[₽][\s]*\d+)',
+        r'(\d{1,3}(?:\s\d{3})*[\s\u00a0]*[₽])',  # 2 373 ₽ (с пробелом как разделителем тысяч)
+        r'([₽][\s]*\d+(?:\s\d{3})*)',  # ₽ 2 373
         r'(\d+[\s\u00a0]*руб)',
         r'(\d+[\s\u00a0]*RUB)',
-        r'(\d+[\.,]\d{2})',
+        r'(\d+[\.,]\d{2})',  # последний вариант — число с копейками
     ]
     for pat in patterns:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
             num_str = re.sub(r'[^\d.,]', '', m.group(1))
+            # Убираем пробелы-разделители тысяч (2 373 → 2373)
+            num_str = num_str.replace(' ', '').replace('\u00a0', '')
             try:
                 return float(num_str.replace(',', '.'))
             except:
@@ -354,6 +443,70 @@ def parse_fiscal_cheque(text):
                       'total': float(mt.group(5).replace(' ', '').replace(',', '.'))})
     result['items'] = items; result['item_count'] = len(items)
     return result if (items or 'total' in result) else None
+
+
+def _parse_samokat_items(html):
+    """Parse items from Samokat (OFD) HTML cheque."""
+    from bs4 import BeautifulSoup
+    items = []
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        # Find all item blocks - each item is in a table with itemName
+        # Look for tables that contain item number and name
+        all_tables = soup.find_all('table')
+        for table in all_tables:
+            text = table.get_text(separator='\n', strip=True)
+            # Skip non-item tables (look for item pattern with number and name)
+            if not re.search(r'^\d+:\s*', text, re.MULTILINE):
+                continue
+            
+            # Extract item name: "1: Product name, 200 г" or "1: Product name"
+            # Name is everything after "N: " and before weight if present
+            name_match = re.search(r'^\d+:\s*(.+?)(?:,\s*(\d+[\.,]?\d*)\s*(г|мл|л|шт|кг))?(?:\n|$)', text, re.MULTILINE | re.DOTALL)
+            if not name_match:
+                continue
+            name = name_match.group(1).strip()
+            # Clean up name - remove newlines and extra spaces
+            name = re.sub(r'\s+', ' ', name)
+            weight = name_match.group(2) if name_match.group(2) else None
+            unit = name_match.group(3) if name_match.group(3) else 'шт'
+            
+            # Convert unit for small volumes: 0.33 л → 330 мл, 0.5 л → 500 мл
+            if unit == 'л' and weight:
+                try:
+                    w = float(weight.replace(',', '.'))
+                    if w < 1:
+                        unit = 'мл'
+                        weight = str(int(w * 1000))
+                except:
+                    pass
+            
+            # Look for price pattern: "1 шт. x 239.00"
+            price_match = re.search(r'(\d+)\s*шт\.\s*x\s*([\d\.]+)', text)
+            if not price_match:
+                continue
+            qty = int(price_match.group(1))
+            price = float(price_match.group(2))
+            
+            # Look for total: "Общая стоимость... = 239.00"
+            total_match = re.search(r'Общая стоимость.*?([\d\.]+)', text, re.DOTALL)
+            total = float(total_match.group(1)) if total_match else price * qty
+            
+            # Skip if name looks like a number (false positives from metadata)
+            if re.match(r'^\d+$', name) or len(name) < 3:
+                continue
+            
+            items.append({
+                'name': name,
+                'qty': qty,
+                'unit': unit,
+                'price': price,
+                'total': total,
+                'weight': weight
+            })
+    except Exception as e:
+        pass
+    return items
 
 
 def cmd_parse(args):
@@ -758,6 +911,8 @@ def main():
     p.add_argument('--all-senders', action='store_true', help='Import ALL mail from known financial senders, not just subject-matched')
     p.add_argument('--user')
     p.add_argument('--password')
+    p.add_argument('--mailbox', type=str, default='gmail', choices=['gmail','yandex','zorea','neutrinon'],
+                    help='Mailbox to import from (gmail, yandex, zorea, neutrinon)')
     p.add_argument('--name')
     p.add_argument('--price', type=float)
     p.add_argument('--date')

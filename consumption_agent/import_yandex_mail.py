@@ -72,7 +72,7 @@ def extract_amount(text):
 
 def main():
     mail = imaplib.IMAP4_SSL('imap.yandex.ru', 993, timeout=15)
-    mail.login('HKID2021@yandex.ru', 'jmwegtxlztunrwua')
+    mail.login('HKID2021@yandex.ru', os.environ.get('YANDEX_PASSWORD', ''))
     mail.select('INBOX')
     
     conn = sqlite3.connect(DB_PATH)

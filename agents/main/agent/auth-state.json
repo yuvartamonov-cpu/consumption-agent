@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "lastGood": {
+    "openai": "openai:default",
+    "mistral": "mistral:default"
+  },
+  "usageStats": {
+    "openai:default": {
+      "errorCount": 0,
+      "lastFailureAt": 1777057671397,
+      "lastUsed": 1777058092462
+    },
+    "mistral:default": {
+      "errorCount": 0,
+      "lastFailureAt": 1777066915367,
+      "lastUsed": 1777098446399
+    }
+  }
+}
