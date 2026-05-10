@@ -62,6 +62,23 @@ def test_generates_warranty_and_expiry_alerts():
     assert 'expiry_approaching' in types
 
 
+def test_generates_warranty_alert_for_storage_item():
+    conn = setup_conn()
+    warranty_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+    conn.execute(
+        "INSERT INTO items (name, status, warranty_until, quantity, min_quantity) VALUES (?, 'storage', ?, 1, 0)",
+        ('Stored drill', warranty_date),
+    )
+    conn.commit()
+
+    created = run_daily_alert_checks(conn)
+    assert created == 1
+
+    row = conn.execute("SELECT alert_type, title FROM alerts").fetchone()
+    assert row[0] == 'warranty_expiring'
+    assert row[1] == 'Stored drill'
+
+
 def test_generates_low_stock_alert_when_quantity_at_threshold():
     conn = setup_conn()
     conn.execute(

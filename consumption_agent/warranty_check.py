@@ -2,12 +2,12 @@
 """
 Warranty/expiry/low-stock checks and alert generation.
 
-Usage: python3 warranty_check.py [--notify]
+Usage: python3 warranty_check.py
 """
 import os
 import sqlite3
-import sys
-from datetime import datetime, timedelta
+from datetime import datetime
+from calendar import monthrange
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "consumption.db")
 WARRANTY_WARN_DAYS = 30
@@ -17,19 +17,28 @@ EXPIRY_WARN_DAYS = 7
 def parse_date(value):
     if not value:
         return None
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%d %H:%M:%S"):
+    raw = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m", "%Y"):
         try:
-            return datetime.strptime(str(value).strip(), fmt)
+            return datetime.strptime(raw, fmt)
         except ValueError:
             continue
     return None
+
+
+def _add_months(dt, months):
+    month = dt.month - 1 + int(months)
+    year = dt.year + month // 12
+    month = month % 12 + 1
+    day = min(dt.day, monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
 
 
 def calc_warranty_until(purchase_date, warranty_months):
     dt = parse_date(purchase_date)
     if not dt or not warranty_months:
         return None
-    return dt + timedelta(days=int(warranty_months) * 30)
+    return _add_months(dt, warranty_months)
 
 
 def ensure_items_schema(conn):
@@ -76,7 +85,7 @@ def check_warranties(conn):
         FROM items
         WHERE warranty_until IS NOT NULL
           AND deleted_at IS NULL
-          AND status = 'in_use'
+          AND status IN ('in_use', 'storage')
     """
     ).fetchall()
 
@@ -114,7 +123,7 @@ def check_expiry_dates(conn):
         FROM items
         WHERE expiry_date IS NOT NULL
           AND deleted_at IS NULL
-          AND status = 'in_use'
+          AND status IN ('in_use', 'storage')
     """
     ).fetchall()
 

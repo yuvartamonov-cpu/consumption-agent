@@ -35,6 +35,7 @@ DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
 RECEIPTS_DIR = os.path.join(SCRIPT_DIR, 'receipts')
 Path(RECEIPTS_DIR).mkdir(exist_ok=True)
 TOKEN = os.environ.get('CONSUMPTION_BOT_TOKEN', '')
+OWNER_CHAT_ID = int(os.environ.get('OWNER_CHAT_ID', '1477860192'))
 
 
 def decode_qr(image_path: str) -> dict:
@@ -522,8 +523,33 @@ def generate_alerts() -> int:
 
 async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
     """Daily task for alert generation (09:00 local by default)."""
+    job_started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     generated = generate_alerts()
-    log.info(f"daily alert job completed (new alerts: {generated})")
+    sent = 0
+    conn = None
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            """
+            SELECT id, alert_type, title, message
+            FROM alerts
+            WHERE status = 'pending' AND created_at >= ?
+            ORDER BY id
+            """,
+            (job_started_at,),
+        ).fetchall()
+        for row in rows:
+            text = row['message'] or f"{row['title']} ({row['alert_type']})"
+            await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text)
+            conn.execute("UPDATE alerts SET status='sent' WHERE id=?", (row['id'],))
+            sent += 1
+        conn.commit()
+    except Exception as e:
+        log.warning(f"daily alert delivery failed: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
+    log.info(f"daily alert job completed (new alerts: {generated}, sent: {sent})")
 
 
 def get_db(max_retries=3, delay=1):
@@ -1120,6 +1146,37 @@ async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await start(update, ctx)
 
+
+async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if len(ctx.args) != 2:
+        await update.message.reply_text("Usage: /set_warranty <item_id> <months>")
+        return
+    try:
+        item_id = int(ctx.args[0])
+        months = int(ctx.args[1])
+        if item_id <= 0 or months <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Usage: /set_warranty <item_id> <months> (positive integers)")
+        return
+
+    conn = get_db()
+    try:
+        cur = conn.execute("UPDATE items SET warranty_months=? WHERE id=? AND deleted_at IS NULL", (months, item_id))
+        if cur.rowcount == 0:
+            await update.message.reply_text(f"❌ Item {item_id} not found")
+            return
+        from warranty_check import update_warranty_until
+        update_warranty_until(conn)
+        row = conn.execute("SELECT warranty_until FROM items WHERE id=?", (item_id,)).fetchone()
+        conn.commit()
+        warranty_until = row["warranty_until"] if row and row["warranty_until"] else "N/A"
+        await update.message.reply_text(
+            f"OK: warranty_months={months}, warranty_until={warranty_until}"
+        )
+    finally:
+        conn.close()
+
 def main():
     if not TOKEN:
         print('❌ Укажите CONSUMPTION_BOT_TOKEN')
@@ -1157,6 +1214,7 @@ def main():
     app.add_handler(CommandHandler('add_photo', add_photo))
     app.add_handler(CommandHandler('parse', cmd_parse))
     app.add_handler(CommandHandler('warranties', cmd_warranties))
+    app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
     app.add_handler(CommandHandler('help', cmd_help))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
