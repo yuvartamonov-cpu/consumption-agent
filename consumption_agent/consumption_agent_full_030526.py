@@ -292,6 +292,7 @@ def cmd_import(args):
             # Загружаем body ТОЛЬКО для новых писем
             url = ''
             total_amount = None
+            items = []  # initialize before try/except so it's defined even on IMAP fetch failure
             try:
                 uid_b = uid if isinstance(uid, bytes) else bytes(uid_s, 'utf-8')
                 _, fd = mail.fetch(uid_b, '(BODY.PEEK[])')
