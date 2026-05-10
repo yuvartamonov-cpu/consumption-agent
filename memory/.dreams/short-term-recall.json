@@ -140,7 +140,7 @@
       "startLine": 36,
       "endLine": 64,
       "source": "memory",
-      "snippet": "- Юрий дал доступ к почте yu.v.artamonov@gmail.com (пароль приложения: xrsa izwn tvod ohqp). - Настроил IMAP-подключение через OpenClaw (imap.gmail.com:993). - Проверка: соединение есть, письма от Столото читаются. - Создан скрипт `lottery/check_email.py` — проверяет почту на письма от Столото, ищет выигрыши. - Установил cron-задачу `lottery-check-results` — каждый день в 10:00 МСК. - Скрипт протестирован — выдал письмо о выплате 500 ₽ (подтверждено), видит письма о покупке билетов. ## Ozon — попытка интеграции через Playwright - Установлен playwright (chromium) на WSL для браузерной автоматизации. - Написан скрипт `ozon_connector.py` — headless-логин через SMS + парсинг заказов. - Проблем",
+      "snippet": "- Юрий дал доступ к почте yu.v.artamonov@gmail.com (пароль приложения: [REDACTED_OLD_GMAIL_APP_PASSWORD]). - Настроил IMAP-подключение через OpenClaw (imap.gmail.com:993). - Проверка: соединение есть, письма от Столото читаются. - Создан скрипт `lottery/check_email.py` — проверяет почту на письма от Столото, ищет выигрыши. - Установил cron-задачу `lottery-check-results` — каждый день в 10:00 МСК. - Скрипт протестирован — выдал письмо о выплате 500 ₽ (подтверждено), видит письма о покупке билетов. ## Ozon — попытка интеграции через Playwright - Установлен playwright (chromium) на WSL для браузерной автоматизации. - Написан скрипт `ozon_connector.py` — headless-логин через SMS + парсинг заказов. - Проблем",
       "recallCount": 3,
       "dailyCount": 0,
       "groundedCount": 0,

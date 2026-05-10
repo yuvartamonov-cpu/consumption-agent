@@ -22,7 +22,7 @@ IMAP_CONFIG = {
     'host': 'imap.gmail.com',
     'port': 993,
     'user': 'yu.v.artamonov@gmail.com',
-    'password': 'xrsa izwn tvod ohqp',
+    'password': '[REDACTED_OLD_GMAIL_APP_PASSWORD]',
 }
 
 

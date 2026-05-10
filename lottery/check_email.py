@@ -17,7 +17,7 @@ CONFIG = {
     'imap_host': 'imap.gmail.com',
     'imap_port': 993,
     'user': 'yu.v.artamonov@gmail.com',
-    'password': 'xrsa izwn tvod ohqp',
+    'password': '[REDACTED_OLD_GMAIL_APP_PASSWORD]',
     'senders': ['stoloto'],
     'ozon_senders': ['sender.ozon.ru', 'news.ozon.ru', 'ozontravel@news.ozon.ru'],
     'fonbet_senders': ['fon.bet', 'fonbet'],

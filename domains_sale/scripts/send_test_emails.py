@@ -8,7 +8,7 @@ from email.mime.multipart import MIMEMultipart
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 FROM_EMAIL = "yu.v.artamonov@gmail.com"
-APP_PASSWORD = "xrsa izwn tvod ohqp"
+APP_PASSWORD = "[REDACTED_OLD_GMAIL_APP_PASSWORD]"
 
 # Список доменов
 DOMAINS = ["medtrade.ru", "gormed.ru", "medzakaz.ru", "medtender.ru"]

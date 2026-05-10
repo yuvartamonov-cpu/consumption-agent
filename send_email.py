@@ -10,7 +10,7 @@ import os
 smtp_server = "smtp.gmail.com"
 smtp_port = 587
 smtp_user = "yu.v.artamonov@gmail.com"
-smtp_password = "xrsa izwn tvod ohqp"  # App password из TOOLS.md
+smtp_password = "[REDACTED_OLD_GMAIL_APP_PASSWORD]"  # App password из TOOLS.md
 
 # Получатель
 to_email = "yu.v.artamonov@gmail.com"

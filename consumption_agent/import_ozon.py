@@ -9,7 +9,7 @@ DB_PATH = os.path.join(DB_DIR, 'consumption.db')
 CONFIG = {
     'imap_host': 'imap.gmail.com', 'imap_port': 993,
     'user': 'yu.v.artamonov@gmail.com',
-    'password': 'xrsa izwn tvod ohqp',
+    'password': '[REDACTED_OLD_GMAIL_APP_PASSWORD]',
 }
 
 def decode_subj(raw):

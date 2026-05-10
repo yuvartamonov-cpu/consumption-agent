@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 # Config
 EMAIL = "yu.v.artamonov@gmail.com"
-PASSWORD = "xrsa izwn tvod ohqp"
+PASSWORD = "[REDACTED_OLD_GMAIL_APP_PASSWORD]"
 IMAP_SERVER = "imap.gmail.com"
 IMAP_PORT = 993
 SEARCH_SINCE = (datetime.now() - timedelta(days=30)).strftime("%d-%b-%Y")

@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright
 
 # Config
 EMAIL = "yu.v.artamonov@gmail.com"
-PASSWORD = "xrsa izwn tvod ohqp"
+PASSWORD = "[REDACTED_OLD_GMAIL_APP_PASSWORD]"
 OUTPUT_DIR = os.path.expanduser("~/.openclaw/workspace/ozoncheques")
 SEARCH_SINCE = (datetime.now() - timedelta(days=30)).strftime("%m/%d/%Y")
 

@@ -6,7 +6,7 @@
 - **Telegram-бот:** @ConsumptionAgentBot (token 788548...) — запущен как systemd-юнит (`consumption-bot.service`), работает через VPN на Windows (порт 443)
 - **Доступ из WSL к Telegram API:** только при включённом VPN на Windows (curl connect timeout без него)
 - **Команды бота:** /start, /list, /alerts, /check, /add, /add_photo, /help
-- **IMAP (Gmail):** yu.v.artamonov@gmail.com / пароль xrsa izwn tvod ohqp (app password)
+- **IMAP (Gmail):** yu.v.artamonov@gmail.com / пароль [REDACTED_OLD_GMAIL_APP_PASSWORD] (app password)
 - **Путь проекта:** ~/.openclaw/workspace/consumption_agent/
 - **Конфиг marketplace:** MARKETPLACE_SENDERS — Ozon + Яндекс.Маркет, WB и Megamarket не найдены (писем нет)
 - **Cron:** 10:10 ежедневно (daily_run.sh: import --max 20 + enrich + check)

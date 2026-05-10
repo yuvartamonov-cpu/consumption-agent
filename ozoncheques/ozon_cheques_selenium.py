@@ -26,7 +26,7 @@ from selenium.webdriver.chrome.options import Options
 # Настройки
 IMAP_SERVER = 'imap.gmail.com'
 IMAP_USER = 'yu.v.artamonov@gmail.com'
-IMAP_PASSWORD = 'xrsa izwn tvod ohqp'  # App Password
+IMAP_PASSWORD = '[REDACTED_OLD_GMAIL_APP_PASSWORD]'  # App Password
 OZON_LOGIN = 'ВАШ_ЛОГИН_ОТ_OZON'  # email или телефон
 OZON_PASSWORD = 'ВАШ_ПАРОЛЬ_ОТ_OZON'
 CHROMEDRIVER_PATH = '/usr/local/bin/chromedriver'  # путь к ChromeDriver
