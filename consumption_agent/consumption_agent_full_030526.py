@@ -312,10 +312,14 @@ def cmd_import(args):
                     if links: url = links[0].split('?')[0]
                 total_amount = _extract_amount_from_html(html, ms_id)
                 
-                # Parse items for Samokat OFD cheques
+                # Parse items per sender:
+                #   samokat_ofd → numbered cheque blocks (_parse_samokat_items)
+                #   ozon / ozon_noreply → HTML table rows (_parse_ozon_items)
                 items = []
                 if ms_id == 'samokat_ofd' and html:
                     items = _parse_samokat_items(html)
+                elif ms_id in ('ozon', 'ozon_noreply') and html:
+                    items = _parse_ozon_items(html)
                     
             except Exception as e:
                 if 'FETCH' not in str(e):  # игнорируем IMAP ошибки
@@ -329,10 +333,14 @@ def cmd_import(args):
             purchase_id = conn.execute("SELECT id FROM purchases WHERE email_message_id = ?", (uid_s,)).fetchone()
             purchase_id = purchase_id[0] if purchase_id else None
             
-            # Insert items for Samokat
+            # Insert items for Samokat / Ozon
             if purchase_id and items:
+                # Pick a default category by sender. Ozon receipts cover
+                # a wide range, so leave category NULL and let cmd_match
+                # fuzzy-link them later. Samokat is food-only.
+                default_cat = 'food_other' if ms_id == 'samokat_ofd' else None
                 for item in items:
-                    # Check if item already exists
+                    # Check if item already exists for this purchase
                     existing = conn.execute(
                         "SELECT id FROM items WHERE name = ? AND purchase_id = ?",
                         (item['name'], purchase_id)
@@ -341,7 +349,7 @@ def cmd_import(args):
                         conn.execute('''
                             INSERT INTO items (name, category_id, quantity, unit, purchase_price, purchase_date, purchase_source, purchase_id, data_origin)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (item['name'], 'food_other', item['qty'], item['unit'], item['price'], iso, src, purchase_id, 'email_import'))
+                        ''', (item['name'], default_cat, item['qty'], item['unit'], item['price'], iso, src, purchase_id, 'email_import'))
             
             cheque_source = f'{src}_pdf' if url else src
             conn.execute("INSERT OR IGNORE INTO cheques_log (email_uid,cheque_date,subject,receipt_url,source) VALUES (?,?,?,?,?)",
@@ -509,6 +517,130 @@ def _parse_samokat_items(html):
             })
     except Exception as e:
         pass
+    return items
+
+
+def _parse_ozon_items(html):
+    """Parse items from an Ozon email cheque HTML body.
+
+    Ozon receipts come as HTML tables where one cell holds the item name
+    and another holds the price in the form ``1 234,56 ₽`` (or with a dot).
+    Quantity is occasionally rendered as ``2 x 619.00`` on a separate line
+    of the same row.
+
+    Returns a list of dicts with keys: name, qty, unit, price, total.
+    Empty list on any parsing failure — the import path is expected to
+    fall back to the legacy «only total_amount» behaviour.
+    """
+    from bs4 import BeautifulSoup
+
+    PRICE_RX = re.compile(r'([\d\s]+[.,]\d{2})\s*(?:₽|руб)', re.IGNORECASE)
+    QTY_RX = re.compile(r'(\d+)\s*x\s*([\d\s]+[.,]\d{2})', re.IGNORECASE)
+    SKIP_NAME_RX = re.compile(r'доставк|курьер|сервис|итого|всего|сумма|скидк', re.IGNORECASE)
+
+    def _num(s):
+        return float(s.replace(' ', '').replace('\xa0', '').replace(',', '.'))
+
+    items = []
+    seen = set()
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Strategy 1: table-based. Walk every <tr> and look for a price cell
+        # whose previous sibling cell holds the item name.
+        for table in soup.find_all('table'):
+            for row in table.find_all('tr'):
+                cells = [c.get_text(' ', strip=True) for c in row.find_all(['td', 'th'])]
+                if not cells:
+                    continue
+                row_text = ' | '.join(cells)
+                # Total / subtotal rows are skipped (they would otherwise be
+                # picked up as zero-quantity items).
+                if SKIP_NAME_RX.search(row_text):
+                    continue
+                # Find the cell carrying the price with currency marker
+                # (the total cell) and walk backwards to the first cell
+                # that looks like a real name. Quantity is extracted
+                # separately from any `N x price` cell so we never confuse
+                # the per-unit price with the total.
+                price_idx = next((i for i, c in enumerate(cells) if PRICE_RX.search(c)), None)
+                if price_idx is None or price_idx == 0:
+                    continue
+                qty_cell = next(
+                    (c for c in cells if QTY_RX.search(c) and not PRICE_RX.search(c)),
+                    None,
+                )
+                qty = 1
+                unit_price = None
+                if qty_cell:
+                    qm = QTY_RX.search(qty_cell)
+                    qty = int(qm.group(1))
+                    unit_price = _num(qm.group(2))
+                # Pick the first non-numeric cell before the price as the name.
+                name = None
+                for j in range(price_idx - 1, -1, -1):
+                    cand = cells[j].strip()
+                    if not cand or len(cand) < 3:
+                        continue
+                    if SKIP_NAME_RX.search(cand):
+                        name = None
+                        break
+                    if re.fullmatch(r'[\d\s.,]+', cand):  # pure number
+                        continue
+                    if QTY_RX.search(cand):  # "2 x 89.99" — not the name
+                        continue
+                    name = cand
+                    break
+                if not name:
+                    continue
+                total = _num(PRICE_RX.search(cells[price_idx]).group(1))
+                price = unit_price if unit_price is not None else round(total / qty, 2)
+                key = (name, price)
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append({
+                    'name': name,
+                    'qty': qty,
+                    'unit': 'шт',
+                    'price': price,
+                    'total': round(price * qty, 2),
+                })
+
+        # Strategy 2 — fallback to flat text scan when the table strategy
+        # returned nothing. Useful for receipts that arrive as plain
+        # divs with `<br>`-separated lines.
+        if not items:
+            lines = [
+                line.strip()
+                for line in soup.get_text('\n').splitlines()
+                if line.strip()
+            ]
+            current_name = None
+            for line in lines:
+                if SKIP_NAME_RX.search(line):
+                    current_name = None
+                    continue
+                qm = QTY_RX.search(line)
+                if qm and current_name:
+                    qty = int(qm.group(1))
+                    price = _num(qm.group(2))
+                    key = (current_name, price)
+                    if key not in seen and len(current_name) >= 3:
+                        seen.add(key)
+                        items.append({
+                            'name': current_name,
+                            'qty': qty,
+                            'unit': 'шт',
+                            'price': price,
+                            'total': round(price * qty, 2),
+                        })
+                    current_name = None
+                    continue
+                if len(line) > 5 and not re.fullmatch(r'[\d\s.,₽руб]+', line):
+                    current_name = line
+    except Exception:
+        return items
     return items
 
 
