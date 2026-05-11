@@ -120,13 +120,177 @@ IMAP_CONFIGS = [
 - `"к оплате 23687.00"`
 - Ключевые слова: списание, погашение, задолженность, долг, кредит, займ
 
-## Актуальное состояние (11.05.2026)
+## Фильтрация кредитных SMS
 
-- **Всего алертов в БД:** 29
-- **Активных:** 28
-- **Подтверждено оплаченных:** 1
-- **Определённые банки:** turbozaim, sberbank, vtb (остальные — 'unknown' — требуют донастройки паттернов)
-- **Проблема:** большинство писем не определяют sender_name (попадает 'unknown')
+Скрипт `scripts/cleanup_alerts.py` содержит полный пайплайн классификации SMS.
+
+### Архитектура классификации
+
+```
+SMS → detect_sender_name() → classify_alert() → Category
+                              ↓
+                    ┌─── is_sms_category() (для известных банков)
+                    │    └── CREDIT_REMINDER_PATTERNS → credit
+                    │    └── CODE_PATTERNS → ad
+                    │    └── BANK_NOTIFICATION_PATTERNS → ad
+                    │    └── CREDIT_APPLICATION_PATTERNS → ad
+                    │    └── SUBSCRIPTION_PATTERNS → ad
+                    │    └── fallback → ad (всё остальное от банка — не кредит)
+                    │
+                    ├── SPAM_MFO_SENDERS → ad
+                    ├── SPAM_MFO_PATTERNS → ad
+                    ├── телефонные номера (+7XXX, 0XXX) → ad
+                    └── всё остальное → unknown
+```
+
+### Приоритет проверок (classify_alert)
+
+1. **A. body с признаками спам-МФО** → `_detect_sender()` проверяет `NOT_BANK_FROM` (IsWis.Ru, Kapytal.Ru...) по содержимому SMS
+2. **B. Общие рекламные паттерны** → `AD_SUBJECT_PATTERNS` (акции, кешбэк, рассрочки, поздравления, чеки, штрафы)
+3. **C. Сумма** → `< 100₽ = чек, > 5 млн = реклама`
+4. **D. SMS-специфичная логика** → `is_sms_category()` (требует sender в CREDIT_SENDERS):
+   - коды 2FA → ad
+   - напоминание о платеже → credit
+   - обычные банковские оповещения → ad
+   - заявки на кредит (не напоминания) → ad
+   - подписки → ad
+   - дата + сумма > 1000 → credit
+   - всё остальное → ad
+5. **E. Неизвестный отправитель** → если в `SPAM_MFO_SENDERS` или `SPAM_MFO_PATTERNS` → ad
+6. **F. Телефонные номера** → `+7XXX` / `0XXX` → ad
+7. **G. Известные банки/МФО** с напоминанием → credit, иначе unknown
+8. **H. Спам-паттерны повторно** → ad
+
+### Определение отправителя (detect_sender_name)
+
+В `scripts/scan_sms_3mo.py`:
+1. `SHORT_CODE_BANKS`: `900` → sberbank
+2. `BANK_SMS_SENDERS`: `vtb`, `alfa-bank`, `t-bank` → по from_address
+3. `SPOOF_SENDERS`: если отправитель среди спам-МФО → `spam_mfo`
+4. `BODY_SENDER_PATTERNS`: поиск в тексте SMS (сбер, альфа, втб, совком, boostra...)
+
+### Белые списки отправителей
+
+**CREDIT_SENDERS** — от кого ждём настоящие кредитные уведомления:
+```python
+CREDIT_SENDERS = {
+    'sberbank', 'vtb', 'tinkoff', 'alfa',
+    'sovcombank', 'raiffeisen', 'gazprombank', 'otkritie',
+    'rosbank', 'uralsib', 'homecredit', 'rencredit',
+    'pochtabank', 'akbars', 'absolut', 'mdm',
+    'turbozaim', 'joy_finance', 'nebus',
+    'ekvazaim', 'webzaim',
+}
+```
+
+**SPAM_MFO_SENDERS** — от кого всегда реклама (проверяется до CREDIT_SENDERS):
+```python
+SPAM_MFO_SENDERS = {
+    'iswis', 'kapytal', 'c-m0ney', 'speedcrru', 'l0anpayru',
+    'hotloan', 'bistroz', 'iamzaem', 'zaymer', 'vivus',
+    'my-cred', 'fingis', 'banki.ru', 'atb', 'bankzenit',
+    'gazprombank', 'uralsib', 'boostra', '0919',
+    'beeline', 't-mob', 'rsb.ru', 'unknown',
+    # ... и ещё 30+ отправителей
+}
+```
+
+### Паттерны реальных кредитных напоминаний
+
+Располагаются по приоритету в `CREDIT_REMINDER_PATTERNS`:
+
+| # | Паттерн | Пример | Банк |
+|---|---------|--------|------|
+| 1 | `не\s+забудьте\s+внести` | «Не забудьте внести 613.19 RUR по кредитке» | Alfa |
+| 2 | `внесите(?:\s+очередн[уы]ю)?\s+оплат` | «Внесите очередную оплату по займу» | Turbozaim |
+| 3 | `дата\s+платежа[!.]` | «Сегодня дата платежа! К оплате: 0.00 руб» | JoyMoney |
+| 4 | `к\s+оплате[!.:]` | «К оплате: 0.00 руб» | JoyMoney |
+| 5 | `внесите\s+плат[её]ж` | «Внесите платеж по кредитке 11 400 руб» | VTB |
+| 6 | `спишем\s+\d+.*не\s+забудьте` | «27.04.2026 спишем 32500. Не забудьте» | Alfa |
+| 7 | `плат[её]ж\s+по\s+займ` | «15.04.2026 — платеж по займу» | Alfa Finance |
+| 8 | `плат[её]ж\s+по\s+кредитке` | «платеж по кредитке» | VTB |
+| 9 | `очередн[оа]го\s+платеж[аа]` | «внесения очередного платежа» | sber |
+| 10 | `не\s+допустить\s+просрочку` | «не допустить просрочку» | sber |
+
+### Паттерны обычных банковских уведомлений (НЕ кредит)
+
+`BANK_NOTIFICATION_PATTERNS` — покупки, переводы, баланс:
+```
+счёт карты, счёт\d{4}, покупк, перевод, по СБП,
+списание, зачисление, оплата, баланс, недостаточно средств,
+комиссия, отклонён, заблокировали перевод, приостановил,
+защита клиентов, мошенничество, не дозвонились,
+пополнен на, счет *X пополнен, получите до X без %,
+пришлем X посоветуйте, Доступно 39000₽, на карту без проверок
+```
+
+### Паттерны спам-МФО
+
+`SPAM_MFO_PATTERNS` — рекламные займы, не напоминания:
+```
+готовы перевести, одобрен на карту, заберите,
+получите до Х, выдача/займ подтвержден, беспроцентн,
+на любые цели, деньги на карту, мгновенно на карту,
+источник денег, получите деньги, успейте взять,
+ваш займ готов, оформление получить, займы на разные цели,
+попробуйте кредитную карту, cc./clk./bee./beel.ink
+```
+
+### Паттерны 2FA/кодов
+
+`CODE_PATTERNS` — всегда приоритетнее любых кредитных проверок:
+```
+код: \d{4,6}, код для входа, никому не сообщай,
+введите код, проверочный код, для подтверждения,
+code: \d{4,8}, @id.sber
+```
+
+### Сканирование SMS из Phone Link
+
+Скрипт `scripts/scan_sms_3mo.py`:
+
+```bash
+# Запуск по умолчанию (старый профиль, 90 дней)
+python3 scripts/scan_sms_3mo.py
+
+# Смена профиля — изменить WINDOWS_PHONE_LINK_DB в начале файла
+WINDOWS_PHONE_LINK_DB = '/path/to/phone.db'
+
+# Копирование БД из NTFS (Windows Phone Link блокирует прямой SQLite-доступ)
+mkdir -p /tmp/phone_backup
+cp /mnt/c/.../phone.db /tmp/phone_backup/
+cp /mnt/c/.../phone.db-wal /tmp/phone_backup/
+python3 scripts/scan_sms_3mo.py # или с изменённым WINDOWS_PHONE_LINK_DB
+```
+
+### Добавление нового отправителя
+
+1. **Реальный банк/МФО с напоминаниями** → добавить в `CREDIT_SENDERS`
+2. **Спам-МФО** → добавить в `SPAM_MFO_SENDERS` (проверяется раньше)
+3. **Спам-МФО, маскирующийся под банк** → добавить в `NOT_BANK_FROM` и `SPOOF_SENDERS`
+4. **Новый паттерн напоминания** → добавить в `CREDIT_REMINDER_PATTERNS`
+5. **Новый паттерн обычного уведомления** → добавить в `BANK_NOTIFICATION_PATTERNS`
+
+### Запись в БД
+
+После сканирования, реальные кредитные напоминания записываются в `credit_alerts`:
+```python
+c.execute('''INSERT INTO credit_alerts 
+    (id, source, sender_name, subject, body, payment_amount, 
+     payment_date, is_active, detected_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, datetime("now"))''',
+    (new_id, 'sms', bank_name, '', body, amount, date_str))
+```
+
+Проверка на дубликаты — по `sender_name + body`.
+
+### Актуальное состояние (11.05.2026)
+
+- **Всего алертов в БД:** 97
+- **Активных:** 9 (2 email + 7 SMS)
+- **SMS-источников:** 2 телефона (старый: 319 SMS, новый: 521 SMS)
+- **Точность классификации:** 840 SMS → 8 credit (0 false positive), 412 ad, 0 unknown
+- **Определённые банки:** turbozaim, sberbank, vtb, alfa (остальные — 'unknown' — требуют донастройки паттернов)
 
 ## Порядок работы
 
