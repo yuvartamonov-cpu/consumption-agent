@@ -23,12 +23,13 @@ PROJECT_DIR = os.path.join(SCRIPT_DIR, '..') if os.path.basename(SCRIPT_DIR) == 
 
 # Банки/МФО, которые реально отправляют кредитные уведомления
 # Банки и МФО, от которых могут приходить кредитные уведомления
+# Реальные банки и МФО, от которых приходят уведомления о кредитах
 CREDIT_SENDERS = {
     'sberbank', 'vtb', 'tinkoff', 'alfa',
     'sovcombank', 'raiffeisen', 'gazprombank', 'otkritie',
     'rosbank', 'uralsib', 'homecredit', 'rencredit',
     'pochtabank', 'akbars', 'absolut', 'mdm',
-    'turbozaim', 'joy_finance', 'nebus', 'boostra',
+    'turbozaim', 'joy_finance', 'nebus',
     'ekvazaim', 'webzaim',
 }
 
@@ -47,6 +48,7 @@ SPAM_MFO_SENDERS = {
     'mfcalfafin',  # тоже рекламный спам, не реальный кредит
     'beeline', 'beelineofd', 't-mob', 'atb', 'bankzenit', 'gazprombank',
     'uralsib', 'rsb', 'rsb.ru', '0919', 'rsb.ru', 'unknown',
+    'boostra', 't-bank', 'tinkoff_non_reminder',
 }
 
 # Отправители, которые НЕ являются банками (ложная детекция)
@@ -175,7 +177,10 @@ class Category:
 # Паттерны НАСТОЯЩЕГО кредитного платежа (reminder с датой)
 CREDIT_REMINDER_PATTERNS = [
     r'не\s+забудьте\s+внести',          # alfa: Не забудьте внести 613.19 RUR по кредитке
-    r'внесите\s+плат[её]ж',               # vtb: Внесите платеж по кредитке
+    r'внесите(?:\s+очередн[уы]ю)?\s+оплат',    # turbozaim: Внесите очередную оплату по займу
+    r'дата\s+платежа[!.]',                      # joymoney: Сегодня дата платежа!
+    r'к\s+оплате[!.:]',                          # joymoney: К оплате:
+    r'внесите\s+плат[её]ж',                  # vtb: Внесите платеж по кредитке
     r'спишем\s+\d{1,3}(?:[\s\u00A0]?\d{3})*.*не\s+забудьте',  # alfa: спишем X. Не забудьте
     r'внесите\s+по\s+кредит',
     r'плат[её]ж\s+по\s+займ',            # alfa finance
@@ -219,6 +224,7 @@ BANK_NOTIFICATION_PATTERNS = [
     r'пополнен[ао]?\s+на',
     r'счет\s+\*\d+\s+пополнен',
     r'получите\s+до\s+[^%]+без\s+%',  # alfa: получите до 30 000₽ без %
+    r'(?:пришел=|пришлем).*посоветуйте',  # t-bank: пришлем X р. посоветуйте кредитку
 ]
 
 # Паттерны заявок на кредит (не напоминание)
