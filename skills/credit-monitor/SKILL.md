@@ -76,24 +76,42 @@ CREATE TABLE credit_alerts (
 
 ## Telegram-интеграция
 
-Бот отправляет алерт с кнопкой `✅ Подтвердить оплату`. Кнопка вызывает `credit_paid_callback`:
+### Команды бота
+| Команда | Описание |
+|---------|----------|
+| `/debts` | Кредиты к оплате в ближайшие 30 дней (цветовая маркировка) |
+| `/fines` | Неоплаченные штрафы |
 
-```python
-# Callback handler в telegram_bot.py
-async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Проверка OWNER_CHAT_ID
-    # Обновление paid_confirmed_at в БД
-    # Редактирование сообщения c отметкой ✅ Отмечено как оплачено
+`/debts` выводит таблицу кредитов с группировкой:
+- 🔴 ПРОСРОЧЕН
+- 🟡 СРОЧНО (≤3 дня)
+- 🟢 На этой неделе (≤7 дней)
+- ⚪ Остальные
 
-app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
-```
+`/fines` выводит активные штрафы (type=new), без подтверждённых оплаченных.
+
+### Кнопки
+Бот отправляет алерт с кнопкой:
+- `✅ Подтвердить оплату` — кредиты (callback: `credit_paid:{id}`)
+- `✅ Оплачено` — штрафы (callback: `fine_paid:{id}`)
 
 ## Cron-расписание
 
 ```cron
-0 10 * * * cd /home/yuri_artamonov/.openclaw/workspace/consumption_agent && ./check_credit_alerts.sh >> /tmp/credit_alerts.log 2>&1
-0 18 * * * cd /home/yuri_artamonov/.openclaw/workspace/consumption_agent && ./check_credit_alerts.sh >> /tmp/credit_alerts.log 2>&1
+# Каждый час с 10 до 23, retry до успеха (флаг /tmp/debts_fines_done_YYYY-MM-DD)
+0 10-23 * * * cd /home/yuri_artamonov/.openclaw/workspace/consumption_agent && bash check_debts_fines_retry.sh
 ```
+
+Скрипт `check_debts_fines_retry.sh`:
+1. Проверяет флаг — был ли сегодня успешный прогон
+2. Если да — выход (не тратим время)
+3. Если нет — запускает `credit_alerts.py` (кредиты) + `scripts/fines_bot.py` (штрафы)
+4. Если хотя бы один источник ответил — ставит флаг
+
+## Heartbeat (OpenClaw)
+
+Каждый heartbeat запускается `check_debts_fines.sh` (аналог retry, но без флага).
+Сообщать о новых кредитах/штрафах сразу.
 
 ## IMAP-конфигурация
 
