@@ -1471,13 +1471,14 @@ async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /fines — неоплаченные и свежие штрафы"""
+    """Команда /fines — неоплаченные и свежие штрафы.
+    Сначала список, потом каждый штраф отдельным сообщением с кнопкой ✅ Оплачено."""
     conn = get_db()
     try:
         rows = conn.execute("""
             SELECT id, type, number, amount, description, vehicle, fine_date, vendor, paid_confirmed_at
             FROM fines
-            WHERE (type IN ('new') OR (type IN ('paid') AND paid_confirmed_at IS NULL))
+            WHERE paid_confirmed_at IS NULL
             ORDER BY fine_date DESC
         """).fetchall()
     finally:
@@ -1487,48 +1488,65 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('✅ Нет неоплаченных штрафов.')
         return
 
-    # Группируем по номеру — берём последний статус
+    # Группируем по номеру — берём последний статус (DESC по дате)
     by_number = {}
     for r in rows:
         num = r[2] or str(r[0])
-        by_number[num] = r  # последний wins (DESC по дате)
+        by_number[num] = r
 
+    # Берём только те, где нет paid_confirmed_at (по номеру штрафа дедуплицируем)
     active = []
     for r in by_number.values():
-        if r[1] != 'new' and r[8] is not None:
-            continue  # уже подтверждено
-        active.append(r)
+        if r[1] == 'new' or (r[1] in ('paid', 'fined') and r[8] is None):
+            active.append(r)
 
     if not active:
         await update.message.reply_text('✅ Нет неоплаченных штрафов.')
         return
 
-    lines = ['🚨 *Штрафы:*']
-    total = 0.0
-
+    # Сводка
+    total = sum(r[3] or 0 for r in active)
+    summary_lines = [f'🚨 *Штрафы: {len(active)} шт., всего {total:.0f} ₽*']
     for r in active:
         amount = r[3] or 0
-        desc = (r[4] or '')[:100]
+        desc = (r[4] or '').strip()[:60]
         date_str = r[6] or '—'
-        vendor = (r[7] or '')[:50]
-        veh = (r[5] or '')[:15]
+        summary_lines.append(f'  🔴 {amount:.0f} ₽ — {desc or "Штраф"} ({date_str})')
+    summary_lines.append(f'\n⬇️ Отправляю детали с кнопками...')
+    await update.message.reply_text('\n'.join(summary_lines), parse_mode='Markdown')
 
-        prefix = '🔴' if r[1] == 'new' else '✅'
-        status = 'Новый' if r[1] == 'new' else 'Оплачен (не подтверждён)'
-        lines.append(f'\n{prefix} {amount:.0f} ₽ — {status}')
+    # Каждый штраф отдельным сообщением с кнопкой
+    for r in active:
+        fine_id = r[0]
+        amount = r[3] or 0
+        desc = (r[4] or '').strip()
+        date_str = r[6] or '—'
+        vendor = (r[7] or '').strip()[:60]
+        veh = (r[5] or '').strip()[:15]
+        num_str = (r[2] or '')[:20]
+
+        detail_lines = [f'🚨 *Штраф: {amount:.0f} ₽*']
         if desc:
-            lines.append(f'   📋 {desc}')
-        lines.append(f'   📅 {date_str}')
+            detail_lines.append(f'📋 {desc}')
+        detail_lines.append(f'📅 {date_str}')
         if veh:
-            lines.append(f'   🚗 {veh}')
+            detail_lines.append(f'🚗 {veh}')
         if vendor:
-            lines.append(f'   🏛 {vendor}')
+            detail_lines.append(f'🏛 {vendor}')
+        if num_str:
+            detail_lines.append(f'№ {num_str}')
 
-        total += amount
+        keyboard = {
+            'inline_keyboard': [[
+                {'text': '✅ Оплачено', 'callback_data': f'fine_paid:{fine_id}'}
+            ]]
+        }
 
-    lines.append(f'\n💰 *Итого: {total:.2f} ₽*')
-
-    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+        await update.message.reply_text(
+            '\n'.join(detail_lines),
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
 
 
 async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
