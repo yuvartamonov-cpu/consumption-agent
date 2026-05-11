@@ -260,7 +260,7 @@ def main():
     
     print(f"\n{'='*60}")
     print(f"ГОТОВО! Добавлено {total_new} новых заказов")
-    print(f"Файлы: {OUT_DIR}\*.json")
+    print(f"Файлы: {OUT_DIR}/*.json")
     print(f"{'='*60}")
     
     # Сводка
