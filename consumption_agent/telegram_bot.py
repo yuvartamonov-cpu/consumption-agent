@@ -765,28 +765,60 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if _ml is not None and _ml.is_memory_lane_caption(caption):
         try:
             file = await photo.get_file()
-            buf = bytearray()
             tmp_path = os.path.join(RECEIPTS_DIR, f'_ml_{update.message.message_id}.jpg')
             await file.download_to_drive(tmp_path)
             with open(tmp_path, 'rb') as fh:
                 buf = fh.read()
-            os.remove(tmp_path)
+
             conn = get_db()
             try:
                 asset_id = _ml.save_media(conn, buf, mime='image/jpeg')
                 parsed = _ml.parse_caption(caption, conn)
+
+                # Обогащаем через Vision API — тема, теги, описание
+                vision_info = {}
+                try:
+                    from vision_item import enrich_memory_lane
+                    vision_info = enrich_memory_lane(tmp_path, caption)
+                    if vision_info and 'error' not in vision_info:
+                        # Тема из Vision если caption не дала
+                        if not parsed.get('topic') and vision_info.get('topic'):
+                            parsed['topic'] = vision_info['topic']
+                        # Дополняем style_tags
+                        v_tags = vision_info.get('style_tags', [])
+                        existing = set(parsed.get('style_tags', []))
+                        for t in v_tags:
+                            if t.lower() not in {x.lower() for x in existing}:
+                                parsed.setdefault('style_tags', []).append(t)
+                except Exception as e:
+                    log.warning(f'Vision enrich failed (non-critical): {e}')
+
                 item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed)
             finally:
                 conn.close()
+
+            os.remove(tmp_path)
+
             liked = ', '.join(parsed.get('liked', [])) or '—'
             tags = ', '.join(parsed.get('style_tags', [])) or '—'
             topic = parsed.get('topic') or '—'
-            await update.message.reply_text(
-                f'🧠 Memory Lane #{item_id}\n'
-                f'Реакция: {liked}\n'
-                f'Стиль: {tags}\n'
-                f'Тема: {topic}'
-            )
+            desc = vision_info.get('description', '')
+            name = vision_info.get('name', '')
+
+            parts = [f'🧠 Memory Lane #{item_id}']
+            if name:
+                parts.append(f'📌 {name}')
+            parts.append(f'Реакция: {liked}')
+            parts.append(f'Стиль: {tags}')
+            parts.append(f'Тема: {topic}')
+            if desc:
+                parts.append(f'📝 {desc}')
+            if vision_info.get('brand'):
+                parts.append(f'🏷️ Бренд: {vision_info["brand"]}')
+            if vision_info.get('estimated_price_rub'):
+                parts.append(f'💰 Оценка: ~{vision_info["estimated_price_rub"]} ₽')
+
+            await update.message.reply_text('\n'.join(parts))
             return
         except Exception as e:
             log.warning(f'memory_lane save failed: {e}')
@@ -816,14 +848,105 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
         f.write(text or 'NO_OCR_TEXT')
 
-    # Классификация типа изображения
-    image_type = classify_image_type(text or '')
+    # Классификация: QR есть → чек, иначе Vision API
+    image_type = 'receipt' if qr_data else None
+    if not image_type:
+        # OCR-классификация как fallback
+        image_type = classify_image_type(text or '')
+        # Vision API классификация (точнее)
+        try:
+            from vision_item import classify_photo as vision_classify
+            v_type = vision_classify(receipt_path)
+            if v_type and v_type != 'unknown':
+                image_type = v_type
+                log.info(f"Vision classify: {v_type}")
+        except Exception as e:
+            log.warning(f"Vision classify failed: {e}")
+
     tag_probe = parse_clothing_tag(text or '', receipt_path)
-    if image_type == 'unknown' and (tag_probe.get('brand') or tag_probe.get('article') or tag_probe.get('barcode')) and not total_amount:
+    if image_type in ('unknown', 'other') and (tag_probe.get('brand') or tag_probe.get('article') or tag_probe.get('barcode')) and not total_amount:
         image_type = 'tag'
     log.info(f"Тип изображения: {image_type}")
 
     items = []
+
+    # === Если это предмет/одежда/еда/интерьер (не чек и не бирка) — распознаём как вещь ===
+    if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other') and not qr_data:
+        try:
+            from vision_item import recognize_item
+            item_info = recognize_item(receipt_path)
+            if item_info and 'error' not in item_info:
+                item_name = item_info.get('name', 'Предмет')
+                item_brand = item_info.get('brand')
+                item_cat = item_info.get('category', 'другое')
+                item_desc = item_info.get('description', '')
+                item_color = item_info.get('color')
+                item_price = item_info.get('estimated_price_rub')
+                style_tags = item_info.get('style_tags', [])
+
+                # Сохраняем в БД как инвентарный предмет
+                conn = get_db()
+                cat_row = None
+                # Маппинг категорий Vision → БД
+                cat_map = {
+                    'одежда': 'cat_clo_everyday', 'обувь': 'cat_clo_everyday',
+                    'техника': 'cat_electronics', 'мебель': 'cat_furniture',
+                    'еда': 'cat_food', 'интерьер': 'cat_furniture',
+                    'косметика': 'cat_cosmetics', 'аксессуары': 'cat_accessories',
+                    'бытовая техника': 'cat_appliances',
+                }
+                slug = cat_map.get(item_cat.lower(), 'other')
+                cat_row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (slug,)).fetchone()
+                if not cat_row:
+                    cat_row = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
+                cat_id = cat_row[0] if cat_row else None
+
+                attrs = json.dumps({
+                    'color': item_color,
+                    'description': item_desc,
+                    'style_tags': style_tags,
+                    'vision_type': item_info.get('type'),
+                    'material': item_info.get('material'),
+                }, ensure_ascii=False)
+
+                conn.execute(
+                    "INSERT INTO items (name, brand, purchase_price, category_id, attributes, data_origin, purchase_date) "
+                    "VALUES (?, ?, ?, ?, ?, 'vision_photo', ?)",
+                    (item_name, item_brand, item_price, cat_id, attrs, date.today().isoformat())
+                )
+
+                # Сохраняем фото
+                try:
+                    with open(receipt_path, 'rb') as fh:
+                        buf = fh.read()
+                    import memory_lane as _ml2
+                    _asset_id = _ml2.save_media(conn, buf, mime='image/jpeg')
+                except Exception:
+                    pass
+
+                conn.commit()
+                conn.close()
+
+                # Ответ
+                parts = ['📷 Предмет распознан']
+                parts.append(f'📌 {item_name}')
+                if item_brand:
+                    parts.append(f'🏷️ Бренд: {item_brand}')
+                parts.append(f'📂 Категория: {item_cat}')
+                if item_color:
+                    parts.append(f'🎨 Цвет: {item_color}')
+                if item_desc:
+                    parts.append(f'📝 {item_desc}')
+                if style_tags:
+                    parts.append(f'🏷️ Теги: {", ".join(style_tags)}')
+                if item_price:
+                    parts.append(f'💰 Оценка: ~{item_price} ₽')
+                parts.append('\nДобавлено в инвентарь ✅')
+                await update.message.reply_text('\n'.join(parts))
+                return
+        except Exception as e:
+            log.warning(f'Vision item recognition failed: {e}')
+            # fall through to receipt handler
 
     if image_type == 'tag':
         # === Обработка бирки ===
@@ -895,22 +1018,39 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 log.warning(f"Failed to send image {engine_url}: {e}")
         return
 
-    # === Если НЕ бирка — используем новый OCR-пайплайн ===
+    # === Если НЕ бирка — используем Vision API (GPT-4o-mini) ===
+    ocr_result = None
+    vision_result = None
     try:
-        from scripts import receipt_ocr
-        ocr_result = receipt_ocr.process_receipt(receipt_path)
-        if ocr_result.ocr_score >= 30 and (ocr_result.items or ocr_result.total):
-            items = [{'name': it.name, 'price': it.price, 'qty': it.qty, 'total': it.total} for it in ocr_result.items]
-            total_amount = total_amount or ocr_result.total
-            receipt_date = receipt_date or ocr_result.date
-            shop = ocr_result.shop or shop
-            log.info(f"receipt_ocr: {ocr_result.shop}, {len(items)} items, total={ocr_result.total}, score={ocr_result.ocr_score}")
+        from vision_receipt import recognize_receipt
+        vision_result = recognize_receipt(receipt_path)
+        if vision_result and 'error' not in vision_result:
+            vision_items = vision_result.get('items', [])
+            if vision_items:
+                items = [{'name': it['name'], 'price': it.get('price', 0), 'qty': it.get('qty', 1),
+                          'total': it.get('price', 0) * it.get('qty', 1)} for it in vision_items]
+                total_amount = total_amount or vision_result.get('total')
+                purchase_date = purchase_date or vision_result.get('date')
+                log.info(f"Vision API: {vision_result.get('store')}, {len(items)} items, total={vision_result.get('total')}")
         else:
-            log.warning(f"receipt_ocr: low score {ocr_result.ocr_score}, fallback to old parser")
-            items = _parse_receipt_lines(text or '', total_amount)
+            log.warning(f"Vision API failed: {vision_result.get('error', 'unknown')}")
     except Exception as e:
-        log.warning(f"receipt_ocr failed: {e}")
-        items = _parse_receipt_lines(text or '', total_amount)
+        log.warning(f"Vision API unavailable: {e}")
+
+    # Fallback: старый OCR-пайплайн (если Vision не сработал)
+    if not items:
+        try:
+            from scripts import receipt_ocr
+            ocr_result = receipt_ocr.process_receipt(receipt_path)
+            if ocr_result.ocr_score >= 30 and (ocr_result.items or ocr_result.total):
+                items = [{'name': it.name, 'price': it.price, 'qty': it.qty, 'total': it.total} for it in ocr_result.items]
+                total_amount = total_amount or ocr_result.total
+                log.info(f"receipt_ocr fallback: {len(items)} items, score={ocr_result.ocr_score}")
+            else:
+                items = _parse_receipt_lines(text or '', total_amount)
+        except Exception as e:
+            log.warning(f"receipt_ocr fallback failed: {e}")
+            items = _parse_receipt_lines(text or '', total_amount)
 
     if not total_amount:
         m = re.search(r'ИТОГ[О]?[^\d]*([\d]+[.,]\d{2})', text or '')
@@ -926,9 +1066,16 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except sqlite3.OperationalError:
         pass  # уже существует
 
-    # Проверяем, есть ли доставка от нового OCR-пайплайна
-    delivery = ocr_result.delivery_cost if ocr_result and hasattr(ocr_result, 'delivery_cost') else 0
-    delivery_name = ocr_result.delivery_item_name if ocr_result and hasattr(ocr_result, 'delivery_item_name') else 'Доставка'
+    # Проверяем, есть ли доставка от Vision API или OCR
+    delivery = 0
+    delivery_name = 'Доставка'
+    if vision_result and 'error' not in vision_result:
+        vd = vision_result.get('delivery', {})
+        delivery = vd.get('price', 0) or 0
+        delivery_name = vd.get('name', 'Доставка')
+    elif ocr_result and hasattr(ocr_result, 'delivery_cost'):
+        delivery = ocr_result.delivery_cost or 0
+        delivery_name = getattr(ocr_result, 'delivery_item_name', 'Доставка')
 
     # Отделяем доставку от товаров: убираем из items, если есть
     real_items = []
@@ -995,6 +1142,11 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Формируем структурированный вывод
     response_parts = ['🧾 Чек распознан']
+
+    # Магазин из Vision API
+    store_name = (vision_result or {}).get('store')
+    if store_name and store_name != 'Неизвестный':
+        response_parts.append(f"🏪 {store_name}")
 
     if purchase_date:
         response_parts.append(f"Дата: {purchase_date}")

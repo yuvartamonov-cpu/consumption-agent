@@ -1,0 +1,155 @@
+"""
+vision_item.py — Распознавание предметов/товаров на фото через Vision API.
+Работает для: Memory Lane, /add_item, классификация фото.
+
+Стоимость: ~$0.004-0.006 за фото (gpt-4o-mini).
+"""
+
+import base64
+import json
+import logging
+import os
+import re
+
+log = logging.getLogger(__name__)
+
+VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o-mini")
+
+ITEM_PROMPT = """Посмотри на фото и определи, что на нём изображено.
+Верни ТОЛЬКО валидный JSON (без markdown, без ```):
+{
+  "type": "item|food|interior|clothing|receipt|tag|other",
+  "name": "краткое название предмета на русском",
+  "brand": "бренд если видно, иначе null",
+  "category": "категория: одежда/обувь/техника/мебель/еда/интерьер/косметика/аксессуары/бытовая техника/другое",
+  "color": "основной цвет если определяется, иначе null",
+  "material": "материал если виден, иначе null",
+  "style_tags": ["тег1", "тег2"],
+  "description": "краткое описание (1-2 предложения)",
+  "estimated_price_rub": null
+}
+
+Правила:
+- type: "receipt" если это кассовый чек, "tag" если бирка одежды, "clothing" если одежда, "food" если еда, "interior" если интерьер/мебель, "item" для остального
+- name: конкретное название (не "предмет", а "синий пиджак" или "кофемолка Bosch")
+- style_tags: 2-5 тегов для описания стиля/характера (для одежды: casual/formal/sport, для еды: домашняя/ресторан)
+- estimated_price_rub: примерная цена в рублях если можно оценить, иначе null
+- Только JSON"""
+
+CLASSIFY_PROMPT = """Что на фото? Ответь ОДНИМ словом:
+- receipt (кассовый чек, квитанция)
+- tag (бирка одежды, ценник, этикетка)
+- clothing (одежда, обувь)
+- food (еда, напитки)
+- interior (интерьер, мебель, декор)
+- tech (техника, гаджеты)
+- item (любой другой предмет/товар)
+- other (не предмет)
+
+Ответь ОДНИМ словом."""
+
+
+def _call_vision(image_path: str, prompt: str, model: str = None, max_tokens: int = 1000) -> str:
+    """Вызывает Vision API и возвращает текст ответа."""
+    import openai
+    
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY не задан")
+    
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    
+    ext = os.path.splitext(image_path)[1].lower().lstrip('.')
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(ext, "image/jpeg")
+    
+    client = openai.OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model=model or VISION_MODEL,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "high"}}
+            ]
+        }],
+        max_tokens=max_tokens,
+        temperature=0.1
+    )
+    
+    tokens_in = response.usage.prompt_tokens
+    tokens_out = response.usage.completion_tokens
+    log.info(f"Vision API: {model or VISION_MODEL}, {tokens_in}+{tokens_out} tokens")
+    
+    return response.choices[0].message.content.strip()
+
+
+def classify_photo(image_path: str) -> str:
+    """
+    Быстрая классификация фото: receipt/tag/clothing/food/interior/tech/item/other.
+    Дёшево (~2K tokens).
+    """
+    try:
+        result = _call_vision(image_path, CLASSIFY_PROMPT, max_tokens=10)
+        result = result.lower().strip().rstrip('.')
+        valid = {'receipt', 'tag', 'clothing', 'food', 'interior', 'tech', 'item', 'other'}
+        return result if result in valid else 'other'
+    except Exception as e:
+        log.error(f"classify_photo failed: {e}")
+        return 'unknown'
+
+
+def recognize_item(image_path: str, model: str = None) -> dict:
+    """
+    Полное распознавание предмета на фото.
+    Возвращает dict с полями: type, name, brand, category, color, material, style_tags, description.
+    """
+    try:
+        text = _call_vision(image_path, ITEM_PROMPT, model=model)
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+        result = json.loads(text)
+        return result
+    except json.JSONDecodeError as e:
+        log.error(f"Vision item: invalid JSON: {e}")
+        return {"error": f"Invalid JSON: {e}", "type": "unknown"}
+    except Exception as e:
+        log.error(f"Vision item failed: {e}")
+        return {"error": str(e), "type": "unknown"}
+
+
+def enrich_memory_lane(image_path: str, caption: str = "") -> dict:
+    """
+    Обогащает Memory Lane запись данными с фото.
+    Возвращает: topic, style_tags, description, name.
+    """
+    result = recognize_item(image_path)
+    if "error" in result:
+        return result
+    
+    return {
+        "topic": result.get("category"),
+        "style_tags": result.get("style_tags", []),
+        "description": result.get("description"),
+        "name": result.get("name"),
+        "brand": result.get("brand"),
+        "color": result.get("color"),
+        "type": result.get("type"),
+        "estimated_price_rub": result.get("estimated_price_rub"),
+    }
+
+
+# CLI
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1:
+        path = sys.argv[1]
+        action = sys.argv[2] if len(sys.argv) > 2 else "full"
+        
+        if action == "classify":
+            print(classify_photo(path))
+        else:
+            result = recognize_item(path)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print("Usage: python3 vision_item.py <image_path> [classify|full]")
