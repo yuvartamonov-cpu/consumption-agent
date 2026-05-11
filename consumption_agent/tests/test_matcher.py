@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Тесты для matcher.py — нормализация, фильтрация, exact и fuzzy match."""
 import json
+import os
 import sqlite3
 import sys
 import tempfile
