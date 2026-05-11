@@ -12,7 +12,7 @@ import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 IMAP_USER = 'yu.v.artamonov@gmail.com'
-IMAP_PASS = '[REDACTED_OLD_GMAIL_APP_PASSWORD]'
+IMAP_PASS = os.getenv('GMAIL_APP_PASSWORD', '').replace('"', '').replace(' ', '')
 
 def decode_subject(msg):
     subj = msg['Subject']

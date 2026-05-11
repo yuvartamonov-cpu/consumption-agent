@@ -13,7 +13,7 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
 SENDER_EMAIL = "yu.v.artamonov@gmail.com"
 # Пароль из .env
-PASSWORD = os.environ.get("GMAIL_PASSWORD", "").replace('"', '')
+PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "").replace('"', '')
 
 # Получатели
 RECIPIENTS = ["yu.v.artamonov@gmail.com"]

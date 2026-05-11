@@ -289,7 +289,7 @@ def check_ozon_email_cheques(limit=10):
     conn = sqlite3.connect(DB_PATH)
 
     mail = imaplib.IMAP4_SSL('imap.gmail.com', 993)
-    mail.login('yu.v.artamonov@gmail.com', '[REDACTED_OLD_GMAIL_APP_PASSWORD]')
+    mail.login('yu.v.artamonov@gmail.com', os.getenv('GMAIL_APP_PASSWORD', '').replace('"', '').replace(' ', ''))
     mail.select('INBOX')
 
     imported = 0

@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """
 Consumption Agent — email-импорт покупок и импорт распознанных товаров.
@@ -22,7 +23,7 @@ IMAP_CONFIG = {
     'host': 'imap.gmail.com',
     'port': 993,
     'user': 'yu.v.artamonov@gmail.com',
-    'password': '[REDACTED_OLD_GMAIL_APP_PASSWORD]',
+    os.getenv('GMAIL_APP_PASSWORD', '').replace('"', '').replace(' ', ''),
 }
 
 
