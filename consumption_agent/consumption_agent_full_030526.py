@@ -76,9 +76,11 @@ FINANCIAL_SENDERS = [
     {'id': 'samokat_ofd',       'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': ''},
     # Яндекс.Почта — свои отправители
     {'id': 'yandex_market',     'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_lavka_ya',   'from': 'lavka.yandex.ru',     'doc_type': 'food',    'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_eda_ya',     'from': 'eda.yandex.ru',       'doc_type': 'food',    'subject_marker': 'заказ', 'mailbox': 'yandex'},
+    {'id': 'yandex_lavka',      'from': 'lavka.yandex.ru',     'doc_type': 'food',    'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_eda',        'from': 'eda.yandex.ru',       'doc_type': 'food',    'subject_marker': 'заказ', 'mailbox': 'yandex'},
     {'id': 'yandex_drive',      'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_taxi',       'from': 'taxi.yandex.ru',      'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'yandex'},
+    {'id': 'ofd_yandex',        'from': 'no-reply@ofd.yandex.ru', 'doc_type': 'fiscal', 'subject_marker': 'чек', 'mailbox': 'yandex'},
     {'id': 'yandex_drive_gmail', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'gmail'},
     {'id': 'yandex_drive_zorea', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'zorea'},
     {'id': 'yandex_drive_neutr', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'neutrinon'},
@@ -98,9 +100,9 @@ FINANCIAL_SENDERS = [
     {'id': 'samokat_ofd_zorea', 'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': '', 'mailbox': 'zorea'},
     {'id': 'samokat_ofd_neutr', 'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': '', 'mailbox': 'neutrinon'},
     # Госуслуги (zorea + neutrinon)
-    {'id': 'gosuslugi',         'from': 'no-reply@gosuslugi.ru',  'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'zorea'},
+    {'id': 'gosuslugi_zorea',   'from': 'no-reply@gosuslugi.ru',  'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'zorea'},
     {'id': 'gosuslugi_neutr',   'from': 'no-reply@gosuslugi.ru',  'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'neutrinon'},
-    {'id': 'nalog',             'from': 'nalog.gov.ru',          'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'zorea'},
+    {'id': 'nalog_zorea',       'from': 'nalog.gov.ru',          'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'zorea'},
     {'id': 'nalog_neutr',       'from': 'nalog.gov.ru',          'doc_type': 'gov',    'subject_marker': '', 'mailbox': 'neutrinon'},
     # Добавляйте новых отправителей сюда
 ]
