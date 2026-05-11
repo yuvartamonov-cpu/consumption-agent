@@ -34,15 +34,15 @@ def parse_drive_request(text: str):
 
 def calculate_drive_cost(tariff, hours, km):
     """Расчёт стоимости поездки по тарифу провайдера."""
-    provider = tariff['provider']
-    h_rate = tariff['hourly_rate'] or 0
     km_rate = tariff['km_rate'] or 0
+    rate_type = tariff['rate_type']
 
-    if provider == 'yandex':
-        # Bay 24: flat 763₽/сутки + 13.5₽/км
-        base = h_rate + km * km_rate
+    if rate_type == 'flat_km':
+        # Фиксированный тариф (сутки/часы) + стоимость за км
+        base = (tariff['hourly_rate'] or 0) + km * km_rate
     else:
-        # per-minute providers
+        # Поминутный/почасовой тариф + стоимость за км
+        h_rate = tariff['hourly_rate'] or 0
         base = h_rate * hours + km * km_rate
 
     return max(round(base, -1), 500)  # округляем до 10₽, минимум 500₽
@@ -981,7 +981,10 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for t in tariffs:
         cost = calculate_drive_cost(t, hours, km)
         name = provider_names.get(t['provider'], t['provider'].upper())
-        lines.append(f"• {name}: ~{cost:.0f} ₽")
+        tariff_info = f" ({t['tariff_name']})" if t['tariff_name'] else ""
+        rate_type = t['rate_type']
+        rate_info = "фикс+км" if rate_type == 'flat_km' else "почас"
+        lines.append(f"• {name}{tariff_info}: ~{cost:.0f} ₽ ({rate_info})")
 
     lines.append("\n(реальная стоимость может отличаться)")
     await update.message.reply_text("\n".join(lines))
