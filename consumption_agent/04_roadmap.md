@@ -53,15 +53,15 @@ Telegram photo + comment → сохранение в media/ → caption + featur
 
 ### Acceptance criteria
 
-- [ ] **Автообработка фото в Telegram** — если бот получает фото с текстом «нравится»,
-      «запомни», «найди похожее» и т.п., предлагает сохранить в Memory Lane
-- [ ] Сохранение оригинала в `data/media/`
-- [ ] Запись в `memory_lane_items` (liked_features, disliked_features, style_tags)
-- [ ] Запись в `media_assets`
-- [ ] Команда `/ml_last` — последние впечатления
-- [ ] Команда `/ml_find <query>` — текстовый поиск по памяти
-- [ ] Команда `/ml_profile <topic>` — профиль вкуса по теме
-- [ ] **Тесты** на сохранение, извлечение, поиск
+- [x] **Автообработка фото в Telegram** — если бот получает фото с текстом «нравится»,
+      «запомни», «найди похожее» и т.п., сохраняет в Memory Lane (commit YUR-64)
+- [x] Сохранение оригинала в `data/media/` (sha256-deduped, MEDIA_SUBDIR)
+- [x] Запись в `memory_lane_items` (liked_features, disliked_features, style_tags, topic)
+- [x] Запись в `media_assets`
+- [x] Команда `/ml_last` — последние впечатления (опц. фильтр по topic)
+- [ ] Команда `/ml_find <query>` — текстовый поиск по памяти (следующая итерация: embedding)
+- [ ] Команда `/ml_profile <topic>` — профиль вкуса по теме (следующая итерация)
+- [x] **Тесты** на сохранение (9 кейсов в tests/test_memory_lane.py)
 
 ### Детали
 

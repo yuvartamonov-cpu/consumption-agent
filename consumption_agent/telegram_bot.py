@@ -648,8 +648,47 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Get the highest resolution photo
     photo: PhotoSize = update.message.photo[-1]
-    file = await photo.get_file()
+    caption = update.message.caption or ''
+
+    # Phase B: Memory Lane fast path — если в caption есть триггер-слова или
+    # хэштеги, сохраняем в memory_lane_items + media_assets и завершаем,
+    # не попадая в OCR/QR-пайплайн чеков.
+    try:
+        import memory_lane as _ml
+    except ImportError:
+        _ml = None
+    if _ml is not None and _ml.is_memory_lane_caption(caption):
+        try:
+            file = await photo.get_file()
+            buf = bytearray()
+            tmp_path = os.path.join(RECEIPTS_DIR, f'_ml_{update.message.message_id}.jpg')
+            await file.download_to_drive(tmp_path)
+            with open(tmp_path, 'rb') as fh:
+                buf = fh.read()
+            os.remove(tmp_path)
+            conn = get_db()
+            try:
+                asset_id = _ml.save_media(conn, buf, mime='image/jpeg')
+                parsed = _ml.parse_caption(caption)
+                item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed)
+            finally:
+                conn.close()
+            liked = ', '.join(parsed.get('liked', [])) or '—'
+            tags = ', '.join(parsed.get('style_tags', [])) or '—'
+            topic = parsed.get('topic') or '—'
+            await update.message.reply_text(
+                f'🧠 Memory Lane #{item_id}\n'
+                f'Реакция: {liked}\n'
+                f'Стиль: {tags}\n'
+                f'Тема: {topic}'
+            )
+            return
+        except Exception as e:
+            log.warning(f'memory_lane save failed: {e}')
+            # fall through to standard handler
+
     receipt_path = os.path.join(RECEIPTS_DIR, f'receipt_{update.message.message_id}.jpg')
+    file = await photo.get_file()
     await file.download_to_drive(receipt_path)
     log.info(f'Saved receipt: {receipt_path}')
 
@@ -1250,8 +1289,54 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
         '/add_photo — загрузить фото чека (OCR)\n'
         '/check — статистика\n'
+        '/ml_last [N] — последние записи Memory Lane\n'
         '/help — это сообщение'
     )
+
+
+async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показать последние N записей Memory Lane (по умолчанию 10)."""
+    try:
+        import memory_lane as _ml
+    except ImportError:
+        await update.message.reply_text('Memory Lane модуль не найден.')
+        return
+
+    n = 10
+    if ctx.args:
+        try:
+            n = max(1, min(50, int(ctx.args[0])))
+        except ValueError:
+            await update.message.reply_text('Usage: /ml_last [N=10]')
+            return
+
+    conn = get_db()
+    try:
+        rows = _ml.list_recent(conn, n=n)
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text(
+            'Memory Lane пуст. Отправь фото с подписью «нравится» или #хэштегом, '
+            'чтобы добавить запись.'
+        )
+        return
+
+    lines = [f'🧠 Последние {len(rows)} записей:']
+    for r in rows:
+        cap = (r['caption'] or '').strip().replace('\n', ' ')
+        if len(cap) > 60:
+            cap = cap[:57] + '…'
+        try:
+            tags = json.loads(r['style_tags'] or '[]')
+        except (TypeError, ValueError):
+            tags = []
+        tag_str = ' '.join(f'#{t}' for t in tags) if tags else ''
+        topic = r['topic'] or '—'
+        date = (r['created_at'] or '')[:10]
+        lines.append(f'#{r["id"]:>3}  {date}  [{topic}]  {cap}  {tag_str}'.rstrip())
+    await update.message.reply_text('\n'.join(lines))
 
 
 async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1382,6 +1467,7 @@ def main():
     app.add_handler(CommandHandler('parse', cmd_parse))
     app.add_handler(CommandHandler('warranties', cmd_warranties))
     app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
+    app.add_handler(CommandHandler('ml_last', cmd_ml_last))
     app.add_handler(CommandHandler('help', cmd_help))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))

@@ -104,6 +104,36 @@ consumption check-db
 - Privacy router для LLM (local/cloud/anonymous)
 - Governance слой — action_proposals до выполнения
 
+## Memory Lane (Phase B fast path, added 11.05.2026)
+
+Отправь боту фото с подписью — он сохранит в Memory Lane, если в caption
+есть триггер-слово или хэштег. Эмбеддинги и поиск похожего — отдельная
+следующая итерация.
+
+**Что считается триггером в caption:**
+- ключевые слова: `нравится`, `классно`, `хочу`, `купить`, `запомни`,
+  `похожее` (и antonyms: `не нравится`, `уродство`, `фу`)
+- любой хэштег: `#пальто`, `#серое`, `#zara`
+
+**Что разбирается в подписи:**
+- `liked` / `disliked` — список совпавших ключей
+- `style_tags` — хэштеги без `#`
+- `topic` — одежда / мебель / интерьер / еда / техника (если найдены ключевые слова)
+
+**Команды:**
+
+```
+/ml_last [N]   — последние N записей (по умолчанию 10)
+```
+
+**БД:** `memory_lane_items` (JSON-поля liked_features / disliked_features /
+style_tags + topic) + `media_assets` (sha256-deduped файлы в `data/media/`).
+
+**Что НЕ делает (следующие итерации):**
+- `/ml_find <query>` — поиск по embedding (CLIP / SentenceTransformers)
+- `/ml_profile <topic>` — агрегированный taste profile
+- Lazy enrichment: автоматический поиск похожих товаров на Ozon/WB/Маркете
+
 ## Дедупликация (Phase 2.5, added 11.05.2026)
 
 Одна реальная покупка может попасть в БД дважды: один раз через `/add_photo`
