@@ -52,7 +52,7 @@ IMAP_CFG_NEUTRINON = {'host': 'imap.mail.ru', 'port': 993,
 FINANCIAL_SENDERS = [
     # Маркетплейсы (чеки)
     {'id': 'ozon',              'from': 'sender.ozon.ru',       'doc_type': 'cheque',  'subject_marker': 'ваш чек'},
-    {'id': 'ozon',              'from': 'noreply@sender.ozon.ru', 'doc_type': 'cheque',  'subject_marker': 'ваш чек'},
+    {'id': 'ozon_noreply',      'from': 'noreply@sender.ozon.ru', 'doc_type': 'cheque',  'subject_marker': 'ваш чек'},
     {'id': 'yandex_market',     'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек'},
     # OFD / Фискальные сервисы (чеки)
     {'id': 'ofd_yandex',        'from': 'no-reply@ofd.yandex.ru', 'doc_type': 'fiscal', 'subject_marker': 'чек'},
@@ -75,12 +75,12 @@ FINANCIAL_SENDERS = [
     {'id': 'samokat_retail',    'from': 'umnyj-retail.ru',       'doc_type': 'food',   'subject_marker': 'чек'},
     {'id': 'samokat_ofd',       'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': ''},
     # Яндекс.Почта — свои отправители
-    {'id': 'yandex_market',     'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_lavka',      'from': 'lavka.yandex.ru',     'doc_type': 'food',    'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_eda',        'from': 'eda.yandex.ru',       'doc_type': 'food',    'subject_marker': 'заказ', 'mailbox': 'yandex'},
+    {'id': 'yandex_market_ya',  'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_lavka_ya',   'from': 'lavka.yandex.ru',     'doc_type': 'food',    'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_eda_ya',     'from': 'eda.yandex.ru',       'doc_type': 'food',    'subject_marker': 'заказ', 'mailbox': 'yandex'},
     {'id': 'yandex_drive',      'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_taxi',       'from': 'taxi.yandex.ru',      'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'yandex'},
-    {'id': 'ofd_yandex',        'from': 'no-reply@ofd.yandex.ru', 'doc_type': 'fiscal', 'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_taxi_ya',    'from': 'taxi.yandex.ru',      'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'yandex'},
+    {'id': 'ofd_yandex_ya',     'from': 'no-reply@ofd.yandex.ru', 'doc_type': 'fiscal', 'subject_marker': 'чек', 'mailbox': 'yandex'},
     {'id': 'yandex_drive_gmail', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'gmail'},
     {'id': 'yandex_drive_zorea', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'zorea'},
     {'id': 'yandex_drive_neutr', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'neutrinon'},
