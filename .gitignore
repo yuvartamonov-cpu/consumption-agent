@@ -28,6 +28,7 @@ venv/
 # PDF и прочие файлы проекта
 *.pdf
 *.txt
+!consumption_agent/requirements.txt
 update-check.json
 
 # HTML export Yandex
