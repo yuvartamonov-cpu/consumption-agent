@@ -1,0 +1,11 @@
+name,email,website,source,category,status,notes
+Webiomed,info@webiomed.ai,https://webiomed.ru,site_parse,medstartup,target,
+Webiomed,nkozyakova@webiomed.ru,https://webiomed.ru,site_parse,medstartup,target,
+Webiomed,info@webiomed.ru,https://webiomed.ru,site_parse,medstartup,target,
+Webiomed,aguseva@webiomed.ru,https://webiomed.ru,site_parse,medstartup,target,
+Цельс,celsus@celsus.ai,https://celsus.ai,site_parse,medstartup,target,
+СберМедИИ,contact@sbermed.ai,https://sbermed.ai,site_parse,medstartup,target,
+СберМедИИ,helpdesk@sbermed.ai,https://sbermed.ai,site_parse,medstartup,target,
+Моторика,ortho@motorica.org,https://motorica.org,site_parse,medstartup,target,
+Моторика,ir@motorica.org,https://motorica.org,site_parse,medstartup,target,
+Моторика,pr@motorica.org,https://motorica.org,site_parse,medstartup,target,

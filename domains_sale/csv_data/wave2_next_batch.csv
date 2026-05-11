@@ -1,0 +1,8 @@
+name,email,website,source,category,status,notes
+Будь Здоров франчайзинг,franshiza@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,франшиза — найден на сайте
+СМ-Клиника (справочная),spravka289@smpost.ru,https://smclinic.ru,site_parse,клиники,target,email для справок — найден на странице info
+СМ-Клиника (PR),nurmuhambetova.ds@smpost.ru,https://smclinic.ru,habr_career,клиники,target,контакт PR — Хабр Карьера
+АО Медицина,info@medicina.ru,https://medicina.ru,assumed_pattern,клиники,target,клиника академика Ройтберга
+Мединцентр,info@mediccenter.ru,https://mediccenter.ru,assumed_pattern,клиники,target,ГлавУпДК при МИД
+Реавиз,info@reaviz.ru,https://reaviz.ru,assumed_pattern,клиники,target,медуниверситет и клиника
+Юни-тек,info@uni-tec.su,https://uni-tec.su,assumed_pattern,поставщики,target,эндовидеохирургия поставка/ТО

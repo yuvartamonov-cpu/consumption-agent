@@ -1,0 +1,9 @@
+date,sport,league,match,market,selection,odds,stake,bookmaker,status,return,roi_note,confidence,source,
+2026-04-29,football,UCL,Атлетико Мадрид — Арсенал,DC,Х2 (осн. время),1.38,100,fon.bet,won,138,"+38 ₽, матч завершился 1:1",,,['agent-pick']
+2026-04-29,football,UCL,Атлетико Мадрид — Арсенал,winner,Арсенал (выход в след. круг),1.50,100,fon.bet,won,150,"+50 ₽, Арсенал выиграл 1:0 ответный матч (2:1 по сумме)",high,manual,
+2026-05-02,unknown,unknown,неизвестно,unknown,ставка #1,4.30,100,fon.bet,won,430,+330 ₽,,manual,
+2026-05-02,unknown,unknown,неизвестно,unknown,ставка #2,2.75,100,fon.bet,lost,0,-100 ₽,,manual,
+2026-05-04,football,UCL,Арсенал — Атлетико Мадрид,total,>2.5,2.30,100,fon.bet,lost,0,"-100 ₽, матч 1:0 (тотал 1 < 2.5)",medium,manual,
+2026-05-04,football,UCL,Арсенал — Атлетико Мадрид,winner,Арсенал,4.60,300,fon.bet,won,1380,"+1080 ₽, Арсенал 1:0",high,manual,
+2026-05-04,football,UCL,Арсенал — Атлетико Мадрид,winner,Ничья,1.90,100,fon.bet,lost,0,-100 ₽,low,manual,
+2026-05-05,football,UCL,Арсенал — Атлетико Мадрид,exact_score,3:1,9.00,100,fon.bet,lost,0,"-100 ₽, ожидался 3:1",high,manual,

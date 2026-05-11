@@ -1,163 +1,168 @@
-# Roadmap реализации
+# Roadmap реализации — consumption_agent
 
-## Принцип
-
-Ничего не строить, пока не проверено на предыдущем шаге. Каждая фаза — это **работающий slice**,
-который можно потрогать. Если на фазе гипотеза не подтвердилась — stopship, пересмотр.
+**Версия от 11.05.2026 · 04_roadmap.md (обновлено после принятия Architecture v2)**
+**Git:** 70839df (02_architecture_v2.md)
 
 ---
 
-## Фаза 0 — Email-парсер → автоинвентарь (MVP) ✅
+Ничего не строить, пока не проверено на предыдущем шаге. Каждая фаза — это *работающий slice*, который можно потрогать.
 
-**Гипотеза:** Парсинг чеков из писем маркетплейсов даёт достаточно данных для полезного
-инвентаря с гарантиями.
-
-**Выполнено:**
-- [x] БД SQLite: `items` (845), `purchases` (90), `categories` (34), `alerts` (0), `cheques_log`, `recognized_items_log`, `profiles`, `subscriptions`, `waves_all`
-- [x] Полноценный Telegram-бот на python-telegram-bot:
-  - `/list` — инвентарь по категориям
-  - `/alerts` — алерты (гарантии, сроки)
-  - `/check` — статистика + PDF-отчёт
-  - `/add <name> [<price>] [<category>]` — ручное добавление
-  - `/add_photo` — распознавание чека / бирки по фото
-- [x] Systemd-сервис `consumption-bot.service` (user), autorestart
-- [x] Обработка чеков: QR (Ozon, ФНС), OCR (Tesseract), категоризация
-- [x] Обработка бирок одежды: бренд, артикул, размер, цена, валюта ЦБ РФ, поиск картинок
-- [x] Массовый fuzzy-match (rapidfuzz, порог 70, +86 совпадений)
-- [x] Импорт чеков Ozon из PDF-писем (базовый)
-- [x] Ежедневный cron (10:10): import + enrichment + report
-- [x] PDF-отчёт (fpdf2, DejaVu Sans)
-- [x] IMAP Gmail + Яндекс.Почта (HKID2021@yandex.ru)
-- [x] FINANCIAL_SENDERS расширен на 12+ отправителей (ofd_yandex, taxcom, belkacar, yandex_taxi, google_play, afisha_yandex и др.)
-- [x] Модульная структура: `consumption/db.py`, `consumption/categorize.py`
-
-**Статус: Фаза 0 выполнена.**
+После принятия Architecture v2 дорожная карта переведена на структуру Sprint A→E.
 
 ---
 
-## Фаза 1 — Гарантии и напоминания
+## ✅ Phase A — Stabilisation (сейчас)
 
-**Гипотеза:** Уведомления об истекающих гарантиях и сроках годности — достаточно ценный
-use case, чтобы продолжать.
+**Цель:** зафиксировать инфраструктуру, перенести код в управляемую структуру, восстановление после сбоев.
 
-- [x] Базовая структура `alerts` в БД
-- [ ] Расчёт warranty_until (автоматически из purchase_date + warranty_months при импорте)
-- [ ] Cron: ежедневная проверка гарантий, сроков годности
-- [ ] Генерация alerts: гарантия (30 дней), срок годности (7 дней), low_stock
-- [ ] Telegram: проактивные уведомления (не дожидаясь `/alerts`)
-- [ ] `/warranties` — отдельная команда
-- [ ] Возможность проставить warranty_months вручную
+- [ ] **GitHub repository** (создать remote, пушить)
+- [ ] `docs/` — структура каталога:
+  - [ ] `architecture.md` (симлинк или копия 02_architecture_v2.md)
+  - [ ] `security.md`
+  - [ ] `agent_rules.md`
+  - [ ] `development_workflow.md`
+- [ ] `.env.example` (без секретов)
+- [ ] `README.md` — общее описание проекта
+- [ ] **CLI** `consumption status|doctor|check-db|backup-now|restart-bot`
+- [ ] **Backup script** (шифрованный `.backup` по расписанию)
+- [ ] **Tests baseline** — хотя бы минимальные тесты на существующую логику
+- [ ] **Pre-commit hook** для py_compile + secret scanning
+- [ ] `docs/cli_workflow.md` — инструкция для CLI вместо Telegram
 
----
+### Что уже есть
 
-## Фаза 2 — Яндекс-экосистема: сбор данных
-
-**Цель:** Полный автоматический сбор данных из Яндекс-сервисов для построения профиля пользователя.
-
-### 2.1 Мониторинг почты HKID2021@yandex.ru
-- [ ] Настроить пересылку Яндекс.Почты → Gmail (решение проблемы медленного IMAP)
-- [ ] Автоматический мониторинг входящих (cron или heartbeat)
-- [ ] Парсинг писем от всех Яндекс-сервисов (plus, drive, eда, лавка, маркет, такси)
-
-### 2.2 Яндекс Еда / Лавка
-- [x] Импортированы 3 чека Яндекс Еды (2468 ₽, 1734 ₽, 1107 ₽)
-- [ ] Полный парсинг истории заказов (блюда, рестораны, суммы, даты)
-- [ ] Парсинг заказов Лавки (продукты, частота, объёмы)
-- [ ] Структурирование: что заказывает, как часто, в какое время
-
-### 2.3 Яндекс Драйв (каршеринг)
-- [x] Обработаны 8 скриншотов заказов (6 добавлено в БД)
-- [x] Начальный профиль предпочтений (FAW Bestune T77 + Bay 24)
-- [ ] Полный парсинг истории поездок (авто, маршруты, длительность, стоимость)
-- [ ] Команда `/find_car` в Telegram-боте (рекомендация авто с учётом истории)
-
-### 2.4 Массовый импорт
-- [ ] Запуск `import --all-senders --max 100` (ожидает VPN на Windows)
-- [ ] Импорт Ozon-чеков за год (`cmd_parse` для PDF, ожидает доступности через WSL)
+- ✅ Git в WSL, bare-репо на Windows
+- ✅ .gitignore
+- ✅ .env (секреты)
+- ✅ systemd-юнит consumption-bot.service (autorestart)
+- ✅ Ежедневный cron (10:10): import + enrichment + report
+- ✅ IMAP: Gmail + Яндекс + 2×Mail.ru
+- ✅ Telegram bot (@ConsumptionAgentBot)
 
 ---
 
-## Фаза 3 — Анализ предпочтений и профиль пользователя
+## 🔄 Phase B — Memory Lane MVP (текущий спринт)
 
-**Цель:** На основе собранных данных — построить профиль предпочтений для автономных рекомендаций.
+**Цель:** владелец отправляет фото с комментарием, бот сохраняет запись и извлекает признаки вкуса.
 
-### 3.1 Анализ предпочтений
-- [ ] Еда: любимые блюда, рестораны, частота заказов, бюджет
-- [ ] Каршеринг: предпочитаемые авто, типичные маршруты, время суток
-- [ ] Покупки: категории, бренды, ценовой диапазон, сезонность
-- [ ] Единый профиль пользователя в БД (`profiles`)
+**Схема:**
+```
+Telegram photo + comment → сохранение в media/ → caption + feature extraction
+→ memory_lane_items → liked/disliked/attributes → taste profile
+```
 
-### 3.2 Фото → Memory Lane
-- [ ] Пользователь присылает фото понравившихся товаров
-- [ ] Агент анализирует: стиль, бренд, категория, цена, похожие товары
-- [ ] Формирование Memory Lane: журнал предпочтений с визуальным контекстом
-- [ ] Lazy enrichment: матчинг с wishlist по embedding
-- [ ] `/link <url>` → web fetch → парсинг → wishlist
+### Acceptance criteria
 
----
+- [ ] **Автообработка фото в Telegram** — если бот получает фото с текстом «нравится»,
+      «запомни», «найди похожее» и т.п., предлагает сохранить в Memory Lane
+- [ ] Сохранение оригинала в `data/media/`
+- [ ] Запись в `memory_lane_items` (liked_features, disliked_features, style_tags)
+- [ ] Запись в `media_assets`
+- [ ] Команда `/ml_last` — последние впечатления
+- [ ] Команда `/ml_find <query>` — текстовый поиск по памяти
+- [ ] Команда `/ml_profile <topic>` — профиль вкуса по теме
+- [ ] **Тесты** на сохранение, извлечение, поиск
 
-## Фаза 4 — Автономные заказы
+### Детали
 
-**Цель:** Агент сам формирует и предлагает заказы на основе профиля предпочтений.
-
-- [ ] Проактивные предложения: "пора заказать продукты" / "обычно вы заказываете X по вторникам"
-- [ ] Формирование корзины на основе истории (Яндекс Еда / Лавка)
-- [ ] Рекомендация авто (Драйв) с учётом маршрута и предпочтений
-- [ ] Подтверждение пользователем перед оформлением (никаких заказов без одобрения)
-- [ ] Бюджетный контроллер: лимиты категорий, предупреждения при превышении
-
----
-
-## Фаза 5 — Needs Engine + Байесовская модель
-
-- [ ] Temporal Pattern: continuous/seasonal/event_driven/lifecycle/sparse/subscription
-- [ ] Байесовская оценка: P(need | season, calendar, inventory, budget, profile)
-- [ ] Граф зависимостей: requires/enables/consumes/replaces/complements/upgrades
-- [ ] Проактивные предложения: "кофемашина → нужны фильтры?"
+- **Fast path:** caption + comment parsing → сохранение сразу
+- **Lazy enrichment:** глубокий анализ (embedding, поиск аналогов) — по расписанию
+- **Privacy:** по умолчанию local, cloud — только после явного согласия
 
 ---
 
-## Фаза 6 — Цены и маркетплейсы
+## ⬜ Phase C — Governance MVP
 
-- [ ] Price tracking для wishlist и Memory Lane
-- [ ] Поиск на Ozon / WB / Яндекс.Маркет
-- [ ] Уведомления о падении цены
+**Цель:** любые будущие действия сначала превращаются в `action_proposal`. Агент не совершает значимых действий без подтверждения.
 
----
-
-## Фаза 7 — Multi-profile + Синхронизация
-
-- [ ] Несколько профилей (семья, household)
-- [ ] Общий инвентарь + раздельные вишлисты
-- [ ] Экспорт / импорт данных
+- [ ] Таблица `action_proposals` (proposal_type, risk_level, status, evidence)
+- [ ] Таблица `approvals` (proposal_id, approval_channel, confirmation_hash)
+- [ ] Таблица `audit_events` (event_type, actor_type, input/output_hash)
+- [ ] **Policy engine** — risk levels (low/medium/high/critical)
+- [ ] **Spending limits** — лимиты по сумме
+- [ ] **Dry-run executor** — подготовка действия без выполнения
+- [ ] **Telegram-кнопки:** Approve / Reject / Explain / Show alternatives
 
 ---
 
-## Фаза 8 — Сеть агентов (опционально)
+## ⬜ Phase D — Needs + Recommendation MVP
 
-- Только при явном согласии владельца.
-- Интеграция с Paperclip AI для оркестрации
+**Цель:** агент предлагает одну практическую рекомендацию на основе покупок и Memory Lane.
+
+- [ ] Выбрать 1–2 категории для прогноза (кофе, корм, мебель для кабинета)
+- [ ] **Recurring need detection** — анализ регулярности покупок
+- [ ] **Explanation template** — каждая рекомендация должна отвечать:
+  - что, почему сейчас, на каких данных, альтернативы, риски, безопасность
+- [ ] **Recommendation scoring** — confidence + evidence + constraints
+- [ ] **Proposal generation** — агент готовит `action_proposal` из рекомендации
+- [ ] НЕ выполнять внешнее действие без подтверждения
 
 ---
 
-# Технический долг / ближайшие задачи
+## ⬜ Phase E — Controlled external actions
 
-## Приоритет 1 (данные и импорт)
-- [ ] Пересылка Яндекс.Почты → Gmail
-- [ ] Массовый импорт `--all-senders --max 100` (VPN)
-- [ ] Импорт Ozon-чеков за год (cmd_parse, доступность PDF через WSL)
-- [ ] Очистка recognized_items_log (1230 мусорных записей — скриншоты интерфейса)
+**Цель:** только после стабильного Governance и успешного MVP рекомендаций.
 
-## Приоритет 2 (завершённые, для справки) ✅
-- [x] Вывод товаров из чека: структурированный
-- [x] Бренд всегда выводится
-- [x] Massimo Dutti OCR (crop + fuzzy)
-- [x] Размер из рамки бирки
-- [x] Поиск картинок (Bing ×2, Yandex, Pinterest)
-- [x] Google Images → ссылка-заглушка
-- [x] waves_all — полная таблица рассылок доменов
+- [ ] **Только draft orders** — подготовка заказа, но не отправка
+- [ ] **No payment automation** — оплата только руками владельца
+- [ ] **Explicit owner confirmation** — каждое действие через approvals
+- [ ] **Rollback/undo** — отмена подготовленного действия
+- [ ] **Мониторинг ошибок** — логи всех API-вызовов
 
-## Приоритет 3 (администрирование)
-- [ ] Удалить тестовую запись (item id 843, data_origin='telegram_tag')
-- [ ] WB / Megamarket — поиск писем (не найдено ранее)
-- [ ] Сбор курсов валют на дату чека (автоматическое расписание)
+---
+
+## 🔧 Technical debt — Приоритет 1 (параллельно)
+
+- [ ] Item-level парсинг для Ozon (_parse_ozon_items) — сейчас 12% items linked
+- [ ] Item-level парсинг для Yandex.Market
+- [ ] Очистка recognized_items_log (1230 мусорных записей)
+- [ ] Удалить тестовую запись item id 843 (data_origin='telegram_tag')
+- [ ] Сбор курсов валют на дату чека
+- [ ] Алерты low_stock (требует заполнения remaining вручную)
+- [ ] Документировать credit_monitor / sms_monitor
+
+---
+
+## ✅ Что уже сделано (до принятия v2)
+
+### Фаза 0 — Email-парсер → автоинвентарь ✅
+- БД SQLite (WAL): items (498 active), purchases (1266), categories (34), alerts, cheques_log (1178), recognized_items_log (2428)
+- Telegram-бот: все команды
+- OCR (Tesseract), QR (pyzbar), fuzzy match (rapidfuzz 70%)
+- Импорт Ozon-чеков из PDF
+- IMAP: Gmail + Яндекс + 2×Mail.ru
+- FINANCIAL_SENDERS: 19 отправителей
+
+### Фаза 1 — Гарантии и напоминания ✅ (10.05.2026)
+- warranty_until в items (авторасчёт)
+- warranty_check.py (30/7 дней)
+- /warranties, /set_warranty
+- Ежедневные уведомления (09:00)
+
+### Фаза 2 — Яндекс-экосистема 🔄
+- ✅ Каршеринг: 39 поездок, /last_drives, /find_car
+- ✅ Массовый импорт (Gmail: +186 purchases 10.05)
+- ⬜ Яндекс.Почта — полный мониторинг
+- ⬜ Яндекс Еда / Лавка — парсинг блюд
+- ⬜ Дедупликация (сумма + дата + источник)
+- ⬜ Госуслуги (7 писем, нужен парсинг)
+
+### Кредитный мониторинг ✅ (experimental, 11.05.2026)
+- credit_monitor.py, sms_monitor.py, credit_alerts.py
+- Gmail + Яндекс + 2×Mail.ru + SMS (Phone Link)
+- Cron: 10:00 + 18:00
+
+---
+
+## ⚙️ Инфраструктура
+
+- ✅ Git: WSL → bare-репо на Windows (post-commit hook)
+- ✅ CEO-агент Paperclip AI видит актуальный код
+- ✅ .gitignore: бинарные артефакты, .venv, data/
+- ✅ Gateway: allowInsecureAuth=false
+- ✅ .env: ротирован Gmail app-password (10.05.2026)
+- ⬜ GitHub как второй remote
+
+---
+
+consumption_agent · git: 70839df · обновлено 11.05.2026 · architecture v2

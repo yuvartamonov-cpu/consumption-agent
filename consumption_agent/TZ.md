@@ -192,7 +192,7 @@ recognized_items_log → нормализация названий →
 
 ```bash
 export IMAP_USER='yu.v.artamonov@gmail.com'
-export IMAP_PASSWORD='<app password>'    # xrsa izwn tvod ohqp
+export IMAP_PASSWORD='<app password>'    # [REDACTED_OLD_GMAIL_APP_PASSWORD]
 ```
 
 ### 6.2. IMAP

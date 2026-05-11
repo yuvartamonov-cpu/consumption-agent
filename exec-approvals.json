@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "socket": {
+    "path": "/home/yuri_artamonov/.openclaw/exec-approvals.sock",
+    "token": "UxweltKhXXib1vMdr3Q0I1BU-qYT7kVl"
+  },
+  "defaults": {},
+  "agents": {}
+}

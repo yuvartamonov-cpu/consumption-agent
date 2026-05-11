@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import re
 
 IMAP_USER = 'yu.v.artamonov@gmail.com'
-IMAP_PASS = 'xrsa izwn tvod ohqp'
+IMAP_PASS = os.getenv('GMAIL_APP_PASSWORD', '').replace('"', '').replace(' ', '')
 
 def decode_subject(msg):
     subj = msg['Subject']

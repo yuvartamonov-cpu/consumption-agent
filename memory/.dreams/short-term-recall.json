@@ -1,0 +1,688 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-08T04:33:56.657Z",
+  "entries": {
+    "memory:memory/2026-04-25.md:1:35": {
+      "key": "memory:memory/2026-04-25.md:1:35",
+      "path": "memory/2026-04-25.md",
+      "startLine": 1,
+      "endLine": 35,
+      "source": "memory",
+      "snippet": "# 2026-04-25 (Сб) ## Что было Длинный вечерний разговор после переустановки OpenClaw. Память за 18–24 апреля не сохранилась, восстанавливали контекст по живым файлам и пересланной переписке из старой сессии. ## Решённое / запущенное ### 1. Лотереи (новая тема) - Бюджет 1000 ₽/нед, стратегия: бинго-лотереи, никаких быстрых игр. - Создал `lottery/` (README, tickets.csv, weekly-plan.md, reports/). - Cron-задачи (Europe/Moscow): - `lottery-sun-ruslotto` — Вс 09:00, Русское лото - `lottery-tue-gzhl` — Вт 09:00, Жилищная лотерея - `lottery-thu-bochonok` — Чт 09:00, Золотой бочонок - `lottery-month-report` — 1 число 10:00, месячный отчёт - `lottery-sportloto-random` — Вс 12:00 + stagg",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.2406225751795776,
+      "maxScore": 0.45882087186510223,
+      "firstRecalledAt": "2026-04-27T15:35:26.023Z",
+      "lastRecalledAt": "2026-04-28T07:47:50.220Z",
+      "queryHashes": [
+        "577e1a42548c",
+        "fa8b7b287836",
+        "9515fdde816b"
+      ],
+      "recallDays": [
+        "2026-04-27",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "бинго-лотереи",
+        "tickets.csv",
+        "weekly-plan.md",
+        "cron-задачи",
+        "europe/moscow",
+        "lottery-sun-ruslotto",
+        "lottery-tue-gzhl",
+        "lottery-thu-bochonok"
+      ]
+    },
+    "memory:memory/2026-04-26.md:41:69": {
+      "key": "memory:memory/2026-04-26.md:41:69",
+      "path": "memory/2026-04-26.md",
+      "startLine": 41,
+      "endLine": 69,
+      "source": "memory",
+      "snippet": "- `2026-04-29`, `UCL`, `Атлетико Мадрид — Арсенал`, рынок `DC`, выбор `Х2`, коэффициент `1.24`, ставка `50 ₽`, `paper`, `pending`. ## Домены / продажа - Холодная рассылка волны №1 по меддоменам фактически не сработала: 0 живых ответов, были отбойники. - Сформирована новая стратегия: основной упор на аукционы + точечная рассылка только под топ-3 домена. - В `~/domains_sale/` подготовлены: - `auction_plan.md` - `auction_log.md` - `csv_data/wave2_targeted.csv` - `listings/medtrade.ru.md`, `medzakaz.ru.md`, `medtender.ru.md` - `templates/email_wave2.html` - `scripts/mailing_wave2.py` - Владелец доменов и продавец — **ООО «Контанго»**. - На RU-CENTER уже выставлены 4 домена: - `",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.41186828230821404,
+      "maxScore": 0.41186828230821404,
+      "firstRecalledAt": "2026-04-27T15:35:40.807Z",
+      "lastRecalledAt": "2026-04-27T15:35:40.807Z",
+      "queryHashes": [
+        "fa8b7b287836"
+      ],
+      "recallDays": [
+        "2026-04-27"
+      ],
+      "conceptTags": [
+        "1.24",
+        "топ-3",
+        "domains-sale",
+        "auction-plan.md",
+        "auction-log.md",
+        "csv-data/wave2-targeted.csv",
+        "listings/medtrade.ru.md",
+        "medzakaz.ru.md"
+      ]
+    },
+    "memory:memory/2026-04-25.md:29:59": {
+      "key": "memory:memory/2026-04-25.md:29:59",
+      "path": "memory/2026-04-25.md",
+      "startLine": 29,
+      "endLine": 59,
+      "source": "memory",
+      "snippet": "- **Что было сделано 22.04:** ушла волна №1, 24 организации (medtradegroup, medliga, armed, sberhealth, apteka, rigla, prodoctorov, zdravcity и др.). Логи в `logs/mailing_log.csv`. - **Что я поправил сегодня:** зачистил `Contango` → `ООО \"Контанго\"` в `scripts/manual_test.py` (в боевом шаблоне уже было). ### Остаётся на завтра по доменам: 1. **Синхронизировать CSV** — у 24 организаций статус всё ещё «Не отправлено», может уйти повторно при следующем запуске. 2. **Проверить inbox `admin@contango.su`** — отбойники, ответы, жалобы. 3. **Подготовить волну №2** (что в CSV ещё не тронуто, как трактовать колонку «Шаблон письма» T1/T2). 4. Подумать про шаблон: «Уважаемый {Имя}» подставл",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.7361168354749679,
+      "maxScore": 0.38090069890022277,
+      "firstRecalledAt": "2026-04-28T07:43:56.070Z",
+      "lastRecalledAt": "2026-04-28T07:47:50.220Z",
+      "queryHashes": [
+        "2a47c2f6362b",
+        "9515fdde816b"
+      ],
+      "recallDays": [
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "22.04",
+        "logs/mailing-log.csv",
+        "scripts/manual-test.py",
+        "contango.su",
+        "t1/t2",
+        "что",
+        "было",
+        "сделано"
+      ]
+    },
+    "memory:memory/2026-04-27.md:157:181": {
+      "key": "memory:memory/2026-04-27.md:157:181",
+      "path": "memory/2026-04-27.md",
+      "startLine": 157,
+      "endLine": 181,
+      "source": "memory",
+      "snippet": "- **Создана SQLite-база** `consumption_agent/consumption.db`: - Таблицы: `purchases`, `purchase_items`, `cheques_log` - Схема: дата, источник, сумма, email_uid, ссылка на чек - **Скрипты:** - `consumption_agent/import_ozon.py` — импорт 30 чеков из писем (даты + ссылки) - `consumption_agent/parse_cheque.py` — парсинг PDF-чека (названия товаров, цены, даты) - **Импортировано вручную 7 PDF-чеков**, скинутых Юрием в Telegram: 1. 14.02.2026 — Туалетный столик с зеркалом Light, 17 797 ₽ (Зардаков В.В., ИП) 2. 24.04.2026 — Симпарика 40 мг для собак №3, 2 849 ₽ 3. 07.04.2026 — Ozon Premium, 199 ₽ 4. 07.04.2026 — Ozon Premium, 199 ₽ 5. 28.03.2026 — Grandorf Fresh корм для собак 3 кг",
+      "recallCount": 4,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.4783381164073945,
+      "maxScore": 0.3878954976797104,
+      "firstRecalledAt": "2026-04-28T07:43:56.070Z",
+      "lastRecalledAt": "2026-05-05T19:34:04.414Z",
+      "queryHashes": [
+        "2a47c2f6362b",
+        "8fc6098dabc2",
+        "9515fdde816b",
+        "9d08076c7d5e"
+      ],
+      "recallDays": [
+        "2026-04-28",
+        "2026-05-05"
+      ],
+      "conceptTags": [
+        "sqlite-база",
+        "consumption-agent/consumption.db",
+        "purchase-items",
+        "cheques-log",
+        "email-uid",
+        "consumption-agent/import-ozon.py",
+        "pdf-чека",
+        "pdf-чеков"
+      ]
+    },
+    "memory:memory/2026-04-27.md:36:64": {
+      "key": "memory:memory/2026-04-27.md:36:64",
+      "path": "memory/2026-04-27.md",
+      "startLine": 36,
+      "endLine": 64,
+      "source": "memory",
+      "snippet": "- Юрий дал доступ к почте yu.v.artamonov@gmail.com (пароль приложения: [REDACTED_OLD_GMAIL_APP_PASSWORD]). - Настроил IMAP-подключение через OpenClaw (imap.gmail.com:993). - Проверка: соединение есть, письма от Столото читаются. - Создан скрипт `lottery/check_email.py` — проверяет почту на письма от Столото, ищет выигрыши. - Установил cron-задачу `lottery-check-results` — каждый день в 10:00 МСК. - Скрипт протестирован — выдал письмо о выплате 500 ₽ (подтверждено), видит письма о покупке билетов. ## Ozon — попытка интеграции через Playwright - Установлен playwright (chromium) на WSL для браузерной автоматизации. - Написан скрипт `ozon_connector.py` — headless-логин через SMS + парсинг заказов. - Проблем",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.2086129468788527,
+      "maxScore": 0.5055772882809065,
+      "firstRecalledAt": "2026-04-29T07:32:21.513Z",
+      "lastRecalledAt": "2026-05-02T19:40:40.749Z",
+      "queryHashes": [
+        "c599f391fc0c",
+        "74d2f02c2902",
+        "1cc8c2544af0"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-05-02"
+      ],
+      "conceptTags": [
+        "yu.v.artamonov",
+        "gmail.com",
+        "imap-подключение",
+        "imap.gmail.com",
+        "lottery/check-email.py",
+        "cron-задачу",
+        "lottery-check-results",
+        "ozon-connector.py"
+      ]
+    },
+    "memory:memory/2026-04-29.md:1:4": {
+      "key": "memory:memory/2026-04-29.md:1:4",
+      "path": "memory/2026-04-29.md",
+      "startLine": 1,
+      "endLine": 4,
+      "source": "memory",
+      "snippet": "# 2026-04-29 ## Лотереи - [ ] **Случайное напоминание:** Купить билет Спортлото 6/45+ (~100 ₽). Ожидается номер тиража, номер билета и сумма от Юрия.",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4167673826217651,
+      "maxScore": 0.4167673826217651,
+      "firstRecalledAt": "2026-04-29T07:32:21.513Z",
+      "lastRecalledAt": "2026-04-29T07:32:21.513Z",
+      "queryHashes": [
+        "c599f391fc0c"
+      ],
+      "recallDays": [
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "6/45",
+        "лотереи",
+        "случайное",
+        "напоминание",
+        "купить",
+        "билет",
+        "спортлото",
+        "ожидается"
+      ]
+    },
+    "memory:memory/2026-04-27.md:116:145": {
+      "key": "memory:memory/2026-04-27.md:116:145",
+      "path": "memory/2026-04-27.md",
+      "startLine": 116,
+      "endLine": 145,
+      "source": "memory",
+      "snippet": "- Написан скрипт `ozon_connector.py` — headless-логин через SMS + парсинг заказов. - Проблема: headless-браузер не показывает GUI — Юрий не может ввести логин/SMS. - Получены куки из браузера Юрия через document.cookie (скопированы в чат, сохранены). - Написан `ozon_fetcher.py` — скачивает страницу заказов через curl с куками. - Проблема: редиректы из-за отсутствия Secure/HttpOnly кук (regular cookie header недостаточен). - Решение в процессе: нужен полный Copy as cURL из DevTools или сохранённая HTML-страница. - Вывод: письма Ozon содержат только ссылки в ЛК, состав заказа из них не извлекается. ## Лотереи — текущее состояние - Зафиксирован выигрыш Спортлото 6/45+ (тираж 324, билет 61) —",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.3948500746780325,
+      "maxScore": 0.3948500746780325,
+      "firstRecalledAt": "2026-04-29T07:32:21.513Z",
+      "lastRecalledAt": "2026-04-29T07:32:21.513Z",
+      "queryHashes": [
+        "c599f391fc0c"
+      ],
+      "recallDays": [
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "ozon-connector.py",
+        "headless-логин",
+        "headless-браузер",
+        "логин/sms",
+        "document.cookie",
+        "ozon-fetcher.py",
+        "из-за",
+        "secure/httponly"
+      ]
+    },
+    "memory:memory/2026-04-26.md:1:27": {
+      "key": "memory:memory/2026-04-26.md:1:27",
+      "path": "memory/2026-04-26.md",
+      "startLine": 1,
+      "endLine": 27,
+      "source": "memory",
+      "snippet": "# 2026-04-26 (Вс) ## Утренний cron / лотереи - В 09:00 сработало напоминание по плану недели: сегодня Русское лото, бюджет дня 300 ₽. - Проверил `lottery/tickets.csv`: там уже есть 4 записи от 2026-04-26 по `ruslotto`: - тираж 1741: билеты `999174417364`, `999174403476` - тираж 1744: билеты `999174425036`, `999174419938` - Это выглядит как уже купленные билеты, поэтому отдельное напоминание Юрию не отправлял. - Замечание для проверки позже: в плане недели на воскресенье заложено 2 билета / 300 ₽, а в журнале сейчас 4 билета `ruslotto` на 600 ₽. Нужно уточнить, это осознанная покупка сверх плана или журнал требует корректировки. # 2026-04-26 (Вс) ## Утренний cron / лотереи - В 09:00 с",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.1531953275203704,
+      "maxScore": 0.43191751241683957,
+      "firstRecalledAt": "2026-05-02T13:39:30.153Z",
+      "lastRecalledAt": "2026-05-02T19:40:40.749Z",
+      "queryHashes": [
+        "74d2f02c2902",
+        "a611c3cee497",
+        "1cc8c2544af0"
+      ],
+      "recallDays": [
+        "2026-05-02"
+      ],
+      "conceptTags": [
+        "lottery/tickets.csv",
+        "утренний",
+        "cron",
+        "лотереи",
+        "сработало",
+        "напоминание",
+        "плану",
+        "недели"
+      ]
+    },
+    "memory:memory/2026-04-29.md:1:35": {
+      "key": "memory:memory/2026-04-29.md:1:35",
+      "path": "memory/2026-04-29.md",
+      "startLine": 1,
+      "endLine": 35,
+      "source": "memory",
+      "snippet": "# 2026-04-29 ## Лотереи - [ ] **Случайное напоминание:** Купить билет Спортлото 6/45+ (~100 ₽). Ожидается номер тиража, номер билета и сумма от Юрия. ## Consumption Agent — развёртывание - **Новая схема БД** (SQLite): 8 таблиц — profiles, categories (29 шт.), items, purchases, recognized_items_log, cheques_log, alerts, subscriptions - **Импортировано:** 34 товара в инвентарь, 20 покупок (из чеков Ozon), 39 распознанных записей (CSV + скриншоты), 29 категорий - **Создан email_importer.py** — автоимпорт чеков Ozon с почты (IMAP, Gmail app password) - **Создан generate_report.py** — генерация PDF-отчёта (16 стр., 81 КБ) через fpdf2 + DejaVu Unicode - **PDF отправлен** на yu.v.artamonov@gmail.",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.150890702009201,
+      "maxScore": 0.39869675040245056,
+      "firstRecalledAt": "2026-05-02T13:39:30.153Z",
+      "lastRecalledAt": "2026-05-02T19:40:40.749Z",
+      "queryHashes": [
+        "74d2f02c2902",
+        "a611c3cee497",
+        "1cc8c2544af0"
+      ],
+      "recallDays": [
+        "2026-05-02"
+      ],
+      "conceptTags": [
+        "6/45",
+        "recognized-items-log",
+        "cheques-log",
+        "email-importer.py",
+        "generate-report.py",
+        "pdf-отчёта",
+        "yu.v.artamonov",
+        "лотереи"
+      ]
+    },
+    "memory:memory/2026-05-02.md:1:4": {
+      "key": "memory:memory/2026-05-02.md:1:4",
+      "path": "memory/2026-05-02.md",
+      "startLine": 1,
+      "endLine": 4,
+      "source": "memory",
+      "snippet": "# 2026-05-02 ## Лотереи - [ ] **Золотой бочонок:** Купить 2 билета (300 ₽). Ожидается номер тиража и номера билетов от Юрия.",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.3792779356241226,
+      "maxScore": 0.3792779356241226,
+      "firstRecalledAt": "2026-05-02T13:39:30.153Z",
+      "lastRecalledAt": "2026-05-02T13:39:30.153Z",
+      "queryHashes": [
+        "74d2f02c2902"
+      ],
+      "recallDays": [
+        "2026-05-02"
+      ],
+      "conceptTags": [
+        "лотереи",
+        "золотой",
+        "бочонок",
+        "купить",
+        "билета",
+        "ожидается",
+        "номер",
+        "тиража"
+      ]
+    },
+    "memory:memory/2026-04-29.md:80:108": {
+      "key": "memory:memory/2026-04-29.md:80:108",
+      "path": "memory/2026-04-29.md",
+      "startLine": 80,
+      "endLine": 108,
+      "source": "memory",
+      "snippet": "- Массово обработаны скриншоты Ozon из Telegram; после чистки активных `screen_ocr`-товаров осталось **445**. После дедупликации — **426**. - Итоговое активное состояние БД к концу дня: **459 items**, **17 purchases**, **0 alerts**. - `clean_screen_ocr.py` делает мягкую чистку OCR-мусора (soft delete) и не удаляет историю. - После чистки: `minimal=426`, `partial=33`, `enriched=0`. - Следующий логичный шаг: дедупликация фрагментов одного товара и улучшение OCR-фильтрации split-lines. ## Лотереи — финальный бюджет за 29.04 - **Русское лото тираж 1741**: получены 2 выплаты на кошелёк — **250 ₽** и **170 ₽** (итого **+420 ₽**). - Общий бюджет лотерей: - потрачено: **1000 ₽** - выиграно: **9",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.7334421664476394,
+      "maxScore": 0.37098575234413145,
+      "firstRecalledAt": "2026-05-02T13:39:30.153Z",
+      "lastRecalledAt": "2026-05-02T19:40:40.749Z",
+      "queryHashes": [
+        "74d2f02c2902",
+        "1cc8c2544af0"
+      ],
+      "recallDays": [
+        "2026-05-02"
+      ],
+      "conceptTags": [
+        "screen-ocr",
+        "clean-screen-ocr.py",
+        "ocr-мусора",
+        "ocr-фильтрации",
+        "split-lines",
+        "29.04",
+        "массово",
+        "обработаны"
+      ]
+    },
+    "memory:memory/2026-04-29.md:26:65": {
+      "key": "memory:memory/2026-04-29.md:26:65",
+      "path": "memory/2026-04-29.md",
+      "startLine": 26,
+      "endLine": 65,
+      "source": "memory",
+      "snippet": "- Новые два билета (999180049877, 999177550437) — куплены сегодня в 15:52-15:54, данные из письма Столото - Джекпот: 800 млн ₽ ## Русское лото — тираж 1744 (09.05.2026) - **2 билета:** 999174425036, 999174419938 ## Бюджет ставок на спорт (fonbet, обновлён 29.04) - Пополнено: 250 ₽ (150+100, 29.04) - Поставлено: 100 ₽ - Чистый: -100 ₽ - На счету: ~150 ₽ неиспользованных - Единственная ставка: **Атлетико Мадрид — Арсенал** (Х2, 1.38, 100 ₽, пари №7724605788) — сегодня 22:00 МСК ## Письма fonbet на почте (29.04) - 3 письма: подтверждение email (26.04), пополнение 150 ₽ (11:24), пополнение 100 ₽ (11:26) - Писем о результатах ставок нет ## Проблемы - Image tool (read) — \"Failed to optimize im",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.068698588013649,
+      "maxScore": 0.3609597384929657,
+      "firstRecalledAt": "2026-05-02T13:39:30.153Z",
+      "lastRecalledAt": "2026-05-02T19:40:40.749Z",
+      "queryHashes": [
+        "74d2f02c2902",
+        "a611c3cee497",
+        "1cc8c2544af0"
+      ],
+      "recallDays": [
+        "2026-05-02"
+      ],
+      "conceptTags": [
+        "52-15",
+        "09.05.2026",
+        "29.04",
+        "1.38",
+        "26.04",
+        "новые",
+        "два",
+        "билета"
+      ]
+    },
+    "memory:memory/2026-04-26.md:20:46": {
+      "key": "memory:memory/2026-04-26.md:20:46",
+      "path": "memory/2026-04-26.md",
+      "startLine": 20,
+      "endLine": 46,
+      "source": "memory",
+      "snippet": "- Замечание для проверки позже: в плане недели на воскресенье заложено 2 билета / 300 ₽, а в журнале сейчас 4 билета `ruslotto` на 600 ₽. Нужно уточнить, это осознанная покупка сверх плана или журнал требует корректировки. ## Обновления по лотереям - Юрий подтвердил: оба тиража Русского лото будущие, даты: - `1741` — `29.04.2026` - `1744` — `09.05.2026` - Зафиксирован выигрыш: `sportloto-6-45-plus`, тираж `324`, билет `61`, цена `100 ₽`, приз `500 ₽`. - В `lottery/tickets.csv` отражён текущий журнал с 1 выигрышем и 4 pending-билетами Русского лото. - В недельный план добавлено **Спортлото 6/45+** как ad-hoc игра с ориентиром `100 ₽`; пользователь захотел случайное напоминание примерно",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.3695178657770157,
+      "maxScore": 0.3695178657770157,
+      "firstRecalledAt": "2026-05-02T19:40:40.749Z",
+      "lastRecalledAt": "2026-05-02T19:40:40.749Z",
+      "queryHashes": [
+        "1cc8c2544af0"
+      ],
+      "recallDays": [
+        "2026-05-02"
+      ],
+      "conceptTags": [
+        "29.04.2026",
+        "09.05.2026",
+        "sportloto-6-45-plus",
+        "lottery/tickets.csv",
+        "pending-билетами",
+        "6/45",
+        "ad-hoc",
+        "замечание"
+      ]
+    },
+    "memory:memory/2026-05-02.md:1:35": {
+      "key": "memory:memory/2026-05-02.md:1:35",
+      "path": "memory/2026-05-02.md",
+      "startLine": 1,
+      "endLine": 35,
+      "source": "memory",
+      "snippet": "# 02.05.2026 — Consumption Agent: день 1 ## Что сделано - Написан полный скрипт consumption_agent_full_020526.py (467 строк, 29 KB, синтаксис валидный) - Прошёл code review через Claude Code (11 замечаний, 8 исправлено) - Инициализирована БД, созданы индексы (7 шт) - Импортировано 54 покупки (только Ozon), 494 товара, 34 категории - Добавлены гарантии (20 товаров) и сроки годности (12 товаров) - Пароль Gmail вынесен в ~/.bashrc (IMAP_USER, IMAP_PASSWORD) - PDF-отчёт работает (33 KB) - Написан TZ.md (v2.0, актуальное состояние) ## Текущее состояние базы - Товаров: 494 активных, 0 без категории, 35 привязаны к покупкам - Покупок: 54 (все Ozon), чеков: 83 - Алертов: 0 (ничего не просрочено) -",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.1339693784713745,
+      "maxScore": 0.38999300897121425,
+      "firstRecalledAt": "2026-05-06T16:18:11.746Z",
+      "lastRecalledAt": "2026-05-08T04:33:56.657Z",
+      "queryHashes": [
+        "7e8c910cf507",
+        "035a0835c982",
+        "bdccec2d80dd"
+      ],
+      "recallDays": [
+        "2026-05-06",
+        "2026-05-07",
+        "2026-05-08"
+      ],
+      "conceptTags": [
+        "02.05.2026",
+        "consumption-agent-full-020526.py",
+        "imap-user",
+        "imap-password",
+        "pdf-отчёт",
+        "tz.md",
+        "v2.0",
+        "consumption"
+      ]
+    },
+    "memory:memory/2026-05-06.md:1:28": {
+      "key": "memory:memory/2026-05-06.md:1:28",
+      "path": "memory/2026-05-06.md",
+      "startLine": 1,
+      "endLine": 28,
+      "source": "memory",
+      "snippet": "# 2026-05-06 ## Consumption Agent — Шаг 4 (Расширение отчёта) ✅ - `cmd_check` в telegram_bot.py расширен: теперь генерирует PDF-отчёт через fpdf2 - **В PDF добавил:** - Общая статистика (товары, покупки, категории, гарантии, алерты) - Топ-10 категорий по сумме - График трат по месяцам (цветные прямоугольники fpdf2) - Активные алерты с группировкой по типу (warranty_expiring, warranty_expired и др.) - Топ-20 товаров по цене (без дублей по названию) - `/check` в телеграме теперь присылает PDF (named tempfile, CleanResult) - Старые gen_report.py и generate_report.py — помечены как deprecated (не удалены, не используются) ## Consumption Agent — Шаг 5 (Мягкий рефакторинг) ✅ - *Стратег",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.1073792964220046,
+      "maxScore": 0.3767893105745315,
+      "firstRecalledAt": "2026-05-06T16:18:11.746Z",
+      "lastRecalledAt": "2026-05-08T04:33:56.657Z",
+      "queryHashes": [
+        "7e8c910cf507",
+        "035a0835c982",
+        "bdccec2d80dd"
+      ],
+      "recallDays": [
+        "2026-05-06",
+        "2026-05-07",
+        "2026-05-08"
+      ],
+      "conceptTags": [
+        "cmd-check",
+        "telegram-bot.py",
+        "pdf-отчёт",
+        "топ-10",
+        "warranty-expiring",
+        "warranty-expired",
+        "топ-20",
+        "gen-report.py"
+      ]
+    },
+    "memory:memory/2026-04-27.md:84:100": {
+      "key": "memory:memory/2026-04-27.md:84:100",
+      "path": "memory/2026-04-27.md",
+      "startLine": 84,
+      "endLine": 100,
+      "source": "memory",
+      "snippet": "- Сохранил файл: `betting/picks/2026-04-27-week.md`. - Итог: 4 пика, средняя уверенность 3.5. - Топ-2 идеи: Atlético Madrid vs Arsenal — ТМ 2.5; Nottingham Forest vs Aston Villa — ТМ 2.5. ## Consumption Agent — ревью и переработка - Утром Юрий дал ревью на первую версию документации consumption agent. - Ключевая критика: - Мультипликативная формула веса (Priority × Frequency × Urgency) — статическая, не работает для реальных кейсов (куртка в июле, аллергия в сезон, подарки). Переделано на байесовскую модель: P(need | season, calendar, inventory, budget, profile). Frequency → Temporal Pattern (continuous/seasonal/sparse/event_driven/lifecycle/subscription). - Преждевременная оптимизация",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.7167389929294585,
+      "maxScore": 0.3615206241607666,
+      "firstRecalledAt": "2026-05-06T16:18:11.746Z",
+      "lastRecalledAt": "2026-05-07T19:25:22.742Z",
+      "queryHashes": [
+        "7e8c910cf507",
+        "035a0835c982"
+      ],
+      "recallDays": [
+        "2026-05-06",
+        "2026-05-07"
+      ],
+      "conceptTags": [
+        "betting/picks/2026-04-27-week.md",
+        "3.5",
+        "топ-2",
+        "2.5",
+        "сохранил",
+        "файл",
+        "betting",
+        "picks"
+      ]
+    },
+    "memory:memory/2026-04-28.md:1:35": {
+      "key": "memory:memory/2026-04-28.md:1:35",
+      "path": "memory/2026-04-28.md",
+      "startLine": 1,
+      "endLine": 35,
+      "source": "memory",
+      "snippet": "# 2026-04-28 (Вт) ## Домены — рассылка - **Отправлено 25 писем** из базы wave3 (первая партия). Остаток 42 контакта в `wave3_tomorrow.csv`. - **Шаблон**: универсальный, все 4 домена (`medtrade.ru`, `medzakaz.ru`, `medtender.ru`, `gormed.ru`). - **Лог**: обновлён в `mailing_log.csv`. - **План на завтра**: отправить оставшиеся 42 письма. ## Consumption Agent ### Статус - **База**: SQLite `consumption.db` с 4 таблицами (`purchases`, `purchase_items`, `cheques_log`, `recognized_items`). - **Данные**: 93 товара в `recognized_items` (29 со скриншотов, 64 из Excel). ### Что сделано - Распознаны скриншоты Ozon (10 файлов → 29 товаров). - Добавлены товары из Excel (64 позиции с датами покупок).",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.7028727918863296,
+      "maxScore": 0.3516451060771942,
+      "firstRecalledAt": "2026-05-06T16:18:11.746Z",
+      "lastRecalledAt": "2026-05-07T19:25:22.742Z",
+      "queryHashes": [
+        "7e8c910cf507",
+        "035a0835c982"
+      ],
+      "recallDays": [
+        "2026-05-06",
+        "2026-05-07"
+      ],
+      "conceptTags": [
+        "wave3-tomorrow.csv",
+        "medtrade.ru",
+        "medzakaz.ru",
+        "medtender.ru",
+        "gormed.ru",
+        "mailing-log.csv",
+        "consumption.db",
+        "purchase-items"
+      ]
+    },
+    "memory:memory/2026-04-27.md:1:25": {
+      "key": "memory:memory/2026-04-27.md:1:25",
+      "path": "memory/2026-04-27.md",
+      "startLine": 1,
+      "endLine": 25,
+      "source": "memory",
+      "snippet": "# 2026-04-27 (Пн) ## Беттинг / weekly research - По cron собрал недельную подборку еврокубков на 27.04–03.05. - Сохранил файл: `betting/picks/2026-04-27-week.md`. - Итог: 4 пика, средняя уверенность 3.5. - Топ-2 идеи: Atlético Madrid vs Arsenal — ТМ 2.5; Nottingham Forest vs Aston Villa — ТМ 2.5. # 2026-04-27 (Пн) ## Беттинг / weekly research - По cron собрал недельную подборку еврокубков на 27.04–03.05. - Сохранил файл: `betting/picks/2026-04-27-week.md`. - Итог: 4 пика, средняя уверенность 3.5. - Топ-2 идеи: Atlético Madrid vs Arsenal — ТМ 2.5; Nottingham Forest vs Aston Villa — ТМ 2.5. ## Consumption Agent — ревью и переработка - Утром Юрий дал ревью на первую версию документации co",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.3531012266874313,
+      "maxScore": 0.3531012266874313,
+      "firstRecalledAt": "2026-05-07T19:25:22.742Z",
+      "lastRecalledAt": "2026-05-07T19:25:22.742Z",
+      "queryHashes": [
+        "035a0835c982"
+      ],
+      "recallDays": [
+        "2026-05-07"
+      ],
+      "conceptTags": [
+        "27.04",
+        "03.05",
+        "betting/picks/2026-04-27-week.md",
+        "3.5",
+        "топ-2",
+        "2.5",
+        "беттинг",
+        "weekly"
+      ]
+    },
+    "memory:memory/2026-05-07.md:1:4": {
+      "key": "memory:memory/2026-05-07.md:1:4",
+      "path": "memory/2026-05-07.md",
+      "startLine": 1,
+      "endLine": 4,
+      "source": "memory",
+      "snippet": "- 10:00 | Бюджет обновлён! Баланс: 220.0 ₽ - 10:27 | Рассылка wave7 (домены) прошла корректно — подтверждено Юрием - 22:00 | Бюджет обновлён! Баланс: 220.0 ₽",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.3529529213905334,
+      "maxScore": 0.3529529213905334,
+      "firstRecalledAt": "2026-05-07T19:25:33.673Z",
+      "lastRecalledAt": "2026-05-07T19:25:33.673Z",
+      "queryHashes": [
+        "19fad31f95aa"
+      ],
+      "recallDays": [
+        "2026-05-07"
+      ],
+      "conceptTags": [
+        "220.0",
+        "бюджет",
+        "обновлён",
+        "баланс",
+        "рассылка",
+        "wave7",
+        "домены",
+        "прошла"
+      ]
+    },
+    "memory:memory/2026-05-06.md:74:102": {
+      "key": "memory:memory/2026-05-06.md:74:102",
+      "path": "memory/2026-05-06.md",
+      "startLine": 74,
+      "endLine": 102,
+      "source": "memory",
+      "snippet": "- Ожидается письмо от contango.su - 22:00 | Бюджет обновлён! Баланс: 220.0 ₽ # 2026-05-06 ## Яндекс.Почта — IMAP - **Проблема:** IMAP не подключался (AUTHENTICATIONFAILED) — IMAP был отключён в настройках ящика. - **Решение:** Юрий вручную включил IMAP в настройках Яндекс.Почты (mail.yandex.ru → Все настройки → Почтовые программы). - **Пароль приложения:** `[REDACTED]` — для внешних приложений, работает. - **Пароль основной:** `[REDACTED]` — не принимается IMAP (двухфакторка). - **Логины:** `HKID2021@yandex.ru` и `YURYHK180272` (короткий) — оба работают. ## Импорт с Яндекс.Почты - **999 писем** всего в ящике, за последние 6 мес ~500 - **Найдены отправители:** plus.yandex (316)",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.795402216911316,
+      "maxScore": 0.4274771988391876,
+      "firstRecalledAt": "2026-05-07T19:25:33.689Z",
+      "lastRecalledAt": "2026-05-07T19:25:51.351Z",
+      "queryHashes": [
+        "758be4677d8d",
+        "4a261fb2fa06"
+      ],
+      "recallDays": [
+        "2026-05-07"
+      ],
+      "conceptTags": [
+        "contango.su",
+        "220.0",
+        "яндекс.почта",
+        "яндекс.почты",
+        "mail.yandex.ru",
+        "yandex.ru",
+        "plus.yandex",
+        "ожидается"
+      ]
+    },
+    "memory:memory/2026-05-06.md:51:81": {
+      "key": "memory:memory/2026-05-06.md:51:81",
+      "path": "memory/2026-05-06.md",
+      "startLine": 51,
+      "endLine": 81,
+      "source": "memory",
+      "snippet": "- **Код расширен**: `FINANCIAL_SENDERS` с 12+ отправителями (ofd_yandex, taxcom, belkacar, yandex_taxi, xero, google_play, afisha_yandex, rusconcert, element14, pult), `--all-senders` режим импорта, `_extract_amount_from_html()`, `_fetch_head_batch()` оптимизация fetch - `cmd_parse` не трогал — парсинг фис. чеков Ozon работает как раньше - `cmd_match` не дал результатов на recognized_items_log (1230 мусорных записей — шум с экранов) ### Ближайшие шаги (ожидают VPN на Windows) 1. Проверить доступность Ozon PDF-чеков через WSL (curl к ссылкам) 2. Если работает — запустить `cmd_parse` для скачивания PDF через urllib 3. Запустить `import --all-senders --max 100` для массового сбора всех фин. до",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.3854135066270828,
+      "maxScore": 0.3854135066270828,
+      "firstRecalledAt": "2026-05-07T19:25:51.351Z",
+      "lastRecalledAt": "2026-05-07T19:25:51.351Z",
+      "queryHashes": [
+        "4a261fb2fa06"
+      ],
+      "recallDays": [
+        "2026-05-07"
+      ],
+      "conceptTags": [
+        "financial-senders",
+        "ofd-yandex",
+        "yandex-taxi",
+        "google-play",
+        "afisha-yandex",
+        "all-senders",
+        "extract-amount-from-html",
+        "fetch-head-batch"
+      ]
+    }
+  }
+}

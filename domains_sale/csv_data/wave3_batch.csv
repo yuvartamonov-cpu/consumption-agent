@@ -1,0 +1,26 @@
+name,email,website,source,category,status,notes
+GMS Clinic,info@gmsclinic.ru,https://www.gmsclinic.ru,site_parse,клиники,target,основной контакт
+GMS Clinic,dental@gmsclinic.ru,https://www.gmsclinic.ru,site_parse,клиники,target,стоматология
+Европейский МЦ,info@emcmos.ru,https://www.emcmos.ru,site_parse,клиники,target,общий
+Медскан,office@medscangroup.ru,https://medscangroup.ru,site_parse,клиники,target,офис
+Медскан,info@medscannet.ru,https://medscannet.ru,site_parse,клиники,target,инфо
+Будь Здоров,info@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,основной
+К+31,appeal@k31.ru,https://www.k31.ru,site_parse,клиники,target,для обращений
+Ниармедик,info@nearmedic.ru,https://www.nearmedic.ru,site_parse,клиники,target,основной
+Семейный доктор,mailbox@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,официальные обращения
+Семейный доктор,corp@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,корпоративное
+Семейный доктор,zakupki@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,закупки
+Столица,info@stomed.ru,https://stomed.ru,site_parse,клиники,target,общий
+Столица,contact@stomed.ru,https://stomed.ru,site_parse,клиники,target,вопросы
+ОТТА,info@ott.ru,https://ott.ru,site_parse,клиники,target,институт
+Анадолу,info@anadolu-moscow.ru,https://anadolu-moscow.ru,site_parse,клиники,target,представительство
+Юнимед,partner@unimed.ru,https://unimed.ru,site_parse,поставщики,target,партнёрский отдел
+К+31 партнёры,partner@k31.ru,https://www.k31.ru,site_parse,клиники,target,раздел партнёры
+GMS partners,partners@gmsclinic.ru,https://www.gmsclinic.ru,site_parse,клиники,target,сотрудничество
+ЕМС сотрудничество,partnership@emcmos.ru,https://www.emcmos.ru,site_parse,клиники,target,раздел партнёры
+Медскан закупки,zakupki@medscangroup.ru,https://medscangroup.ru,site_parse,клиники,target,закупки
+Семейный доктор партнёры,partner@fdoctor.ru,https://www.fdoctor.ru,site_parse,клиники,target,партнёрство
+Будь Здоров corp,corp@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,корпоративное
+Ниармедик закупки,zakupki@nearmedic.ru,https://www.nearmedic.ru,site_parse,клиники,target,закупки
+GMS Hospital,info@gmshospital.ru,https://gmshospital.ru,site_parse,клиники,target,госпиталь GMS — email подтверждён на сайте
+Будь Здоров партнёрам,partner@bzklinika.ru,https://klinikabudzdorov.ru,site_parse,клиники,target,email для юрлиц — найден на сайте Сочи/Уфа

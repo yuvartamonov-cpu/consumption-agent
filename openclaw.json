@@ -1,0 +1,137 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/yuri_artamonov/.openclaw/workspace",
+      "models": {
+        "openai/gpt-5.4": {
+          "alias": "GPT"
+        },
+        "mistral/mistral-large-latest": {
+          "alias": "Mistral"
+        }
+      },
+      "model": {
+        "primary": "mistral/mistral-large-latest"
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "603713ee81ed8ecaf7a3d120c6b8d58c205496443acd3864"
+    },
+    "port": 18789,
+    "bind": "loopback",
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "controlUi": {
+      "allowInsecureAuth": false
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "contacts.add",
+        "calendar.add",
+        "reminders.add",
+        "sms.send",
+        "sms.search"
+      ]
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "tools": {
+    "profile": "coding",
+    "web": {
+      "search": {
+        "provider": "gemini",
+        "enabled": true
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "openai:default": {
+        "provider": "openai",
+        "mode": "api_key"
+      },
+      "mistral:default": {
+        "provider": "mistral",
+        "mode": "api_key"
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      },
+      "botToken": "8623378990:AAEOqhVMzmD1y7vVaZYBygpofTiOVkj228Y"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "google": {
+        "enabled": true,
+        "config": {
+          "webSearch": {
+            "apiKey": "AQ.Ab8RN6LVSMUr7mXKpTdo5YjZ5CLYWZxpd1nyKYMA6LNfA1YnMA"
+          }
+        }
+      },
+      "openai": {
+        "enabled": true
+      },
+      "mistral": {
+        "enabled": true
+      }
+    }
+  },
+  "wizard": {
+    "lastRunAt": "2026-04-24T20:54:58.236Z",
+    "lastRunVersion": "2026.4.23",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.4.23",
+    "lastTouchedAt": "2026-04-24T20:54:58.320Z"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "mistral": {
+        "baseUrl": "https://api.mistral.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "mistral-large-latest",
+            "name": "Mistral Large (latest)",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0.5,
+              "output": 1.5,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 16384
+          }
+        ]
+      }
+    }
+  }
+}

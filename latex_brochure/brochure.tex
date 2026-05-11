@@ -1,0 +1,50 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[russian]{babel}
+\usepackage{graphicx}
+\usepackage[left=1cm,right=1cm,top=1cm,bottom=1cm]{geometry}
+\usepackage{xcolor}
+\definecolor{medicalblue}{HTML}{0A2463}
+\definecolor{medicalgray}{HTML}{6C757D}
+
+\begin{document}
+
+% Разворот 1: Обложка
+\begin{minipage}[t][297mm][t]{210mm}
+    \includegraphics[width=210mm]{/home/yuri_artamonov/.openclaw/workspace/brochure_final/images/cover_isometry.jpg}
+    \vspace{10mm}
+    \textcolor{medicalblue}{\textbf{\Large Интегрированная операционная АВМК}}\\
+    \textcolor{medicalgray}{\textbf{\large Единая среда визуализации, записи и управления}}
+    \vspace{5mm}
+    \begin{itemize}
+        \item 4K-визуализация
+        \item Работа 24/7
+        \item Гарантия 36 мес
+        \item Архив ≥50 ТБ
+    \end{itemize}
+    \vfill
+    \includegraphics[width=30mm]{/home/yuri_artamonov/.openclaw/workspace/brochure_final/images/qr_code.png}
+\end{minipage}
+
+\newpage
+
+% Разворот 2: Таблица характеристик
+\begin{minipage}[t][297mm][t]{210mm}
+    \textcolor{medicalblue}{\textbf{\Large Технические характеристики}}
+    \vspace{5mm}
+    \begin{tabular}{|l|l|}
+        \hline
+        \textbf{Параметр} & \textbf{Значение} \\
+        \hline
+        Разрешение дисплеев & 4K (3840×2160) \\
+        Режим работы & 24/7 \\
+        Гарантия & 36 месяцев \\
+        Объем архива & ≥50 ТБ \\
+        Совместимость & МИС, PACS, ЕМИАС \\
+        \hline
+    \end{tabular}
+    \vspace{10mm}
+    \includegraphics[width=210mm]{/home/yuri_artamonov/.openclaw/workspace/brochure_final/images/specs_table.jpg}
+\end{minipage}
+
+\end{document}

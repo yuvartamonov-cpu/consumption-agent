@@ -7,7 +7,7 @@ CONFIG = {
     'imap_host': 'imap.gmail.com',
     'imap_port': 993,
     'user': 'yu.v.artamonov@gmail.com',
-    'password': 'xrsa izwn tvod ohqp',
+    'password': os.getenv('GMAIL_APP_PASSWORD', '').replace('"', '').replace(' ', ''),
 }
 
 def decode_subj(raw):
