@@ -11,11 +11,29 @@ import argparse
 import email
 import imaplib
 import os
+import re
 import sqlite3
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
+
+# Load .env file automatically
+def _load_env():
+    env_path = os.path.join(SCRIPT_DIR, '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, val = line.split('=', 1)
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key not in os.environ:
+                    os.environ[key] = val
+
+_load_env()
 
 from consumption_agent_full_030526 import (
     DB_PATH,
@@ -24,8 +42,40 @@ from consumption_agent_full_030526 import (
 )
 
 
+def _find_by_message_id_header(mail, message_id):
+    """Search IMAP for a message by its Message-ID header. Returns seq-num string or None."""
+    try:
+        mid = message_id.strip('<>')
+        _, data = mail.search(None, f'HEADER Message-ID "{mid}"')
+        uids = data[0].split()
+        return uids[0].decode() if uids else None
+    except Exception:
+        return None
+
+
+def _resolve_imap_seqnum(mail, email_message_id):
+    """Resolve an email_message_id stored in purchases to an IMAP sequence number.
+
+    Three formats are stored in the DB:
+    - Numeric string (e.g. "54012"): direct IMAP sequence number — use as-is.
+    - Message-ID header value containing '@': search by HEADER Message-ID.
+    - Synthetic "ozon_cheque_NNNN_..." from old cheques_log migration: not
+      fetchable; extract the embedded number as a best-effort fallback.
+    """
+    if re.fullmatch(r'[0-9]+', email_message_id):
+        return email_message_id
+    if '@' in email_message_id:
+        return _find_by_message_id_header(mail, email_message_id)
+    m = re.match(r'ozon_cheque_(\d+)_', email_message_id)
+    if m:
+        return m.group(1)
+    return None
+
+
 def _fetch_html(mail, uid_str):
     """Return HTML body of email with the given UID string, or '' on failure."""
+    if not uid_str:
+        return ''
     uid_b = uid_str.encode() if isinstance(uid_str, str) else uid_str
     try:
         _, fd = mail.fetch(uid_b, '(BODY.PEEK[])')
@@ -122,8 +172,13 @@ def run_backfill(db_path=None, dry_run=False, limit=None, imap_cfg=None):
     processed = 0
     items_added = 0
 
-    for purchase_id, source, purchase_date, uid_str in rows:
-        html = _fetch_html(mail, uid_str)
+    for purchase_id, source, purchase_date, msg_id in rows:
+        imap_seqnum = _resolve_imap_seqnum(mail, msg_id)
+        if not imap_seqnum:
+            print(f'  Warning: unresolvable email_message_id for purchase {purchase_id} ({msg_id[:40]})', flush=True)
+            processed += 1
+            continue
+        html = _fetch_html(mail, imap_seqnum)
         items = _parse_ozon_items(html) if html else []
         n = _insert_items(conn, purchase_id, source, purchase_date, items, dry_run)
         items_added += n
