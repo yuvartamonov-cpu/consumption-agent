@@ -382,7 +382,8 @@ def check_new_fines(days: int = 7) -> list[dict]:
         raw_date TEXT,
         uid TEXT UNIQUE,
         detected_at TEXT DEFAULT (datetime('now')),
-        notified_at TEXT
+        notified_at TEXT,
+        paid_confirmed_at TEXT
     )''')
     conn.commit()
 
@@ -396,6 +397,7 @@ def check_new_fines(days: int = 7) -> list[dict]:
 
         existing = c.execute('SELECT id FROM fines WHERE uid = ?', (uid,)).fetchone()
         if existing:
+            fine['db_id'] = existing[0]
             continue
 
         c.execute('''INSERT OR IGNORE INTO fines
@@ -405,6 +407,8 @@ def check_new_fines(days: int = 7) -> list[dict]:
             (fine['type'], fine['number'], fine['amount'], fine['description'],
              fine['vehicle'], fine['date'], fine['vendor'], fine['sts'],
              fine['mailbox'], fine.get('raw_subject', ''), fine.get('raw_date', ''), uid))
+        # Получаем ID свежевставленной записи
+        fine['db_id'] = c.lastrowid
         new_fines.append(fine)
 
     conn.commit()
@@ -413,7 +417,7 @@ def check_new_fines(days: int = 7) -> list[dict]:
 
 
 def notify_fines(fines: list[dict]):
-    """Отправляет уведомления о штрафах через Telegram bot."""
+    """Отправляет уведомления о штрафах через Telegram bot с кнопкой оплаты."""
     if not fines:
         return
 
@@ -433,17 +437,49 @@ def notify_fines(fines: list[dict]):
 
     for fine in fines:
         msg = format_fine_for_bot(fine, fine.get('mailbox', ''))
+
+        # Получаем ID штрафа из БД (нужен для callback)
+        fine_id = fine.get('db_id')
+
+        # Кнопка оплаты (только для новых штрафов)
+        keyboard = None
+        if fine['type'] in ('new', 'bill') and fine_id:
+            keyboard = {
+                'inline_keyboard': [[
+                    {'text': '✅ Оплачено', 'callback_data': f'fine_paid:{fine_id}'}
+                ]]
+            }
+
         try:
+            payload = {'chat_id': chat_id, 'text': msg, 'parse_mode': 'HTML'}
+            if keyboard:
+                payload['reply_markup'] = keyboard
             r = client.post(
                 f'https://api.telegram.org/bot{bot_token}/sendMessage',
-                json={'chat_id': chat_id, 'text': msg, 'parse_mode': 'HTML'}
+                json=payload
             )
             if r.status_code == 200:
                 print(f'  ✅ Уведомление отправлено: {fine["type"]} {fine["amount"]}₽')
+                # Отмечаем, что уведомление отправлено
+                _mark_notified(fine.get('uid'), f'text&button' if keyboard else 'text')
             else:
                 print(f'  ⚠️  Ошибка отправки: {r.text[:100]}')
         except Exception as e:
             print(f'  ⚠️  Ошибка HTTP: {e}')
+
+
+def _mark_notified(uid: str, method: str = 'text'):
+    """Отмечает штраф как уведомлённый в БД."""
+    if not uid:
+        return
+    db_path = os.path.join(PROJECT_DIR, 'consumption.db')
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute('UPDATE fines SET notified_at = datetime(\'now\') WHERE uid = ?', (uid,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def print_report(fines: list[dict]):

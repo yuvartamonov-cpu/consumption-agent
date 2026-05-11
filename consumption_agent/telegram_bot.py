@@ -78,6 +78,33 @@ def get_credit_alert(alert_id: int):
     return row
 
 
+def get_fine(fine_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        'SELECT id, type, number, amount, description, vehicle, fine_date, vendor, paid_confirmed_at FROM fines WHERE id = ?',
+        (fine_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def confirm_fine_paid(fine_id: int, via: str = 'telegram_button') -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute(
+        '''
+        UPDATE fines
+        SET paid_confirmed_at = datetime('now'),
+            type = CASE WHEN type = 'new' THEN 'fined' ELSE type END
+        WHERE id = ? AND paid_confirmed_at IS NULL
+        ''',
+        (fine_id,)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
 def confirm_credit_alert_paid(alert_id: int, via: str = 'telegram_button') -> bool:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.execute(
@@ -1428,6 +1455,63 @@ async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
     await query.answer('✅ Платёж отмечен как оплаченный')
 
+
+async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '✅ Оплачено' для штрафов."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('fine_paid:'):
+        return
+
+    try:
+        fine_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный id', show_alert=True)
+        return
+
+    row = get_fine(fine_id)
+    if not row:
+        await query.answer('⚠️ Штраф не найден', show_alert=True)
+        return
+
+    if row['paid_confirmed_at']:
+        await query.answer('✅ Уже отмечено как оплачено')
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    changed = confirm_fine_paid(fine_id)
+    if not changed:
+        await query.answer('⚠️ Не удалось обновить статус', show_alert=True)
+        return
+
+    paid_note = '\n\n✅ <b>Отмечено как оплачено</b>'
+    base_text = html.escape((query.message.text or '').rstrip())
+    new_text = base_text + paid_note
+    try:
+        await query.edit_message_text(
+            new_text,
+            parse_mode='HTML',
+            reply_markup=None,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    await query.answer('✅ Штраф отмечен как оплаченный')
+
 def main():
     if not TOKEN:
         print('❌ Укажите CONSUMPTION_BOT_TOKEN')
@@ -1471,6 +1555,7 @@ def main():
     app.add_handler(CommandHandler('help', cmd_help))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
+    app.add_handler(CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()
