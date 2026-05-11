@@ -920,16 +920,19 @@ def main():
     p.add_argument('--price', type=float)
     p.add_argument('--date')
     p.add_argument('--category')
+    p.add_argument('--apply', action='store_true', help='Apply changes (default is dry-run for dedup)')
     p.add_argument('cmd', nargs='?', default='help',
-                    choices=['init','import','parse','match','enrich','check','report','all','list','alerts','add','help'])
+                    choices=['init','import','parse','match','enrich','check','report','all','list','alerts','add','dedup','help'])
     args = p.parse_args()
 
+    from dedup import cmd_dedup
     cmds = {'init':cmd_init,'import':cmd_import,'parse':cmd_parse,'match':cmd_match,
-            'enrich':cmd_enrich,'check':cmd_check,'report':cmd_report,'list':cmd_list,'alerts':cmd_alerts,'add':cmd_add,'all':cmd_all_safe}
+            'enrich':cmd_enrich,'check':cmd_check,'report':cmd_report,'list':cmd_list,'alerts':cmd_alerts,'add':cmd_add,
+            'dedup':cmd_dedup,'all':cmd_all_safe}
 
     if args.cmd == 'help':
         p.print_help()
-        print('\nCommands: init, import, parse, match, enrich, check, report, list, alerts, add, all')
+        print('\nCommands: init, import, parse, match, enrich, check, report, list, alerts, add, dedup, all')
         return
     cmds[args.cmd](args)
 
