@@ -140,3 +140,18 @@ sqlite3 /home/yuri_artamonov/.openclaw/workspace/consumption_agent/consumption.d
 
 Все credentials в `.env` (.gitignore, не попадает в git). Читаются через `os.getenv()`.
 Переменные: `GMAIL_APP_PASSWORD`, `YANDEX_APP_PASSWORD`, `MAILRU_ZOREA_PASSWORD`, `MAILRU_NEUTRINON_PASSWORD`, `CONSUMPTION_BOT_TOKEN`.
+
+## 🧾 Парсинг чеков Самокат (ОФД Платформа ОФД)
+
+**Текущая проблема:** Самокат отправляет чеки через Платформу ОФД (`noreply@chek.pofd.ru`). Письма содержат только HTML с рекламой, а состав заказа подгружается асинхронно через JS.
+
+**Известные форматы:**
+- Отправитель: `noreply@chek.pofd.ru` (Платформа ОФД)
+- Тема: `Чек и подарок. ООО УМНЫЙ РИТЕЙЛ, X XXX ₽`
+- Сумма указана в теме письма — можно вытащить
+- В HTML есть ссылка: `https://lk.platformaofd.ru/web/noauth/cheque?fn={FN}&fp={FP}&i={I}`
+- Состав заказа на странице ОФД подгружается через API с CSRF-токеном
+
+**Статус:** ❌ Автоматический парсинг пока не работает. Данные загружаются через WebSocket/JS.
+**План:** Нужно решить — или использовать Browser Automation (Playwright) для рендеринга страницы ОФД, или найти партнёрский API.
+
