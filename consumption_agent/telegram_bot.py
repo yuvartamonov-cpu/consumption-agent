@@ -774,7 +774,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             conn = get_db()
             try:
                 asset_id = _ml.save_media(conn, buf, mime='image/jpeg')
-                parsed = _ml.parse_caption(caption)
+                parsed = _ml.parse_caption(caption, conn)
                 item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed)
             finally:
                 conn.close()
@@ -920,6 +920,31 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     purchase_id = None
 
+    # Убедимся, что колонка is_delivery существует
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN is_delivery INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # уже существует
+
+    # Проверяем, есть ли доставка от нового OCR-пайплайна
+    delivery = ocr_result.delivery_cost if ocr_result and hasattr(ocr_result, 'delivery_cost') else 0
+    delivery_name = ocr_result.delivery_item_name if ocr_result and hasattr(ocr_result, 'delivery_item_name') else 'Доставка'
+
+    # Отделяем доставку от товаров: убираем из items, если есть
+    real_items = []
+    delivery_items = []
+    if items:
+        for item in items:
+            name_lower = item['name'].lower()
+            # Ключевые слова доставки
+            dl_keywords = ['доставк', 'курьер', 'shipping', 'delivery', 'почт', 'postage', 'транспорт']
+            if any(kw in name_lower for kw in dl_keywords) or (delivery and abs(item.get('price', 0) - delivery) < 1):
+                delivery_items.append(item)
+            else:
+                real_items.append(item)
+
+        items = real_items
+
     if items or total_amount:
         purchase_date = purchase_date or date.today().isoformat()
         cur = conn.execute(
@@ -943,12 +968,32 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         category_id = cat_row[0]
                         break
             conn.execute(
-                "INSERT INTO items (name, purchase_price, purchase_date, category_id, data_origin, purchase_id) "
-                "VALUES (?, ?, ?, ?, 'telegram_photo', ?)",
+                "INSERT INTO items (name, purchase_price, purchase_date, category_id, data_origin, purchase_id, is_delivery) "
+                "VALUES (?, ?, ?, ?, 'telegram_photo', ?, 0)",
                 (item['name'], item['price'], purchase_date, category_id, purchase_id)
             )
 
-    # Формируем структурированный вывод как для бирок
+    # Сохраняем доставку отдельно, если есть
+    if delivery:
+        service_cat = conn.execute("SELECT id FROM categories WHERE slug='service' LIMIT 1").fetchone()
+        service_cat_id = service_cat[0] if service_cat else None
+        conn.execute(
+            "INSERT INTO items (name, purchase_price, purchase_date, category_id, data_origin, purchase_id, is_delivery) "
+            "VALUES (?, ?, ?, ?, 'telegram_photo', ?, 1)",
+            (delivery_name, delivery, purchase_date, service_cat_id, purchase_id)
+        )
+    elif delivery_items:
+        # Если доставка была в items, но не выделилась через delivery_cost
+        for dli in delivery_items:
+            service_cat = conn.execute("SELECT id FROM categories WHERE slug='service' LIMIT 1").fetchone()
+            service_cat_id = service_cat[0] if service_cat else None
+            conn.execute(
+                "INSERT INTO items (name, purchase_price, purchase_date, category_id, data_origin, purchase_id, is_delivery) "
+                "VALUES (?, ?, ?, ?, 'telegram_photo', ?, 1)",
+                (dli['name'], dli['price'], purchase_date, service_cat_id, purchase_id)
+            )
+
+    # Формируем структурированный вывод
     response_parts = ['🧾 Чек распознан']
 
     if purchase_date:
@@ -961,12 +1006,19 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         response_parts.append("Сумма: не определена")
 
     if items:
-        response_parts.append(f"Товары ({len(items)}):" )
+        response_parts.append(f"📦 Товары ({len(items)}):" )
         for item in items:
             price_str = f"{item['price']:.2f} ₽".rstrip('0').rstrip('.').rstrip('₽').strip() + ' ₽'
             qty_str = f" × {item['qty']}" if item.get('qty', 1) > 1 else ''
             response_parts.append(f"  • {item['name']} — {price_str}{qty_str}")
-    else:
+
+    # Доставка отдельным блоком
+    if delivery or delivery_items:
+        dl_total = delivery or sum(dli.get('price', 0) for dli in delivery_items)
+        dl_clean = f"{dl_total:.2f} ₽".rstrip('0').rstrip('.').rstrip('₽').strip() + ' ₽'
+        response_parts.append(f"\n🚚 Доставка: {dl_clean}")
+    
+    if not items and not delivery:
         response_parts.append("Товары: не найдены")
         response_parts.append("Добавьте вручную /add <название> <цена>")
 
@@ -1399,8 +1451,87 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/add_photo — загрузить фото чека (OCR)\n'
         '/check — статистика\n'
         '/ml_last [N] — последние записи Memory Lane\n'
+        '/topic_set <слово> <тема> — задать тему для слова\n'
+        '/topic_list [тема] — показать все правила тем\n'
         '/help — это сообщение'
     )
+
+
+async def cmd_topic_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Установить тему для ключевого слова: /topic_set <слово> <тема>"""
+    try:
+        import memory_lane as _ml
+    except ImportError:
+        await update.message.reply_text('Memory Lane модуль не найден.')
+        return
+
+    if not ctx.args or len(ctx.args) < 2:
+        await update.message.reply_text('Использование: /topic_set <слово> <тема>\nНапример: /topic_set кофемолка бытовая техника')
+        return
+
+    keyword = ctx.args[0].lower()
+    topic = ' '.join(ctx.args[1:]).lower()
+
+    conn = get_db()
+    try:
+        is_new = _ml.set_topic_rule(conn, keyword, topic)
+        conn.commit()
+    except Exception as e:
+        await update.message.reply_text(f'\u274c Ошибка: {e}')
+        return
+    finally:
+        conn.close()
+
+    if is_new:
+        await update.message.reply_text(f'\u2705 Добавлено правило: «{keyword}» \u2192 «{topic}»')
+    else:
+        await update.message.reply_text(f'\u2705 Обновлено правило: «{keyword}» \u2192 «{topic}»')
+
+
+async def cmd_topic_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показать все правила тем: /topic_list [тема]"""
+    try:
+        import memory_lane as _ml
+    except ImportError:
+        await update.message.reply_text('Memory Lane модуль не найден.')
+        return
+
+    topic_filter = ' '.join(ctx.args).lower() if ctx.args else None
+
+    conn = get_db()
+    try:
+        rules = _ml.list_topic_rules(conn, topic_filter)
+    finally:
+        conn.close()
+
+    if not rules:
+        if topic_filter:
+            await update.message.reply_text(f'Правил для темы «{topic_filter}» не найдено.')
+        else:
+            await update.message.reply_text('Правил пока нет. Добавьте /topic_set <слово> <тема>')
+        return
+
+    # Группируем по темам
+    groups = {}
+    for r in rules:
+        t = r['topic']
+        if t not in groups:
+            groups[t] = []
+        icon = '\U0001f3f7' if r['source'] == 'user' else ''
+        groups[t].append(f"{icon}{r['keyword']} ({r['usage_count']})")
+
+    lines = [f'\U0001f9f9 Правила тем ({len(rules)}):']
+    for topic in sorted(groups.keys()):
+        kws = ', '.join(groups[topic])
+        lines.append(f'\n\U0001f539 {topic}: {kws}')
+
+    # Разбиваем на части если длинно
+    full = '\n'.join(lines)
+    if len(full) > 4000:
+        for chunk in [full[i:i+4000] for i in range(0, len(full), 4000)]:
+            await update.message.reply_text(chunk)
+    else:
+        await update.message.reply_text(full)
 
 
 async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1595,6 +1726,15 @@ async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer('✅ Штраф отмечен как оплаченный')
 
 def main():
+    # Инициализируем schema memory_lane (создаём таблицы topic_rules и др., если ещё нет)
+    try:
+        import memory_lane as _ml
+        conn = get_db()
+        _ml.ensure_memory_lane_schema(conn)
+        conn.close()
+    except Exception as e:
+        log.warning(f'memory_lane schema init failed: {e}')
+
     if not TOKEN:
         print('❌ Укажите CONSUMPTION_BOT_TOKEN')
         print('   export CONSUMPTION_BOT_TOKEN=...')
@@ -1634,6 +1774,8 @@ def main():
     app.add_handler(CommandHandler('warranties', cmd_warranties))
     app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
     app.add_handler(CommandHandler('ml_last', cmd_ml_last))
+    app.add_handler(CommandHandler('topic_set', cmd_topic_set))
+    app.add_handler(CommandHandler('topic_list', cmd_topic_list))
     app.add_handler(CommandHandler('help', cmd_help))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))

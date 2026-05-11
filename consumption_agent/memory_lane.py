@@ -31,14 +31,24 @@ SAVE_TRIGGERS = LIKED_KEYWORDS + DISLIKED_KEYWORDS + ('memory lane',)
 
 TOPIC_RULES = {
     'одежда': ('одежда', 'пальто', 'куртка', 'платье', 'рубашка', 'джинс',
-               'свитер', 'футболк', 'юбка', 'брюки', 'кросс', 'обувь', 'ботинк'),
+               'свитер', 'футболк', 'юбка', 'брюки', 'кросс', 'обувь', 'ботинк',
+               'пиджак', 'пуловер', 'костюм', 'кофт', 'толстовк', 'худи',
+               'жилет', 'шарф', 'шапк', 'кепк', 'перчатк', 'ремень', 'галстук',
+               'носк', 'колготк', 'плавк', 'купальник', 'халат', 'пижам'),
     'мебель': ('мебель', 'диван', 'кресло', 'стол', 'стул', 'шкаф', 'кровать',
-               'комод', 'полка'),
+               'комод', 'полка', 'стеллаж', 'трюмо', 'тумб', 'вешалк'),
     'интерьер': ('интерьер', 'светильник', 'лампа', 'ковёр', 'ковер', 'штора',
-                 'плед', 'подушк'),
-    'еда': ('еда', 'блюдо', 'ресторан', 'кафе', 'торт', 'напиток'),
+                 'плед', 'подушк', 'ваз', 'картин', 'постер', 'свеч',
+                 'декор', 'зеркал'),
+    'еда': ('еда', 'блюдо', 'ресторан', 'кафе', 'торт', 'напиток', 'завтрак',
+            'обед', 'ужин', 'кофе', 'чай', 'суп', 'салат', 'десерт'),
     'техника': ('техника', 'ноутбук', 'телефон', 'наушник', 'зарядк', 'монитор',
-                'клавиатур', 'мышк'),
+                'клавиатур', 'мышк', 'планшет', 'колонк', 'роутер', 'камер',
+                'принтер', 'провод'),
+    'аксессуары': ('аксессуар', 'браслет', 'кольцо', 'серёжк', 'часы', 'сумк',
+                   'рюкзак', 'кошелек', 'портмоне', 'очк'),
+    'косметика': ('косметик', 'духи', 'парфюм', 'крем', 'лосьон', 'шампунь',
+                  'бальзам', 'помад', 'тени', 'тушь'),
 }
 
 MEDIA_SUBDIR = os.path.join('data', 'media')
@@ -82,7 +92,90 @@ def ensure_memory_lane_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ml_topic ON memory_lane_items(topic)")
+    # Таблица ассоциаций слово → тема (обучаемая, user и default правила)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS topic_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL UNIQUE,
+            topic TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'user',
+            usage_count INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_rules_keyword ON topic_rules(keyword)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_rules_topic ON topic_rules(topic)")
     conn.commit()
+    # Засеиваем дефолтные правила из TOPIC_RULES
+    seed_default_topic_rules(conn)
+
+
+def seed_default_topic_rules(conn: sqlite3.Connection) -> None:
+    """Заполняет таблицу topic_rules дефолтными правилами из TOPIC_RULES, если их там нет."""
+    for topic, keywords in TOPIC_RULES.items():
+        for kw in keywords:
+            conn.execute(
+                "INSERT OR IGNORE INTO topic_rules (keyword, topic, source) VALUES (?, ?, 'default')",
+                (kw, topic)
+            )
+    conn.commit()
+
+
+def lookup_topic(conn: sqlite3.Connection, text: str) -> str | None:
+    """Ищет тему по тексту в таблице topic_rules. Возвращает первую подходящую или None."""
+    if not text:
+        return None
+    lowered = text.lower()
+    # Сначала ищем точное совпадение целого слова
+    rows = conn.execute(
+        "SELECT keyword, topic FROM topic_rules ORDER BY usage_count DESC"
+    ).fetchall()
+    for keyword, topic in rows:
+        if keyword in lowered:
+            # Обновляем счётчик использования
+            conn.execute(
+                "UPDATE topic_rules SET usage_count = usage_count + 1, updated_at = datetime('now') WHERE keyword = ?",
+                (keyword,)
+            )
+            return topic
+    return None
+
+
+def set_topic_rule(conn: sqlite3.Connection, keyword: str, topic: str) -> bool:
+    """Добавляет или обновляет правило ассоциации слово → тема.
+    Возвращает True, если создано новое."""
+    existing = conn.execute(
+        "SELECT id, source FROM topic_rules WHERE keyword = ?", (keyword.lower(),)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE topic_rules SET topic = ?, source = 'user', updated_at = datetime('now') WHERE id = ?",
+            (topic, existing[0])
+        )
+        return False
+    else:
+        conn.execute(
+            "INSERT INTO topic_rules (keyword, topic, source) VALUES (?, ?, 'user')",
+            (keyword.lower(), topic)
+        )
+        return True
+
+
+def list_topic_rules(conn: sqlite3.Connection, topic: str | None = None) -> list[dict]:
+    """Возвращает все правила, опционально отфильтрованные по теме."""
+    if topic:
+        rows = conn.execute(
+            "SELECT keyword, topic, source, usage_count FROM topic_rules WHERE topic = ? ORDER BY usage_count DESC, keyword",
+            (topic,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT keyword, topic, source, usage_count FROM topic_rules ORDER BY topic, usage_count DESC"
+        ).fetchall()
+    return [{'keyword': r[0], 'topic': r[1], 'source': r[2], 'usage_count': r[3]} for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -105,11 +198,14 @@ def _contains_any(haystack: str, needles: Iterable[str]) -> List[str]:
     return hits
 
 
-def parse_caption(text: str | None) -> dict:
+def parse_caption(text: str | None, conn: sqlite3.Connection | None = None) -> dict:
     """Return a small dict of taste signals extracted from the caption.
 
     Keys: liked, disliked, style_tags, topic.  Lists are deduped while
     preserving insertion order.
+
+    Если передан conn, сначала проверяет таблицу topic_rules (user-правила),
+    потом статические TOPIC_RULES.
     """
     out = {'liked': [], 'disliked': [], 'style_tags': [], 'topic': None}
     if not text:
@@ -136,7 +232,13 @@ def parse_caption(text: str | None) -> dict:
     if tags:
         out['style_tags'] = list(dict.fromkeys(tags))
 
-    # Topic detection — first matching rule wins.
+    # Topic detection: сначала таблица topic_rules, потом статические правила
+    if conn:
+        topic = lookup_topic(conn, lowered)
+        if topic:
+            out['topic'] = topic
+            return out
+
     for topic, words in TOPIC_RULES.items():
         if any(w in lowered for w in words):
             out['topic'] = topic
@@ -198,7 +300,7 @@ def save_memory_lane(
 ) -> int:
     """Insert a memory_lane_items row using parsed signals from parse_caption."""
     ensure_memory_lane_schema(conn)
-    parsed = parsed if parsed is not None else parse_caption(caption)
+    parsed = parsed if parsed is not None else parse_caption(caption, conn)
     cur = conn.execute(
         """
         INSERT INTO memory_lane_items

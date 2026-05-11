@@ -38,12 +38,17 @@ class ReceiptItem:
             self.total = self.price * self.qty
 
 
+_DELIVERY_KEYWORDS = ['курьерская доставка', 'доставка', 'доставк', 'курьер',
+                       'shipping', 'delivery', 'почт', 'postage']
+
+
 @dataclass
 class ReceiptResult:
     shop: str = ''
     date: str = ''
     total: Optional[float] = None
     items: list = field(default_factory=list)
+    delivery_cost: float = 0.0
     raw_text: str = ''
     ocr_score: int = 0
 
@@ -273,24 +278,29 @@ def _clean_text(text: str) -> str:
 # Parser: items from text
 # ─────────────────────────────────────────────────────────────
 
-def parse_items(text: str) -> list[ReceiptItem]:
-    """Парсит товары из текста чека."""
-    items = []
+def parse_items(text: str) -> tuple[list[ReceiptItem], float]:
+    """Парсит товары из текста чека.
+    Возвращает (items, delivery_cost).
+    """
     lines = text.split('\n')
 
     # Сначала ищем формат Ozon: "1 x 721,00" с названием на строках выше
-    items = _parse_ozon_format(lines)
+    items, delivery_cost = _parse_ozon_format(lines)
 
     # Если не нашли — пробуем стандартный: "Название 123.45₽"
     if not items:
-        items = _parse_standard_format(lines)
+        items, dc = _parse_standard_format(lines)
+        delivery_cost = dc
 
-    return items
+    return items, delivery_cost or 0.0
 
 
-def _parse_ozon_format(lines: list[str]) -> list[ReceiptItem]:
-    """Формат Ozon/курьеры: '1 x 721,00', название на 1-2 строках выше."""
+def _parse_ozon_format(lines: list[str]) -> tuple[list[ReceiptItem], float]:
+    """Формат Ozon/курьеры: '1 x 721,00', название на 1-2 строках выше.
+    Возвращает (items, delivery_cost).
+    """
     items = []
+    delivery_cost = 0.0
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -302,6 +312,7 @@ def _parse_ozon_format(lines: list[str]) -> list[ReceiptItem]:
 
         qty = int(qty_match.group(1))
         price = float(qty_match.group(2).replace(',', '.'))
+        total = qty * price
 
         # Название: ищем строки выше (до 4 строк назад)
         name_parts = []
@@ -322,20 +333,18 @@ def _parse_ozon_format(lines: list[str]) -> list[ReceiptItem]:
             # с маленькой буквы или с запятой — это продолжение названия, ищем выше
             is_first = len(name_parts) == 0
             is_continuation = is_first and (prev[0].islower() or prev[0] in ',;:')
-            
+
             # Добавляем строку в название в любом случае
             name_parts.insert(0, prev)
-            
+
             # Если строка выглядит как продолжение — не останавливаемся, ищем выше
             if is_continuation and meaningful >= 2:
-                # Это подстрока названия, продолжаем поиск основной строки
                 continue
-            
-            # Строка с 3+ русскими словами и > 35 символов — стоп (основная строка названия)
+
+            # Строка с 3+ русскими словами и > 35 символов — стоп
             if meaningful >= 3 and len(prev) > 30:
                 stopped_at_product_info = True
                 break
-            # Больше 65 символов в любом случае конец
             if len(prev) > 65:
                 stopped_at_product_info = True
                 break
@@ -344,14 +353,31 @@ def _parse_ozon_format(lines: list[str]) -> list[ReceiptItem]:
         if not name:
             name = f'Товар {len(items) + 1}'
 
+        # Детект доставки — не товар, а расход на доставку
+        if _is_delivery(name):
+            delivery_cost += total
+            continue
+
         items.append(ReceiptItem(name=name[:120], price=price, qty=qty))
 
-    return items
+    return items, delivery_cost
 
 
-def _parse_standard_format(lines: list[str]) -> list[ReceiptItem]:
-    """Стандартный формат: 'Название товара 123.45₽'."""
+def _is_delivery(name: str) -> bool:
+    """Проверяет, является ли строка доставкой (Курьерская доставка и т.п.)."""
+    lower = name.lower()
+    for kw in _DELIVERY_KEYWORDS:
+        if kw in lower:
+            return True
+    return False
+
+
+def _parse_standard_format(lines: list[str]) -> tuple[list[ReceiptItem], float]:
+    """Стандартный формат: 'Название товара 123.45₽'.
+    Возвращает (items, delivery_cost).
+    """
     items = []
+    delivery_cost = 0.0
     for line in lines:
         line = line.strip()
         if _is_junk_line(line):
@@ -364,9 +390,12 @@ def _parse_standard_format(lines: list[str]) -> list[ReceiptItem]:
             name = name.strip()
             if name and not _is_junk_line(name):
                 price = float(price_str.replace(',', '.'))
-                items.append(ReceiptItem(name=name[:120], price=price))
+                if _is_delivery(name):
+                    delivery_cost += price
+                else:
+                    items.append(ReceiptItem(name=name[:120], price=price))
 
-    return items
+    return items, delivery_cost
 
 
 def parse_total(text: str) -> Optional[float]:
@@ -424,11 +453,12 @@ def process_receipt(image_path: str) -> ReceiptResult:
     if score < 30:
         return ReceiptResult(raw_text=text, ocr_score=score)
 
-    # 2. Парсинг товаров
-    items = parse_items(text)
+    # 2. Парсинг товаров (доставка отдельно)
+    items, delivery_cost = parse_items(text)
 
     # 3. Сумма
-    total = parse_total(text) or (sum(it.total for it in items) if items else None)
+    items_total = sum(it.total for it in items)
+    total = parse_total(text) or (items_total + delivery_cost if items or delivery_cost else None)
 
     # 4. Дата
     receipt_date = parse_date(text)
@@ -441,6 +471,7 @@ def process_receipt(image_path: str) -> ReceiptResult:
         date=receipt_date,
         total=total,
         items=items,
+        delivery_cost=delivery_cost,
         raw_text=text,
         ocr_score=score,
     )

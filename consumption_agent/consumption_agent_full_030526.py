@@ -213,6 +213,11 @@ def cmd_init(args):
         for t in ['subscriptions','alerts','cheques_log','recognized_items_log','items','purchases','categories','profiles']:
             conn.execute(f'DROP TABLE IF EXISTS {t}')
     conn.executescript(SCHEMA)
+    # Добавляем колонку is_delivery в items, если её нет
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN is_delivery INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("INSERT OR IGNORE INTO profiles (id,name) VALUES ('default','Default')")
     for c in CATS:
         conn.execute("INSERT OR IGNORE INTO categories (id,parent_id,name,slug,sort_order) VALUES (?,?,?,?,?)", c)
