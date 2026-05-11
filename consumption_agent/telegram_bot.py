@@ -348,6 +348,84 @@ def _extract_tag_size_from_image(image_path: str) -> str | None:
     return None
 
 
+def _parse_receipt_lines(text: str, known_total: float | None = None) -> list[dict]:
+    """Парсит строки чека Ozon / любой формат.
+    Возвращает список товаров: [{name, price, qty, total}, ...].
+    """
+    items = []
+    lines = (text or '').split('\n')
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+        if not line:
+            continue
+
+        # Формат Ozon: название на 1-2 строках, затем "1 x ЦЕНА" на следующей
+        # Ищем строку вида "1 x 123,45" или "1×123,45"
+        qty_price_match = re.search(r'^(\d+)\s*[x×]\s*([\d]+[.,]\d{2})$', line)
+        if qty_price_match:
+            qty = int(qty_price_match.group(1))
+            price = float(qty_price_match.group(2).replace(',', '.'))
+            total = qty * price
+            # Название — предыдущая непустая строка (может быть 1-2 строки)
+            # Ищем строки с названием (не цифровые, без 'ИТОГ', 'вт.ч', 'НДС')
+            name_parts = []
+            for j in range(i - 2, max(i - 5, -1), -1):
+                if j < 0:
+                    break
+                prev = lines[j].strip()
+                if not prev:
+                    continue
+                if re.search(r'^[\d,.#]+$', prev):
+                    continue
+                if re.search(r'ИТОГ|вт\.ч|НДС|HOC|расчет|Зачет|ФН:|PH ККТ|ФД:|ФПД|Сайт|ИНН|Код маркировки|Результат|Курьер|Доставк|Полный', prev):
+                    continue
+                if len(prev) < 3:
+                    continue
+                # Фильтр мусорных строк OCR
+                # Фильтр мусорных строк OCR (чеки Ozon с шумами)
+                if len(prev) > 5:
+                    # Повторяющиеся символы
+                    repeated_single = max(prev.count(c) for c in set(prev))
+                    if repeated_single > len(prev) * 0.5:
+                        continue
+                    # Строка состоит в основном из символов шума
+                    nonsense = sum(prev.count(c) for c in 'eEиcSChHaAкКВuUаa')
+                    if nonsense > len(prev) * 0.6:
+                        continue
+                    # Уникальных символов мало — это шум
+                    if len(prev) > 10 and len(set(prev)) < 6:
+                        continue
+                    # Строка начинается с мусора OCR (заглавные A C I e и т.д.)
+                    if re.match(r'^[A-Za-z]{2,5}\s+[A-Za-z]', prev) and len(prev) > 15:
+                        continue
+                    # В строке больше 3 латинских заглавных подряд — мусор OCR
+                    if re.search(r'[A-Z]{3,}', prev):
+                        continue
+                name_parts.insert(0, prev)
+                # Если строка достаточно длинная — это название, не ищем дальше
+                if len(prev) > 15 and prev.count('детал') + prev.count('игруш') + prev.count('набор') + prev.count('совместим') > 0:
+                    # Для Ozon: название может быть на 2 строках, берём обе
+                    pass
+                elif len(prev) > 35 or prev.count(' ') > 3:
+                    break
+
+            name = ' '.join(name_parts) if name_parts else f'tовар {len(items) + 1}'
+            items.append({'name': name, 'price': price, 'qty': qty, 'total': total})
+            continue
+
+        # Стандартный формат: "Название товара" 123.45 ₽
+        m = re.search(r'(.{3,60}?)\s+(\d+[.,]\d{2})\s*₽', line)
+        if m:
+            name, price_str = m.groups()
+            price_val = float(price_str.replace(',', '.'))
+            items.append({'name': name.strip(), 'price': price_val, 'qty': 1, 'total': price_val})
+
+    return items
+
+
 def get_fx_rate(currency: str, on_date: str | None = None) -> float:
     currency = (currency or 'RUB').upper()
     if currency == 'RUB':
@@ -818,22 +896,12 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # === Если НЕ бирка — старая логика обработки чека ===
-    if text:
-        lines = text.split('\n')
-        for line in lines:
-            if 'итого' in line.lower() and not total_amount:
-                match = re.search(r'(\d+[.,]\d{2})', line)
-                if match:
-                    total_amount = float(match.group(1).replace(',', '.'))
-            match = re.search(r'(.{3,40}?)\s+(\d+[.,]?\d*)\s*[x×]\s*(\d+[.,]?\d*)\s*[=≡]\s*(\d+[.,]?\d*)', line)
-            if match:
-                name, price, qty, total = match.groups()
-                items.append({'name': name.strip(), 'price': float(price.replace(',', '.')), 'qty': int(qty), 'total': float(total.replace(',', '.'))})
-                continue
-            match = re.search(r'(.{5,45}?)\s+(\d+[.,]\d{2})\s*₽', line)
-            if match:
-                name, price = match.groups()
-                items.append({'name': name.strip(), 'price': float(price.replace(',', '.')), 'qty': 1, 'total': float(price.replace(',', '.'))})
+    items = _parse_receipt_lines(text, total_amount)
+    if not total_amount and text:
+        # fallback: ищем сумму после ИТОГ или последнюю большую
+        m = re.search(r'ИТОГ[^\d]*([\d]+[.,]\d{2})', text)
+        if m:
+            total_amount = float(m.group(1).replace(',', '.'))
 
     conn = get_db()
     purchase_id = None
