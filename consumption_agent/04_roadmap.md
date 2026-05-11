@@ -115,7 +115,7 @@ Telegram photo + comment → сохранение в media/ → caption + featur
 
 - [ ] Item-level парсинг для Ozon (_parse_ozon_items) — сейчас 12% items linked
 - [ ] Item-level парсинг для Yandex.Market
-- [ ] Очистка recognized_items_log (1230 мусорных записей)
+- [x] Очистка recognized_items_log (1230 мусорных записей удалены, YUR-73)
 - [ ] Удалить тестовую запись item id 843 (data_origin='telegram_tag')
 - [ ] Сбор курсов валют на дату чека
 - [ ] Алерты low_stock (требует заполнения remaining вручную)

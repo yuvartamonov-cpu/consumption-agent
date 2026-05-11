@@ -104,6 +104,21 @@ consumption check-db
 - Privacy router для LLM (local/cloud/anonymous)
 - Governance слой — action_proposals до выполнения
 
+## Cleanup recognized_items_log (YUR-73, added 11.05.2026)
+
+OCR от скриншотов интерфейса (OpenClaw, mobile setup и т.п.) попадал в
+`recognized_items_log` с `source_type='screen_ocr'` и `matched_item_id IS NULL`.
+Эти строки ничего не дают fuzzy-матчингу и тянут recall вниз.
+
+```bash
+python3 cleanup_recognized_items.py            # dry-run, печатает sample
+python3 cleanup_recognized_items.py --apply    # удалить
+python3 cleanup_recognized_items.py --sample 20  # размер sample в dry-run
+```
+
+Эвристика умышленно узкая: только `source_type='screen_ocr' AND matched_item_id IS NULL`.
+Подматченные screen-OCR (~1000 строк) остаются.
+
 ## CLI (Phase A, added 11.05.2026)
 
 Single-binary maintenance tool. Use instead of poking sqlite/systemctl by hand.
