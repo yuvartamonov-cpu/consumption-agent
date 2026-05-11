@@ -13,10 +13,30 @@ Consumption Agent Telegram Bot
 """
 
 import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback
+from calendar import monthrange
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
+
+def esc_md(text):
+    """Escape Markdown V1 special characters for Telegram."""
+    if not text:
+        return text
+    for ch in ('\\', '`', '*', '_', '[', ']', '(', ')'):
+        text = str(text).replace(ch, '\\' + ch)
+    return text
+
+
+def add_months_safe(dt, months):
+    """Добавляет месяцы к дате без падения на 29/30/31 числе."""
+    months = int(months)
+    month = dt.month - 1 + months
+    year = dt.year + month // 12
+    month = month % 12 + 1
+    day = min(dt.day, monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
 
 def parse_drive_request(text: str):
     """Парсит '3ч 80км' или '2 часа 60 км'"""
@@ -1612,7 +1632,7 @@ async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         amount_str = f'{amount:.2f} ₽' if amount else '—'
         date_str = pay_date or '—'
         days_str = f'(через {days} дн.)' if days >= 0 else f'(просрочено {-days} дн.)'
-        lines.append(f'\n{prefix} *{sender}* — {amount_str}')
+        lines.append(f'\n{prefix} *{esc_md(sender)}* — {amount_str}')
         lines.append(f'   📅 {date_str} {days_str}')
 
         if amount:
@@ -1666,7 +1686,7 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         amount = r[3] or 0
         desc = (r[4] or '').strip()[:60]
         date_str = r[6] or '—'
-        summary_lines.append(f'  🔴 {amount:.0f} ₽ — {desc or "Штраф"} ({date_str})')
+        summary_lines.append(f'  🔴 {amount:.0f} ₽ — {esc_md(desc) or "Штраф"} ({date_str})')
     summary_lines.append(f'\n⬇️ Отправляю детали с кнопками...')
     await update.message.reply_text('\n'.join(summary_lines), parse_mode='Markdown')
 
@@ -1682,7 +1702,7 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         detail_lines = [f'🚨 *Штраф: {amount:.0f} ₽*']
         if desc:
-            detail_lines.append(f'📋 {desc}')
+            detail_lines.append(f'📋 {esc_md(desc)}')
         detail_lines.append(f'📅 {date_str}')
         if veh:
             detail_lines.append(f'🚗 {veh}')
@@ -1876,10 +1896,10 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             log.warning(f'add_item photo save failed: {e}')
 
     # Формируем ответ
-    lines = [f'✅ Добавлено: *{name}*']
+    lines = [f'✅ Добавлено: *{esc_md(name)}*']
     if brand:
-        lines.append(f'🏷 Бренд: {brand}')
-    lines.append(f'📂 Категория: {category}')
+        lines.append(f'🏷 Бренд: {esc_md(brand)}')
+    lines.append(f'📂 Категория: {esc_md(category)}')
     if replace_months:
         lines.append(f'🔄 Замена: через {replace_months} мес.')
     if vision_enriched and 'error' not in vision_enriched:
@@ -1940,17 +1960,12 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if purchase:
                 try:
                     pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
-                    replace_date = pd.replace(month=pd.month + rep) if pd.month + rep <= 12 else pd.replace(year=pd.year + 1, month=pd.month + rep - 12)
-                    # вычисляем месяц + rep месяцев
-                    m = pd.month + rep
-                    y = pd.year + (m - 1) // 12
-                    mo = ((m - 1) % 12) + 1
-                    replace_date = pd.replace(year=y, month=mo)
+                    replace_date = add_months_safe(pd, rep)
                     days_left = (replace_date - today).days
                     if days_left <= 90:  # ближайшие 3 месяца
                         filtered.append((days_left, r))
-                except:
-                    pass
+                except (TypeError, ValueError) as e:
+                    log.warning('Не удалось вычислить срок замены для item_id=%s: %s', r[0], e)
         filtered.sort(key=lambda x: x[0])
         filtered = [r[1] for r in filtered]
         if not filtered:
@@ -2000,18 +2015,15 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             rep = r[7] or r[4]
             purchase = r[5]
 
-            name_str = name
+            name_str = esc_md(name)
             if brand:
-                name_str += f' ({brand})'
+                name_str += f' ({esc_md(brand)})'
 
             # Срок замены
             if rep and purchase:
                 try:
                     pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
-                    m = pd.month + rep
-                    y = pd.year + (m - 1) // 12
-                    mo = ((m - 1) % 12) + 1
-                    replace_date = pd.replace(year=y, month=mo)
+                    replace_date = add_months_safe(pd, rep)
                     days = (replace_date - today).days
                     if days <= 0:
                         suffix = ' 🔴 Пора менять!'
@@ -2019,7 +2031,8 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         suffix = f' 🟡 Через {days} дн.'
                     else:
                         suffix = ''
-                except:
+                except (TypeError, ValueError) as e:
+                    log.warning('Не удалось показать срок замены для item_id=%s: %s', r[0], e)
                     suffix = ''
             else:
                 suffix = ''
@@ -2325,6 +2338,34 @@ async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
     await query.answer('✅ Штраф отмечен как оплаченный')
 
+
+def add_authorized_handler(app: Application, handler):
+    """Оборачивает handler проверкой доступа перед добавлением в приложение."""
+    original_callback = handler.callback
+
+    async def deny_access(update: Update):
+        chat = update.effective_chat if update else None
+        chat_id = chat.id if chat else None
+        log.warning('Доступ запрещён для chat_id=%s', chat_id)
+
+        if getattr(update, 'callback_query', None):
+            await update.callback_query.answer('❌ Доступ запрещён', show_alert=True)
+            return
+
+        message = getattr(update, 'effective_message', None)
+        if message is not None:
+            await message.reply_text('❌ Доступ запрещён.')
+
+    async def wrapped_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat if update else None
+        if chat is None or chat.id != OWNER_CHAT_ID:
+            await deny_access(update)
+            return
+        return await original_callback(update, ctx)
+
+    handler.callback = wrapped_callback
+    app.add_handler(handler)
+
 def main():
     # Инициализируем schema memory_lane (создаём таблицы topic_rules и др., если ещё нет)
     try:
@@ -2340,50 +2381,28 @@ def main():
         print('   export CONSUMPTION_BOT_TOKEN=...')
         sys.exit(1)
     app = Application.builder().token(TOKEN).build()
-    # Whitelist for Telegram bot (only allow specific chat IDs)
-    ALLOWED_CHAT_IDS = {1477860192}  # YuV's chat ID
-
-    async def check_access(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat.id not in ALLOWED_CHAT_IDS:
-            log.warning(f"Доступ запрещён для chat_id={update.effective_chat.id}")
-            await update.message.reply_text('❌ Доступ запрещён.')
-            return False
-        log.info(f"Доступ разрешён для chat_id={update.effective_chat.id}")
-        return True
-
-    # Add access check to all command handlers
-    for handler in app.handlers:
-        if isinstance(handler, (CommandHandler, MessageHandler)):
-            original_callback = handler.callback
-            async def wrapped_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-                if await check_access(update, ctx):
-                    await original_callback(update, ctx)
-            handler.callback = wrapped_callback
-
-    app.add_handler(CommandHandler('start', start))
-
-    app.add_handler(CommandHandler('list', cmd_list))
-    app.add_handler(CommandHandler('alerts', cmd_alerts))
-    app.add_handler(CommandHandler('parse', cmd_parse))
-    app.add_handler(CommandHandler('check', cmd_check))
-    app.add_handler(CommandHandler('last_drives', cmd_last_drives))
-    app.add_handler(CommandHandler('find_car', cmd_find_car))
-    app.add_handler(CommandHandler('add', cmd_add))
-    app.add_handler(CommandHandler('add_item', cmd_add_item))
-    app.add_handler(CommandHandler('items', cmd_items))
-    app.add_handler(CommandHandler('add_photo', add_photo))
-    app.add_handler(CommandHandler('parse', cmd_parse))
-    app.add_handler(CommandHandler('debts', cmd_debts))
-    app.add_handler(CommandHandler('fines', cmd_fines))
-    app.add_handler(CommandHandler('warranties', cmd_warranties))
-    app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
-    app.add_handler(CommandHandler('ml_last', cmd_ml_last))
-    app.add_handler(CommandHandler('topic_set', cmd_topic_set))
-    app.add_handler(CommandHandler('topic_list', cmd_topic_list))
-    app.add_handler(CommandHandler('help', cmd_help))
-    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-    app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
-    app.add_handler(CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
+    add_authorized_handler(app, CommandHandler('start', start))
+    add_authorized_handler(app, CommandHandler('list', cmd_list))
+    add_authorized_handler(app, CommandHandler('alerts', cmd_alerts))
+    add_authorized_handler(app, CommandHandler('parse', cmd_parse))
+    add_authorized_handler(app, CommandHandler('check', cmd_check))
+    add_authorized_handler(app, CommandHandler('last_drives', cmd_last_drives))
+    add_authorized_handler(app, CommandHandler('find_car', cmd_find_car))
+    add_authorized_handler(app, CommandHandler('add', cmd_add))
+    add_authorized_handler(app, CommandHandler('add_item', cmd_add_item))
+    add_authorized_handler(app, CommandHandler('items', cmd_items))
+    add_authorized_handler(app, CommandHandler('add_photo', add_photo))
+    add_authorized_handler(app, CommandHandler('debts', cmd_debts))
+    add_authorized_handler(app, CommandHandler('fines', cmd_fines))
+    add_authorized_handler(app, CommandHandler('warranties', cmd_warranties))
+    add_authorized_handler(app, CommandHandler('set_warranty', cmd_set_warranty))
+    add_authorized_handler(app, CommandHandler('ml_last', cmd_ml_last))
+    add_authorized_handler(app, CommandHandler('topic_set', cmd_topic_set))
+    add_authorized_handler(app, CommandHandler('topic_list', cmd_topic_list))
+    add_authorized_handler(app, CommandHandler('help', cmd_help))
+    add_authorized_handler(app, MessageHandler(filters.PHOTO, photo_handler))
+    add_authorized_handler(app, CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()
