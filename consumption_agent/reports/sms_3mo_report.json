@@ -1,0 +1,76 @@
+{
+  "generated_at": "2026-05-11T20:31:26.797801",
+  "cutoff": "2026-02-10",
+  "stats": {
+    "total": 319,
+    "in_period": 319,
+    "bank_related": 197,
+    "credit": 6,
+    "advertising": 180,
+    "receipt": 11,
+    "subscription": 0,
+    "government": 0,
+    "roadmap": 0,
+    "unknown": 0
+  },
+  "credit_count": 6,
+  "ad_count": 191,
+  "unknown_count": 0,
+  "credit": [
+    {
+      "id": 12151,
+      "from": "Alfa-Bank",
+      "sender_name": "alfa",
+      "body": "Не забудьте внести 613.19 RUR по кредитке *7963 до 04.05.2026",
+      "amount": 613.19,
+      "date": "2026-05-03 14:12",
+      "category": "credit"
+    },
+    {
+      "id": 11984,
+      "from": "Alfa-Bank",
+      "sender_name": "alfa",
+      "body": "27.04.2026 спишем 32500.00 RUB. Не забудьте пополнить счёт",
+      "amount": 32500.0,
+      "date": "2026-04-22 11:08",
+      "category": "credit"
+    },
+    {
+      "id": 11983,
+      "from": "Alfa-Bank",
+      "sender_name": "alfa",
+      "body": "27.04.2026 спишем 36300.00 RUB. Не забудьте пополнить счёт",
+      "amount": 36300.0,
+      "date": "2026-04-22 10:25",
+      "category": "credit"
+    },
+    {
+      "id": 11945,
+      "from": "VTB",
+      "sender_name": "vtb",
+      "body": "Внесите платеж по кредитке 11 400,00 руб. до 18:00 мск 2026-04-20",
+      "amount": 11400.0,
+      "date": "2026-04-15 12:18",
+      "category": "credit"
+    },
+    {
+      "id": 11944,
+      "from": "VTB",
+      "sender_name": "vtb",
+      "body": "Внесите платеж по кредитке 55 600,00 руб. до 18:00 мск 2026-04-20",
+      "amount": 55600.0,
+      "date": "2026-04-15 10:44",
+      "category": "credit"
+    },
+    {
+      "id": 11941,
+      "from": "MFCAlfaFin",
+      "sender_name": "alfa",
+      "body": "15.04.2026 — платеж по займу, ООО МКК АЛЬФА ФИНАНС",
+      "amount": null,
+      "date": "2026-04-14 10:56",
+      "category": "credit"
+    }
+  ],
+  "unknown": []
+}
