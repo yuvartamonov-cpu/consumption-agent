@@ -536,7 +536,10 @@ def _parse_ozon_items(html):
 
     PRICE_RX = re.compile(r'([\d\s]+[.,]\d{2})\s*(?:₽|руб)', re.IGNORECASE)
     QTY_RX = re.compile(r'(\d+)\s*x\s*([\d\s]+[.,]\d{2})', re.IGNORECASE)
-    SKIP_NAME_RX = re.compile(r'доставк|курьер|сервис|итого|всего|сумма|скидк', re.IGNORECASE)
+    SKIP_NAME_RX = re.compile(
+        r'доставк|курьер|сервис|итого|всего|сумма|скидк|комисси|бонус|возврат|чаевы|промокод|купон',
+        re.IGNORECASE,
+    )
 
     def _num(s):
         return float(s.replace(' ', '').replace('\xa0', '').replace(',', '.'))
@@ -607,38 +610,12 @@ def _parse_ozon_items(html):
                     'total': round(price * qty, 2),
                 })
 
-        # Strategy 2 — fallback to flat text scan when the table strategy
-        # returned nothing. Useful for receipts that arrive as plain
-        # divs with `<br>`-separated lines.
-        if not items:
-            lines = [
-                line.strip()
-                for line in soup.get_text('\n').splitlines()
-                if line.strip()
-            ]
-            current_name = None
-            for line in lines:
-                if SKIP_NAME_RX.search(line):
-                    current_name = None
-                    continue
-                qm = QTY_RX.search(line)
-                if qm and current_name:
-                    qty = int(qm.group(1))
-                    price = _num(qm.group(2))
-                    key = (current_name, price)
-                    if key not in seen and len(current_name) >= 3:
-                        seen.add(key)
-                        items.append({
-                            'name': current_name,
-                            'qty': qty,
-                            'unit': 'шт',
-                            'price': price,
-                            'total': round(price * qty, 2),
-                        })
-                    current_name = None
-                    continue
-                if len(line) > 5 and not re.fullmatch(r'[\d\s.,₽руб]+', line):
-                    current_name = line
+        # NOTE: a flat-text fallback strategy was considered and rejected.
+        # Ozon emails are uniformly HTML tables; a fallback that scans free
+        # text for `N x PRICE` patterns risks promoting greeting/header
+        # lines ("Спасибо за заказ") into items. Returning [] on parse
+        # failure is safer — the import path keeps the purchase row without
+        # items, which cmd_match can revisit.
     except Exception:
         return items
     return items

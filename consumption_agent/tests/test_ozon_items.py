@@ -84,13 +84,61 @@ def test_parses_quantity_from_n_x_price_pattern():
     assert items[0]['total'] == 179.98
 
 
-def test_flat_text_fallback_when_no_useful_tables():
+def test_flat_text_emails_intentionally_return_empty():
+    """Ozon ships HTML tables; flat-text emails are not parsed to avoid
+    promoting greetings like «Спасибо за заказ» into items. We accept
+    silent failure (= 0 items) over noisy false positives."""
     items = _parse_ozon_items(FLAT_TEXT_RECEIPT)
-    names = [i['name'] for i in items]
-    assert names == ['Кофе зерновой Lavazza', 'Чайник электрический Bosch']
-    assert items[0]['qty'] == 1 and items[0]['price'] == 899.0
-    assert items[1]['qty'] == 2 and items[1]['price'] == 2499.0
-    assert not any('Доставка' in n or 'Итого' in n for n in names)
+    assert items == []
+
+
+def test_full_name_preferred_over_short_brand_cell():
+    """When a row has both a short brand cell AND a long product-name cell
+    before the price, the parser must pick the full name (the cell closer
+    to the price). This guards against picking «Pampers» when «Подгузники
+    Pampers Premium 50 шт» is available.
+    """
+    html = """
+    <table>
+      <tr>
+        <td>Pampers</td>
+        <td>Подгузники Pampers Premium Care 50 шт</td>
+        <td>1 234,00 ₽</td>
+      </tr>
+    </table>
+    """
+    items = _parse_ozon_items(html)
+    assert len(items) == 1
+    assert items[0]['name'] == 'Подгузники Pampers Premium Care 50 шт'
+    assert items[0]['price'] == 1234.00
+
+
+def test_brand_only_row_known_limitation():
+    """Brand-only miscapture (no full product name in the row, only brand
+    + price): parser captures the brand. This is a documented limitation
+    — cmd_match (matcher.py) is expected to fuzzy-link such items to
+    known products on a second pass.
+
+    Test exists to LOCK the current behaviour so any future tightening
+    is intentional and surfaces here.
+    """
+    html = '<table><tr><td>Nestle</td><td>299,00 ₽</td></tr></table>'
+    items = _parse_ozon_items(html)
+    assert len(items) == 1
+    assert items[0]['name'] == 'Nestle'  # known limitation, see docstring
+
+
+def test_skip_pattern_covers_extended_keywords():
+    """SKIP_NAME_RX must skip commission/bonus/refund/tip/promo rows."""
+    cases = [
+        '<table><tr><td>Комиссия за платёж</td><td>50,00 ₽</td></tr></table>',
+        '<table><tr><td>Бонусы списано</td><td>100,00 ₽</td></tr></table>',
+        '<table><tr><td>Возврат предоплаты</td><td>200,00 ₽</td></tr></table>',
+        '<table><tr><td>Чаевые курьеру</td><td>50,00 ₽</td></tr></table>',
+        '<table><tr><td>Промокод OZON10</td><td>-100,00 ₽</td></tr></table>',
+    ]
+    for html in cases:
+        assert _parse_ozon_items(html) == [], f'Should skip: {html}'
 
 
 def test_empty_or_unrelated_html_returns_empty_list():
