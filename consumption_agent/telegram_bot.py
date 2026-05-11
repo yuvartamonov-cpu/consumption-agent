@@ -803,18 +803,21 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tags = ', '.join(parsed.get('style_tags', [])) or '—'
             topic = parsed.get('topic') or '—'
             desc = vision_info.get('description', '')
-            name = vision_info.get('name', '')
+            # Название: из caption (brand_parser) или Vision
+            name = parsed.get('item_name') or vision_info.get('name', '')
+            # Бренд: из caption (brand_parser) приоритетнее Vision
+            brand = parsed.get('brand') or vision_info.get('brand')
 
             parts = [f'🧠 Memory Lane #{item_id}']
             if name:
                 parts.append(f'📌 {name}')
+            if brand:
+                parts.append(f'🏷️ Бренд: {brand}')
             parts.append(f'Реакция: {liked}')
             parts.append(f'Стиль: {tags}')
             parts.append(f'Тема: {topic}')
             if desc:
                 parts.append(f'📝 {desc}')
-            if vision_info.get('brand'):
-                parts.append(f'🏷️ Бренд: {vision_info["brand"]}')
             if vision_info.get('estimated_price_rub'):
                 parts.append(f'💰 Оценка: ~{vision_info["estimated_price_rub"]} ₽')
 
@@ -1741,67 +1744,12 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Парсим поля
-    # Поддерживаем форматы:
-    #   "Название"
-    #   "Название | бренд X | замена Y мес"
-    #   "Название бренд X" (если X не похож на срок)
-    #   "Название замена Y мес" / "Название на Y месяца"
-    name = text
-    brand = None
-    replace_months = None
-
-    # Сначала пробуем разделитель |
-    if '|' in text:
-        parts = [p.strip() for p in text.split('|')]
-        name = parts[0]
-        for p in parts[1:]:
-            pl = p.lower()
-            if pl.startswith('бренд'):
-                brand = p[5:].strip()
-            elif pl.startswith(('замена', 'на ')):
-                m = re.search(r'(\d+)\s*(?:мес|m|месяц|месяца|лет|год[а]?|г)', pl)
-                if m:
-                    val = int(m.group(1))
-                    unit = (m.group(2) or m.group(3) or '').lower() if m.lastindex and m.lastindex >= 2 else ''
-                    if unit in ('лет', 'год', 'г', 'года', 'годов'):
-                        replace_months = val * 12
-                    else:
-                        replace_months = val
-    else:
-        # Без разделителя: ищем ключевые слова в тексте
-        tl = text.lower()
-        # Ищем "замена" или "на" + число + единица (мес|m|месяц|месяца|лет|год|г)
-        duration_match = re.search(r'(?:замена|на)\s+(\d+)\s*(мес|m|месяц|месяца|лет|год[аов]?|г)\b', tl)
-        if duration_match:
-            val = int(duration_match.group(1))
-            unit = duration_match.group(2).lower()
-            if unit in ('лет', 'год', 'г', 'года', 'годов'):
-                replace_months = val * 12
-            else:
-                replace_months = val
-            # Убираем из названия
-            name = text[:duration_match.start()].strip().rstrip(',;')
-            # Проверяем, не осталось ли "бренд" перед этим
-            brand_match = re.search(r'(?:бренд|brand)\s+(.+)$', name, re.IGNORECASE)
-            if brand_match:
-                brand = brand_match.group(1).strip()
-                name = name[:brand_match.start()].strip().rstrip(',;')
-        else:
-            name = text
-
-        # Извлекаем бренд из name
-        name = name.strip()
-        m = re.search(r'(?:бренд|brand)\s+(.+)$', name, re.IGNORECASE)
-        if m:
-            brand = m.group(1).strip()
-            name = name[:m.start()].strip().rstrip(',;')
-        else:
-            # Если последнее слово похоже на бренд (заглавная или латиница)
-            m = re.search(r'\s+([A-ZА-Я][a-zа-яёA-ZА-Я0-9._\-]{1,30}|[a-z][a-z0-9._\-]{2,20})$', name)
-            if m:
-                brand = m.group(1).strip()
-                name = name[:m.start()].strip()
+    # Парсим поля через универсальный brand_parser
+    from brand_parser import parse_brand_and_name
+    bp = parse_brand_and_name(text)
+    name = bp['name'] or text
+    brand = bp['brand']
+    replace_months = bp['replace_months']
 
     # Нормализуем название — убираем лишнее
     name = name.strip().strip(',;')
@@ -1871,22 +1819,22 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
-    # Если есть фото — сохраняем
+    # Если есть фото — сохраняем и обогащаем через Vision API
     has_photo = False
+    vision_enriched = {}
     if update.message and update.message.photo:
         try:
             photos = update.message.photo
-            best = photos[-1]  # самое большое
+            best = photos[-1]
             file = await best.get_file()
             file_bytes = await file.download_as_bytearray()
 
-            # Сохраняем через memory_lane.save_media или напрямую
+            # Сохраняем фото
             import memory_lane as _ml
             media_dir = os.path.join(os.path.dirname(DB_PATH), 'data', 'media')
             mconn = get_db()
             try:
                 asset_id = _ml.save_media(mconn, file_bytes, mime='image/jpeg', base_dir=media_dir)
-                # Связываем с item
                 if asset_id:
                     mconn.execute(
                         'INSERT OR IGNORE INTO item_photos (item_id, media_asset_id, is_primary) VALUES (?, ?, 1)',
@@ -1895,6 +1843,35 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     has_photo = True
             finally:
                 mconn.close()
+
+            # Vision API обогащение: бренд, цвет, описание
+            try:
+                tmp_path = os.path.join(RECEIPTS_DIR, f'_additem_{update.message.message_id}.jpg')
+                with open(tmp_path, 'wb') as fh:
+                    fh.write(file_bytes)
+                from vision_item import recognize_item
+                vision_enriched = recognize_item(tmp_path)
+                os.remove(tmp_path)
+                if vision_enriched and 'error' not in vision_enriched:
+                    # Бренд из текста приоритетнее, Vision как fallback
+                    if not brand and vision_enriched.get('brand'):
+                        brand = vision_enriched['brand']
+                    # Обновляем запись в БД
+                    uconn = get_db()
+                    attrs = json.dumps({
+                        'color': vision_enriched.get('color'),
+                        'description': vision_enriched.get('description'),
+                        'style_tags': vision_enriched.get('style_tags', []),
+                        'material': vision_enriched.get('material'),
+                    }, ensure_ascii=False)
+                    uconn.execute(
+                        'UPDATE items SET brand=COALESCE(?, brand), attributes=? WHERE id=?',
+                        (brand, attrs, item_id))
+                    uconn.commit()
+                    uconn.close()
+                    log.info(f'Vision enriched add_item #{item_id}: brand={brand}')
+            except Exception as e:
+                log.warning(f'Vision enrich for add_item failed: {e}')
         except Exception as e:
             log.warning(f'add_item photo save failed: {e}')
 
@@ -1904,7 +1881,16 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f'🏷 Бренд: {brand}')
     lines.append(f'📂 Категория: {category}')
     if replace_months:
-        lines.append(f'🔄 Замена: через {replace_months} мес. (примерно: расход/износ)')
+        lines.append(f'🔄 Замена: через {replace_months} мес.')
+    if vision_enriched and 'error' not in vision_enriched:
+        if vision_enriched.get('color'):
+            lines.append(f'🎨 Цвет: {vision_enriched["color"]}')
+        if vision_enriched.get('description'):
+            lines.append(f'📝 {vision_enriched["description"]}')
+        if vision_enriched.get('style_tags'):
+            lines.append(f'🏷️ Теги: {", ".join(vision_enriched["style_tags"])}')
+        if vision_enriched.get('estimated_price_rub'):
+            lines.append(f'💰 Оценка: ~{vision_enriched["estimated_price_rub"]} ₽')
     if has_photo:
         lines.append('📸 Фото сохранено')
     lines.append(f'\nID: {item_id}')

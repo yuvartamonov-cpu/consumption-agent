@@ -207,9 +207,20 @@ def parse_caption(text: str | None, conn: sqlite3.Connection | None = None) -> d
     Если передан conn, сначала проверяет таблицу topic_rules (user-правила),
     потом статические TOPIC_RULES.
     """
-    out = {'liked': [], 'disliked': [], 'style_tags': [], 'topic': None}
+    out = {'liked': [], 'disliked': [], 'style_tags': [], 'topic': None,
+           'item_name': None, 'brand': None, 'replace_months': None}
     if not text:
         return out
+
+    # Извлекаем название и бренд через brand_parser
+    try:
+        from brand_parser import parse_brand_and_name
+        bp = parse_brand_and_name(text)
+        out['item_name'] = bp.get('name')
+        out['brand'] = bp.get('brand')
+        out['replace_months'] = bp.get('replace_months')
+    except Exception:
+        pass
 
     lowered = text.lower()
 
