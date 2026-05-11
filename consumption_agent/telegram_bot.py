@@ -1418,6 +1418,119 @@ async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'❌ Ошибка: {e}')
 
 
+async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /debts — кредиты к оплате в ближайшие 30 дней"""
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT id, sender_name, payment_amount, payment_date,
+                   CAST(julianday(payment_date) - julianday('now') AS INTEGER) as days_left
+            FROM credit_alerts
+            WHERE is_active = 1 AND paid_confirmed_at IS NULL
+              AND payment_date NOT NULL AND payment_date != ''
+              AND julianday(payment_date) - julianday('now') <= 30
+            ORDER BY payment_date
+        """).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text('✅ Нет активных кредитных платежей на ближайшие 30 дней.')
+        return
+
+    lines = ['💳 *Кредиты к оплате (30 дней):*']
+    total = 0.0
+    urgent_count = 0
+    for r in rows:
+        rid, sender, amount, pay_date, days = r
+        if days < 0:
+            prefix = '🔴 ПРОСРОЧЕН'
+            urgent_count += 1
+        elif days <= 3:
+            prefix = '🟡 СРОЧНО'
+            urgent_count += 1
+        elif days <= 7:
+            prefix = '🟢 На этой неделе'
+        else:
+            prefix = '⚪'
+
+        amount_str = f'{amount:.2f} ₽' if amount else '—'
+        date_str = pay_date or '—'
+        days_str = f'(через {days} дн.)' if days >= 0 else f'(просрочено {-days} дн.)'
+        lines.append(f'\n{prefix} *{sender}* — {amount_str}')
+        lines.append(f'   📅 {date_str} {days_str}')
+
+        if amount:
+            total += amount
+
+    lines.append(f'\n💰 *Итого: {total:.2f} ₽*')
+    if urgent_count:
+        lines.append(f'⚠️ {urgent_count} платеж(а/ей) требуют внимания!')
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+
+async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /fines — неоплаченные и свежие штрафы"""
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT id, type, number, amount, description, vehicle, fine_date, vendor, paid_confirmed_at
+            FROM fines
+            WHERE (type IN ('new') OR (type IN ('paid') AND paid_confirmed_at IS NULL))
+            ORDER BY fine_date DESC
+        """).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text('✅ Нет неоплаченных штрафов.')
+        return
+
+    # Группируем по номеру — берём последний статус
+    by_number = {}
+    for r in rows:
+        num = r[2] or str(r[0])
+        by_number[num] = r  # последний wins (DESC по дате)
+
+    active = []
+    for r in by_number.values():
+        if r[1] != 'new' and r[8] is not None:
+            continue  # уже подтверждено
+        active.append(r)
+
+    if not active:
+        await update.message.reply_text('✅ Нет неоплаченных штрафов.')
+        return
+
+    lines = ['🚨 *Штрафы:*']
+    total = 0.0
+
+    for r in active:
+        amount = r[3] or 0
+        desc = (r[4] or '')[:100]
+        date_str = r[6] or '—'
+        vendor = (r[7] or '')[:50]
+        veh = (r[5] or '')[:15]
+
+        prefix = '🔴' if r[1] == 'new' else '✅'
+        status = 'Новый' if r[1] == 'new' else 'Оплачен (не подтверждён)'
+        lines.append(f'\n{prefix} {amount:.0f} ₽ — {status}')
+        if desc:
+            lines.append(f'   📋 {desc}')
+        lines.append(f'   📅 {date_str}')
+        if veh:
+            lines.append(f'   🚗 {veh}')
+        if vendor:
+            lines.append(f'   🏛 {vendor}')
+
+        total += amount
+
+    lines.append(f'\n💰 *Итого: {total:.2f} ₽*')
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+
 async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /warranties — отчёт по гарантиям."""
     try:
@@ -1446,6 +1559,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/alerts — алерты (гарантии, сроки)\n'
         '/find_car 3ч 80км — подбор тарифа каршеринга\n'
         '/last_drives — последние поездки каршеринга (все провайдеры)\n'
+        '/debts — кредиты к оплате в ближайшие 30 дней\n'
+        '/fines — неоплаченные штрафы\n'
         '/warranties — отчёт по гарантиям\n'
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
         '/add_photo — загрузить фото чека (OCR)\n'
@@ -1771,6 +1886,8 @@ def main():
     app.add_handler(CommandHandler('add', cmd_add))
     app.add_handler(CommandHandler('add_photo', add_photo))
     app.add_handler(CommandHandler('parse', cmd_parse))
+    app.add_handler(CommandHandler('debts', cmd_debts))
+    app.add_handler(CommandHandler('fines', cmd_fines))
     app.add_handler(CommandHandler('warranties', cmd_warranties))
     app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
     app.add_handler(CommandHandler('ml_last', cmd_ml_last))
