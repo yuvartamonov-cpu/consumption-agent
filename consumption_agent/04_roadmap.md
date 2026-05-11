@@ -23,7 +23,7 @@
   - [ ] `development_workflow.md`
 - [ ] `.env.example` (без секретов)
 - [ ] `README.md` — общее описание проекта
-- [ ] **CLI** `consumption status|doctor|check-db|backup-now|restart-bot`
+- [x] **CLI** `consumption status|doctor|check-db|backup-now|restart-bot` (YUR-70, commit pending)
 - [ ] **Backup script** (шифрованный `.backup` по расписанию)
 - [ ] **Tests baseline** — хотя бы минимальные тесты на существующую логику
 - [ ] **Pre-commit hook** для py_compile + secret scanning

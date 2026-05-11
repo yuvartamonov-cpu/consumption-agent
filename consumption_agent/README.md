@@ -104,6 +104,21 @@ consumption check-db
 - Privacy router для LLM (local/cloud/anonymous)
 - Governance слой — action_proposals до выполнения
 
+## CLI (Phase A, added 11.05.2026)
+
+Single-binary maintenance tool. Use instead of poking sqlite/systemctl by hand.
+
+```bash
+python3 cli.py status         # DB snapshot + bot service state
+python3 cli.py doctor         # env / deps / IMAP / disk / git hook checks
+python3 cli.py check-db       # PRAGMA integrity_check + page/index report
+python3 cli.py backup-now     # timestamped .backup into backups/  (--keep N)
+python3 cli.py restart-bot    # systemctl --user restart consumption-bot.service
+```
+
+Exit code 0 on success, non-zero on failure — safe for cron / pre-deploy gates.
+Backups are pruned to the last N (default 10).
+
 ## Memory Lane (Phase B fast path, added 11.05.2026)
 
 Отправь боту фото с подписью — он сохранит в Memory Lane, если в caption
