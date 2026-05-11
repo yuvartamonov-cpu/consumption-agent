@@ -271,6 +271,53 @@ python3 scripts/scan_sms_3mo.py # или с изменённым WINDOWS_PHONE_L
 4. **Новый паттерн напоминания** → добавить в `CREDIT_REMINDER_PATTERNS`
 5. **Новый паттерн обычного уведомления** → добавить в `BANK_NOTIFICATION_PATTERNS`
 
+### Валидация: проверка спама на пропущенные кредиты
+
+После каждого сканирования необходимо убедиться, что в спам/рекламу не попали
+настоящие кредитные напоминания.
+
+**Команда для проверки 200 последних SMS из каждого профиля:**
+```bash
+cd ~/.openclaw/workspace/consumption_agent/scripts
+python3 << 'PYEOF'
+import sys, sqlite3
+sys.path.insert(0, '.')
+from cleanup_alerts import classify_alert, Category
+from scan_sms_3mo import detect_sender_name
+
+db = sqlite3.connect('/tmp/phone_link_backup/phone_new.db')
+db.row_factory = sqlite3.Row
+
+for label, where in [("НОВЫЙ", "message_id >= 12040"), ("СТАРЫЙ", "message_id < 12040")]:
+    msgs = db.execute(
+        f"SELECT message_id, from_address, body FROM message WHERE {where}"
+        " ORDER BY message_id DESC LIMIT 200"
+    ).fetchall()
+    
+    credits = []
+    for msg in msgs:
+        sn = detect_sender_name(msg['from_address'], msg['body'])
+        cat = classify_alert(msg['message_id'], 'sms', sn, '', msg['body'], None)
+        if cat == Category.REAL_CREDIT:
+            credits.append((msg['message_id'], msg['from_address'], sn, msg['body'][:70]))
+    
+    print(f"[{label}] {len(msgs)} SMS: {len(credits)} кредитов, {len(msgs)-len(credits)} спам")
+    for c in credits:
+        print(f"  🟢 #{c[0]} | {c[1]:15s} → {c[2]:10s} | {c[3]}")
+    print()
+
+db.close()
+PYEOF
+```
+
+**Проверять:**
+- После добавления нового паттерна в `CREDIT_REMINDER_PATTERNS`
+- После добавления нового отправителя в `CREDIT_SENDERS`
+- Периодически (раз в месяц) — чтобы не накопились пропущенные
+- При жалобе пользователя на пропущенный алерт
+
+**Ожидаемый результат:** 0 кредитов в AD-выборке.
+
 ### Запись в БД
 
 После сканирования, реальные кредитные напоминания записываются в `credit_alerts`:
