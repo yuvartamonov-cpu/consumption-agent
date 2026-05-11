@@ -895,11 +895,25 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 log.warning(f"Failed to send image {engine_url}: {e}")
         return
 
-    # === Если НЕ бирка — старая логика обработки чека ===
-    items = _parse_receipt_lines(text, total_amount)
-    if not total_amount and text:
-        # fallback: ищем сумму после ИТОГ или последнюю большую
-        m = re.search(r'ИТОГ[^\d]*([\d]+[.,]\d{2})', text)
+    # === Если НЕ бирка — используем новый OCR-пайплайн ===
+    try:
+        from scripts import receipt_ocr
+        ocr_result = receipt_ocr.process_receipt(receipt_path)
+        if ocr_result.ocr_score >= 30 and (ocr_result.items or ocr_result.total):
+            items = [{'name': it.name, 'price': it.price, 'qty': it.qty, 'total': it.total} for it in ocr_result.items]
+            total_amount = total_amount or ocr_result.total
+            receipt_date = receipt_date or ocr_result.date
+            shop = ocr_result.shop or shop
+            log.info(f"receipt_ocr: {ocr_result.shop}, {len(items)} items, total={ocr_result.total}, score={ocr_result.ocr_score}")
+        else:
+            log.warning(f"receipt_ocr: low score {ocr_result.ocr_score}, fallback to old parser")
+            items = _parse_receipt_lines(text or '', total_amount)
+    except Exception as e:
+        log.warning(f"receipt_ocr failed: {e}")
+        items = _parse_receipt_lines(text or '', total_amount)
+
+    if not total_amount:
+        m = re.search(r'ИТОГ[О]?[^\d]*([\d]+[.,]\d{2})', text or '')
         if m:
             total_amount = float(m.group(1).replace(',', '.'))
 
