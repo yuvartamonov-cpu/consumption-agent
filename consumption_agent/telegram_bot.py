@@ -18,8 +18,37 @@ from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
 
-from telegram import Update, PhotoSize
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+def parse_drive_request(text: str):
+    """Парсит '3ч 80км' или '2 часа 60 км'"""
+    hours = None
+    km = None
+    t = text.lower()
+    h_match = re.search(r'(\d+)[\s]*(?:ч|час|часа|часов|h)', t)
+    k_match = re.search(r'(\d+)[\s]*(?:км|km)', t)
+    if h_match:
+        hours = float(h_match.group(1))
+    if k_match:
+        km = float(k_match.group(1))
+    return hours, km
+
+
+def calculate_drive_cost(tariff, hours, km):
+    """Расчёт стоимости поездки по тарифу провайдера."""
+    provider = tariff['provider']
+    h_rate = tariff['hourly_rate'] or 0
+    km_rate = tariff['km_rate'] or 0
+
+    if provider == 'yandex':
+        # Bay 24: flat 763₽/сутки + 13.5₽/км
+        base = h_rate + km * km_rate
+    else:
+        # per-minute providers
+        base = h_rate * hours + km * km_rate
+
+    return max(round(base, -1), 500)  # округляем до 10₽, минимум 500₽
+
+from telegram import Update, PhotoSize, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -36,6 +65,34 @@ RECEIPTS_DIR = os.path.join(SCRIPT_DIR, 'receipts')
 Path(RECEIPTS_DIR).mkdir(exist_ok=True)
 TOKEN = os.environ.get('CONSUMPTION_BOT_TOKEN', '')
 OWNER_CHAT_ID = int(os.environ.get('OWNER_CHAT_ID', '1477860192'))
+
+
+def get_credit_alert(alert_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        'SELECT id, sender_name, payment_date, payment_amount, paid_confirmed_at FROM credit_alerts WHERE id = ?',
+        (alert_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def confirm_credit_alert_paid(alert_id: int, via: str = 'telegram_button') -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute(
+        '''
+        UPDATE credit_alerts
+        SET paid_confirmed_at = datetime('now'),
+            paid_confirmed_via = ?,
+            is_active = 0
+        WHERE id = ? AND paid_confirmed_at IS NULL
+        ''',
+        (via, alert_id)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
 
 
 def decode_qr(image_path: str) -> dict:
@@ -504,6 +561,10 @@ def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 log = logging.getLogger(__name__)
+# Avoid leaking bot token via verbose HTTP client logs
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('telegram').setLevel(logging.INFO)
 
 def generate_alerts() -> int:
     """Generate daily alerts: warranty + expiry + low_stock."""
@@ -569,16 +630,8 @@ def get_db(max_retries=3, delay=1):
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        '🛒 Consumption Agent\n\n'
-        'Команды:\n'
-        '/list — инвентарь по категориям\n'
-        '/alerts — алерты (гарантии, сроки)\n'
-        '/find_car — последние поездки Яндекс Драйв\n'
-        '/warranties — отчёт по гарантиям\n'
-        '/add <название> [<цена>] [<категория>] — добавить товар\n'
-        '/add_photo — загрузить фото чека (OCR)\n'
-        '/check — статистика\n'
-        '/help — это сообщение'
+        '🛒 Привет, это Consumption Agent.\n'
+        'Для списка команд: /help'
     )
 
 async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -828,75 +881,111 @@ def _extract_drive_field(patterns: list[str], text: str | None) -> str | None:
     return None
 
 
-async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /find_car — показывает последние поездки Яндекс Драйв."""
+async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /last_drives — показывает последние поездки всех провайдеров каршеринга."""
     conn = get_db()
-    limit = 5
+    limit = 10
     if ctx.args and ctx.args[0].isdigit():
-        limit = max(1, min(int(ctx.args[0]), 20))
+        limit = max(1, min(int(ctx.args[0]), 30))
 
-    rows = conn.execute(
-        """
-        SELECT purchase_date, total_amount, source, store_name, notes
-        FROM purchases
-        WHERE deleted_at IS NULL
-          AND (
-            lower(COALESCE(source, '')) LIKE '%yandex_drive%'
-            OR lower(COALESCE(source, '')) LIKE '%yandex%drive%'
-            OR lower(COALESCE(store_name, '')) LIKE '%драйв%'
-            OR lower(COALESCE(store_name, '')) LIKE '%drive%'
-            OR lower(COALESCE(notes, '')) LIKE '%драйв%'
-            OR lower(COALESCE(notes, '')) LIKE '%drive%'
-          )
-        ORDER BY COALESCE(purchase_date, created_at) DESC, id DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
+    provider_filter = ctx.args[1] if len(ctx.args) > 1 else None
+    if provider_filter:
+        rows = conn.execute(
+            """
+            SELECT date_start, date_end, car_model, car_plate, 
+                   distance_km, tariff, base_cost, insurance, 
+                   over_minutes_cost, discounts, total, source
+            FROM carsharing_trips
+            WHERE source = ?
+            ORDER BY date_start DESC
+            LIMIT ?
+            """,
+            (provider_filter, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT date_start, date_end, car_model, car_plate, 
+                   distance_km, tariff, base_cost, insurance, 
+                   over_minutes_cost, discounts, total, source
+            FROM carsharing_trips
+            ORDER BY date_start DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
     conn.close()
 
     if not rows:
         await update.message.reply_text(
-            "🚗 Поездки Яндекс Драйв не найдены.\n"
-            "Импортируйте письма/чеки Яндекс и попробуйте снова: /find_car 10"
+            "🚗 Поездки не найдены.\n"
+            "Команда: /last_drives [количество] [провайдер]\n"
+            "Провайдеры: yandex_drive, citydrive, belka, delimobil"
         )
         return
 
-    lines = [f"🚗 Последние поездки Яндекс Драйв ({len(rows)}):", ""]
-    for idx, row in enumerate(rows, start=1):
-        notes = row["notes"] or ""
-        model = _extract_drive_field(
-            [
-                r"(?:авто|машин[аы]|модель)\s*[:\-]\s*([^\n,;]+)",
-                r"(Volkswagen|Skoda|Kia|Hyundai|BMW|Mercedes|Audi|Renault|Nissan|Toyota|Haval|Geely)\s+[A-Za-zА-Яа-я0-9\- ]+",
-            ],
-            notes,
-        ) or "не указано"
-        route = _extract_drive_field(
-            [
-                r"(?:маршрут|поездка|откуда\s*[-–]\s*куда)\s*[:\-]\s*([^\n]+)",
-                r"(?:из|от)\s+([^\n,;]+?\s+(?:в|до)\s+[^\n,;]+)",
-            ],
-            notes,
-        ) or "не указан"
-        duration = _extract_drive_field(
-            [
-                r"(?:длительность|время)\s*[:\-]\s*([^\n,;]+)",
-                r"(\d+\s*(?:мин|ч|час(?:а|ов)?)(?:\s*\d+\s*мин)?)",
-            ],
-            notes,
-        ) or "не указана"
-        amount = f'{row["total_amount"]:.0f} ₽' if row["total_amount"] else "не указана"
-        dt = (row["purchase_date"] or "дата не указана")[:16]
+    provider_names = {
+        'yandex_drive': 'Яндекс Драйв',
+        'citydrive': 'Ситидрайв',
+        'belka': 'BelkaCar',
+    }
 
-        lines.append(f"{idx}. {dt}")
-        lines.append(f"   Модель: {model}")
-        lines.append(f"   Маршрут: {route}")
-        lines.append(f"   Длительность: {duration}")
-        lines.append(f"   Стоимость: {amount}")
+    lines = [f"🚗 Последние поездки ({len(rows)}):", ""]
+    for idx, row in enumerate(rows, start=1):
+        dt = (row["date_start"] or "")[:10]
+        provider_name = provider_names.get(row['source'], row['source'])
+        car = row["car_model"] or "—"
+        km = f'{row["distance_km"]:.0f} км' if row["distance_km"] else "—"
+        total = f'{row["total"]:.0f} ₽' if row["total"] else "—"
+        plate = f'({row["car_plate"]})' if row["car_plate"] else ""
+
+        lines.append(f"{idx}. {dt} | {provider_name}")
+        lines.append(f"   {car} {plate} • {km} • {total}")
         lines.append("")
 
     await update.message.reply_text("\n".join(lines).rstrip())
+
+
+async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /find_car — рекомендации по тарифам каршеринга (время + км)."""
+    args = " ".join(ctx.args) if ctx.args else ""
+    hours, km = parse_drive_request(args)
+
+    if hours is None or km is None:
+        await update.message.reply_text(
+            "🚗 Использование:\n"
+            "/find_car 3ч 80км\n"
+            "/find_car 2 часа 60 км\n\n"
+            "Укажи время и расстояние."
+        )
+        return
+
+    conn = get_db()
+    tariffs = conn.execute(
+        "SELECT * FROM carsharing_tariffs WHERE zone = 'msk' ORDER BY provider"
+    ).fetchall()
+    conn.close()
+
+    if not tariffs:
+        await update.message.reply_text("Тарифы не загружены. Добавь их в БД.")
+        return
+
+    provider_names = {
+        'yandex': 'Яндекс Драйв',
+        'citydrive': 'Ситидрайв',
+        'belka': 'BelkaCar',
+        'delimobil': 'Делимобиль',
+    }
+
+    lines = [f"🚗 Рекомендации на {hours}ч / {km}км:\n"]
+    for t in tariffs:
+        cost = calculate_drive_cost(t, hours, km)
+        name = provider_names.get(t['provider'], t['provider'].upper())
+        lines.append(f"• {name}: ~{cost:.0f} ₽")
+
+    lines.append("\n(реальная стоимость может отличаться)")
+    await update.message.reply_text("\n".join(lines))
+
 
 async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /check — расширенный PDF-отчёт."""
@@ -1147,7 +1236,19 @@ async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'❌ Ошибка: {e}')
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await start(update, ctx)
+    await update.message.reply_text(
+        '🛒 Consumption Agent\n\n'
+        'Команды:\n'
+        '/list — инвентарь по категориям\n'
+        '/alerts — алерты (гарантии, сроки)\n'
+        '/find_car 3ч 80км — подбор тарифа каршеринга\n'
+        '/last_drives — последние поездки каршеринга (все провайдеры)\n'
+        '/warranties — отчёт по гарантиям\n'
+        '/add <название> [<цена>] [<категория>] — добавить товар\n'
+        '/add_photo — загрузить фото чека (OCR)\n'
+        '/check — статистика\n'
+        '/help — это сообщение'
+    )
 
 
 async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1183,6 +1284,62 @@ async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
+
+async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('credit_paid:'):
+        return
+
+    try:
+        alert_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный alert id', show_alert=True)
+        return
+
+    row = get_credit_alert(alert_id)
+    if not row:
+        await query.answer('⚠️ Алерт не найден', show_alert=True)
+        return
+
+    if row['paid_confirmed_at']:
+        await query.answer('✅ Уже отмечено как оплачено')
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    changed = confirm_credit_alert_paid(alert_id)
+    if not changed:
+        await query.answer('⚠️ Не удалось обновить статус', show_alert=True)
+        return
+
+    paid_note = '\n\n✅ <b>Отмечено как оплачено вручную</b>'
+    base_text = html.escape((query.message.text or '').rstrip())
+    new_text = base_text + paid_note
+    try:
+        await query.edit_message_text(
+            new_text,
+            parse_mode='HTML',
+            reply_markup=None,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    await query.answer('✅ Платёж отмечен как оплаченный')
+
 def main():
     if not TOKEN:
         print('❌ Укажите CONSUMPTION_BOT_TOKEN')
@@ -1215,6 +1372,7 @@ def main():
     app.add_handler(CommandHandler('alerts', cmd_alerts))
     app.add_handler(CommandHandler('parse', cmd_parse))
     app.add_handler(CommandHandler('check', cmd_check))
+    app.add_handler(CommandHandler('last_drives', cmd_last_drives))
     app.add_handler(CommandHandler('find_car', cmd_find_car))
     app.add_handler(CommandHandler('add', cmd_add))
     app.add_handler(CommandHandler('add_photo', add_photo))
@@ -1223,13 +1381,21 @@ def main():
     app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
     app.add_handler(CommandHandler('help', cmd_help))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()
 
-    # Schedule daily checks at 09:00 local server time
+    # Schedule daily checks at 09:00 local server time when JobQueue is available
     from datetime import time as dt_time
-    app.job_queue.run_daily(run_daily_alert_job, time=dt_time(hour=9, minute=0, second=0), name='daily_alert_checks')
+    if app.job_queue is not None:
+        app.job_queue.run_daily(
+            run_daily_alert_job,
+            time=dt_time(hour=9, minute=0, second=0),
+            name='daily_alert_checks'
+        )
+    else:
+        log.warning('JobQueue is unavailable; skipping in-process daily schedule')
 
     log.info(f'Bot started, polling... (alerts at startup: {gen})')
     app.run_polling()

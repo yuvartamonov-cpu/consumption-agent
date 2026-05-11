@@ -41,6 +41,16 @@
 - rapidfuzz — установлен, порог 70, +86 новых совпадений
 - PDF-отчёт — базовая версия (статистика, категории, топ-10, алерты, гарантии, план)
 
+## 💳 Credit Monitor (новый, 11.05.2026)
+- **Модули:** `credit_monitor.py` (email), `sms_monitor.py` (Windows Phone Link), `credit_alerts.py` (отправка)
+- **Источники:** Gmail + Яндекс + 2×Mail.ru + SMS через Windows Phone Link
+- **Банки:** Сбербанк, Совкомбанк, ВТБ, Тинькофф, Альфа-Банк
+- **МФО:** Joy Finance, Turbozaim, Nebus Finance, Boostra, Эквазайм, Webzaim + автоопределение
+- **Расписание:** 10:00 и 18:00 через cron
+- **Предупреждение:** минимум за 3 дня до платежа
+- **Таблица:** `credit_alerts` в consumption.db
+- **Скрипт запуска:** `check_credit_alerts.sh`
+
 ## Технические детали
 - **PDF-генерация:** fpdf2 (fpdf), шрифт DejaVu, баг с символом \n (не критично)
 - **Telegram API:** python-telegram-bot (httpx), service не стартуется при отсутствии сети
