@@ -255,15 +255,21 @@ def parse_cheque(text: str, source: str = 'auto') -> list[dict]:
         if is_html:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(text, 'html.parser')
-            plain = soup.get_text(separator='\n', strip=True)
+            # Сначала ищем таблицу с КАССОВЫЙ ЧЕК (самый полный блок)
+            for table in soup.find_all('table'):
+                table_text = table.get_text(separator='\n', strip=True)
+                if 'КАССОВЫЙ ЧЕК' in table_text:
+                    plain = table_text
+                    break
+            else:
+                plain = soup.get_text(separator='\n', strip=True)
         else:
             plain = text
         
-        # Чистим
-        plain = _clean_text(plain) if not plain else plain
+        lines = [l.strip() for l in plain.split('\n') if l.strip()]
         
         # Пробуем все методы последовательно
-        items = _parse_ofd_text(plain.split('\n'))  # может сработать если структура похожа
+        items = _parse_ofd_text(lines)
         if not items:
             items = _parse_ozon_text(plain)
         if not items:
