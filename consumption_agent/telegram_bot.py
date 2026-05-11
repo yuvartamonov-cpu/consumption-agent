@@ -1569,6 +1569,333 @@ async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.error(f'cmd_warranties error: {e}')
         await update.message.reply_text(f'❌ Ошибка: {e}')
 
+
+async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /add_item — добавить вещь в инвентарь с фото, брендом и сроком замены.
+    Формат:
+      /add_item Название
+      /add_item Название | бренд Бренд | замена 60 мес
+      /add_item Название | бренд Бренд | замена 5 лет
+    Можно прикрепить фото к сообщению."""
+    text = ' '.join(ctx.args).strip()
+    if not text:
+        await update.message.reply_text(
+            '❌ Укажите название вещи\n\n'
+            'Пример:\n'
+            '/add_item Стремянка 5 ступеней\n'
+            '/add_item Пылесос | бренд Xiaomi | замена 60 мес\n'
+            '/add_item Носки | бренд Nike | замена 12 мес\n\n'
+            'Можно прикрепить фото к сообщению.'
+        )
+        return
+
+    # Парсим поля
+    # Поддерживаем форматы:
+    #   "Название"
+    #   "Название | бренд X | замена Y мес"
+    #   "Название бренд X" (если X не похож на срок)
+    #   "Название замена Y мес" / "Название на Y месяца"
+    name = text
+    brand = None
+    replace_months = None
+
+    # Сначала пробуем разделитель |
+    if '|' in text:
+        parts = [p.strip() for p in text.split('|')]
+        name = parts[0]
+        for p in parts[1:]:
+            pl = p.lower()
+            if pl.startswith('бренд'):
+                brand = p[5:].strip()
+            elif pl.startswith(('замена', 'на ')):
+                m = re.search(r'(\d+)\s*(?:мес|m|месяц|месяца|лет|год[а]?|г)', pl)
+                if m:
+                    val = int(m.group(1))
+                    unit = (m.group(2) or m.group(3) or '').lower() if m.lastindex and m.lastindex >= 2 else ''
+                    if unit in ('лет', 'год', 'г', 'года', 'годов'):
+                        replace_months = val * 12
+                    else:
+                        replace_months = val
+    else:
+        # Без разделителя: ищем ключевые слова в тексте
+        tl = text.lower()
+        # Ищем "замена" или "на" + число + единица (мес|m|месяц|месяца|лет|год|г)
+        duration_match = re.search(r'(?:замена|на)\s+(\d+)\s*(мес|m|месяц|месяца|лет|год[аов]?|г)\b', tl)
+        if duration_match:
+            val = int(duration_match.group(1))
+            unit = duration_match.group(2).lower()
+            if unit in ('лет', 'год', 'г', 'года', 'годов'):
+                replace_months = val * 12
+            else:
+                replace_months = val
+            # Убираем из названия
+            name = text[:duration_match.start()].strip().rstrip(',;')
+            # Проверяем, не осталось ли "бренд" перед этим
+            brand_match = re.search(r'(?:бренд|brand)\s+(.+)$', name, re.IGNORECASE)
+            if brand_match:
+                brand = brand_match.group(1).strip()
+                name = name[:brand_match.start()].strip().rstrip(',;')
+        else:
+            name = text
+
+        # Извлекаем бренд из name
+        name = name.strip()
+        m = re.search(r'(?:бренд|brand)\s+(.+)$', name, re.IGNORECASE)
+        if m:
+            brand = m.group(1).strip()
+            name = name[:m.start()].strip().rstrip(',;')
+        else:
+            # Если последнее слово похоже на бренд (заглавная или латиница)
+            m = re.search(r'\s+([A-ZА-Я][a-zа-яёA-ZА-Я0-9._\-]{1,30}|[a-z][a-z0-9._\-]{2,20})$', name)
+            if m:
+                brand = m.group(1).strip()
+                name = name[:m.start()].strip()
+
+    # Нормализуем название — убираем лишнее
+    name = name.strip().strip(',;')
+    if not name:
+        await update.message.reply_text('❌ Название не может быть пустым')
+        return
+
+    # Определяем категорию по ключевым словам в названии
+    cat_map = {
+        'стремян': 'cat_home', 'пылесос': 'cat_tech', 'утюг': 'cat_home',
+        'утюж': 'cat_home', 'фен': 'cat_cosmetics', 'расчес': 'cat_cosmetics',
+        'щётк': 'cat_home', 'зубн': 'cat_health_med', 'полотен': 'cat_home',
+        'постель': 'cat_home', 'простын': 'cat_home', 'наволочк': 'cat_home',
+        'одеял': 'cat_home', 'подушк': 'cat_home', 'ковёр': 'cat_home_furn',
+        'ковер': 'cat_home_furn', 'штора': 'cat_home_furn', 'светиль': 'cat_home_furn',
+        'лампа': 'cat_home_furn', 'люстр': 'cat_home_furn', 'торшер': 'cat_home_furn',
+        'кресл': 'cat_home_furn', 'диван': 'cat_home_furn', 'стол': 'cat_home_furn',
+        'стул': 'cat_home_furn', 'кроват': 'cat_home_furn', 'комод': 'cat_home_furn',
+        'тумб': 'cat_home_furn', 'шкаф': 'cat_home_furn', 'стеллаж': 'cat_home_furn',
+        'куртк': 'cat_clo_everyday', 'пальт': 'cat_clo_everyday', 'пухов': 'cat_clo_everyday',
+        'плащ': 'cat_clo_everyday', 'пиджак': 'cat_clo_everyday', 'костюм': 'cat_clo_everyday',
+        'джинс': 'cat_clo_everyday', 'брюк': 'cat_clo_everyday', 'штаны': 'cat_clo_everyday',
+        'футболк': 'cat_clo_everyday', 'рубашк': 'cat_clo_everyday', 'свитер': 'cat_clo_everyday',
+        'водолаз': 'cat_clo_everyday', 'толстов': 'cat_clo_everyday', 'худи': 'cat_clo_everyday',
+        'носк': 'cat_clo_underwear', 'трус': 'cat_clo_underwear', 'майк': 'cat_clo_underwear',
+        'ботинк': 'cat_clo_shoes', 'кроссов': 'cat_clo_shoes', 'туфл': 'cat_clo_shoes',
+        'сапог': 'cat_clo_shoes', 'тапк': 'cat_clo_shoes', 'шлёпан': 'cat_clo_shoes',
+        'шарф': 'cat_clo_access', 'шапк': 'cat_clo_access', 'ремен': 'cat_clo_access',
+        'перчат': 'cat_clo_access', 'сумк': 'cat_clo_access', 'рюкзак': 'cat_clo_access',
+        'часы': 'cat_clo_access', 'браслет': 'cat_clo_access', 'очк': 'cat_clo_access',
+        'телефон': 'cat_tech', 'ноутбук': 'cat_tech', 'планшет': 'cat_tech',
+        'наушник': 'cat_tech', 'колонк': 'cat_tech', 'роутер': 'cat_tech',
+        'монитор': 'cat_tech', 'клавиатур': 'cat_tech', 'мышк': 'cat_tech',
+        'камер': 'cat_tech', 'принтер': 'cat_tech', 'провод': 'cat_tech',
+        'зарядк': 'cat_tech', 'кабель': 'cat_tech', 'адаптер': 'cat_tech',
+        'холодиль': 'cat_tech', 'микроволн': 'cat_tech', 'тостер': 'cat_tech',
+        'блендер': 'cat_tech', 'кофемолк': 'cat_tech', 'чайник': 'cat_home_kitchen',
+        'сковород': 'cat_home_kitchen', 'кастрюл': 'cat_home_kitchen', 'нож': 'cat_home_kitchen',
+        'тарелк': 'cat_home_kitchen', 'кружк': 'cat_home_kitchen', 'чашк': 'cat_home_kitchen',
+        'косметик': 'cat_cosmetics', 'крем': 'cat_cosmetics', 'шампун': 'cat_cosmetics',
+        'кондиционер': 'cat_cosmetics', 'мыл': 'cat_cosmetics', 'дух': 'cat_cosmetics',
+        'игрушк': 'cat_hobbies', 'настольн': 'cat_hobbies', 'книг': 'cat_culture_books',
+        'корм': 'cat_pets', 'игрушк.*животн': 'cat_pets', 'лежак': 'cat_pets',
+    }
+    category = None
+    nl = name.lower()
+    for kw, cid in cat_map.items():
+        if kw in nl:
+            category = cid
+            break
+    if not category:
+        category = 'cat_other'
+
+    # Сохраняем в БД
+    conn = get_db()
+    try:
+        cur = conn.execute('''
+            INSERT INTO items
+                (name, brand, category_id, status, lifespan_months, purchase_date,
+                 notes, data_origin)
+            VALUES (?, ?, ?, 'in_use', ?, date('now'),
+                    ?, 'manual')
+        ''', (name, brand, category, replace_months,
+              f'Добавлено через /add_item'))
+        conn.commit()
+        item_id = cur.lastrowid
+    finally:
+        conn.close()
+
+    # Если есть фото — сохраняем
+    has_photo = False
+    if update.message and update.message.photo:
+        try:
+            photos = update.message.photo
+            best = photos[-1]  # самое большое
+            file = await best.get_file()
+            file_bytes = await file.download_as_bytearray()
+
+            # Сохраняем через memory_lane.save_media или напрямую
+            import memory_lane as _ml
+            media_dir = os.path.join(os.path.dirname(DB_PATH), 'data', 'media')
+            mconn = get_db()
+            try:
+                asset_id = _ml.save_media(mconn, file_bytes, mime='image/jpeg', base_dir=media_dir)
+                # Связываем с item
+                if asset_id:
+                    mconn.execute(
+                        'INSERT OR IGNORE INTO item_photos (item_id, media_asset_id, is_primary) VALUES (?, ?, 1)',
+                        (item_id, asset_id))
+                    mconn.commit()
+                    has_photo = True
+            finally:
+                mconn.close()
+        except Exception as e:
+            log.warning(f'add_item photo save failed: {e}')
+
+    # Формируем ответ
+    lines = [f'✅ Добавлено: *{name}*']
+    if brand:
+        lines.append(f'🏷 Бренд: {brand}')
+    lines.append(f'📂 Категория: {category}')
+    if replace_months:
+        lines.append(f'🔄 Замена: через {replace_months} мес. (примерно: расход/износ)')
+    if has_photo:
+        lines.append('📸 Фото сохранено')
+    lines.append(f'\nID: {item_id}')
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+
+async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /items — список вещей с группировкой и сроками замены.
+    /items — все вещи, которым скоро нужна замена
+    /items all — все вещи
+    /items <категория> — вещи по категории"""
+    conn = get_db()
+    try:
+        all_items = conn.execute('''
+            SELECT id, name, brand, category_id, lifespan_months,
+                   purchase_date, status, replace_after_months, notes
+            FROM items
+            WHERE deleted_at IS NULL AND is_delivery = 0
+              AND data_origin IN ('manual', 'local')
+            ORDER BY category_id, name
+        ''').fetchall()
+    finally:
+        conn.close()
+
+    if not all_items:
+        await update.message.reply_text('📭 В инвентаре пока нет вещей. Добавьте через /add_item')
+        return
+
+    today = datetime.now().date()
+
+    # Фильтр
+    args = ' '.join(ctx.args).lower() if ctx.args else ''
+    if args and args != 'all':
+        # Поиск по категории или названию
+        filtered = [r for r in all_items if args in (r[3] or '').lower() or args in (r[1] or '').lower()]
+    elif args == 'all':
+        filtered = all_items
+    else:
+        # По умолчанию: те, у кого есть replace_after_months или lifespan_months, и они истекают
+        filtered = []
+        for r in all_items:
+            rep = r[7] or r[4]  # replace_after_months, потом lifespan_months
+            if not rep:
+                continue
+            purchase = r[5]
+            if purchase:
+                try:
+                    pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
+                    replace_date = pd.replace(month=pd.month + rep) if pd.month + rep <= 12 else pd.replace(year=pd.year + 1, month=pd.month + rep - 12)
+                    # вычисляем месяц + rep месяцев
+                    m = pd.month + rep
+                    y = pd.year + (m - 1) // 12
+                    mo = ((m - 1) % 12) + 1
+                    replace_date = pd.replace(year=y, month=mo)
+                    days_left = (replace_date - today).days
+                    if days_left <= 90:  # ближайшие 3 месяца
+                        filtered.append((days_left, r))
+                except:
+                    pass
+        filtered.sort(key=lambda x: x[0])
+        filtered = [r[1] for r in filtered]
+        if not filtered:
+            # Если нет вещей к замене, показываем последние добавленные
+            filtered = all_items[-10:]
+
+    if not filtered:
+        await update.message.reply_text('📭 Ничего не найдено по вашему запросу.')
+        return
+
+    # Группируем по категориям
+    by_cat = {}
+    for r in filtered:
+        cat = r[3] or 'cat_other'
+        if cat not in by_cat:
+            by_cat[cat] = []
+        by_cat[cat].append(r)
+
+    # Человеческие названия категорий
+    cat_names = {
+        'cat_clo_everyday': '👕 Повседневная одежда',
+        'cat_clo_underwear': '👙 Нижнее бельё / носки',
+        'cat_clo_shoes': '👟 Обувь',
+        'cat_clo_access': '🧣 Аксессуары',
+        'cat_tech': '💻 Техника',
+        'cat_home': '🏠 Хозтовары',
+        'cat_home_furn': '🪑 Мебель',
+        'cat_home_kitchen': '🍳 Кухня',
+        'cat_cosmetics': '🧴 Косметика',
+        'cat_health_med': '💊 Здоровье',
+        'cat_culture_books': '📚 Книги',
+        'cat_hobbies': '🎮 Хобби',
+        'cat_pets': '🐾 Животные',
+        'cat_sport': '🏋️ Спорт',
+        'cat_auto': '🚗 Авто',
+        'cat_food': '🍎 Продукты',
+        'cat_other': '📦 Прочее',
+    }
+
+    lines = ['📋 *Инвентарь:*']
+    for cat, items in sorted(by_cat.items()):
+        cat_label = cat_names.get(cat, f'📁 {cat}')
+        lines.append(f'\n*{cat_label}:*')
+        for r in items:
+            name = r[1]
+            brand = r[2]
+            rep = r[7] or r[4]
+            purchase = r[5]
+
+            name_str = name
+            if brand:
+                name_str += f' ({brand})'
+
+            # Срок замены
+            if rep and purchase:
+                try:
+                    pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
+                    m = pd.month + rep
+                    y = pd.year + (m - 1) // 12
+                    mo = ((m - 1) % 12) + 1
+                    replace_date = pd.replace(year=y, month=mo)
+                    days = (replace_date - today).days
+                    if days <= 0:
+                        suffix = ' 🔴 Пора менять!'
+                    elif days <= 30:
+                        suffix = f' 🟡 Через {days} дн.'
+                    else:
+                        suffix = ''
+                except:
+                    suffix = ''
+            else:
+                suffix = ''
+
+            lines.append(f'  • {name_str}{suffix}')
+
+    lines.append(f'\nВсего: {len(filtered)} вещей')
+    if not args or args == 'all':
+        lines.append('\n/items all — показать всё')
+        lines.append('/items <категория> — фильтр')
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         '🛒 Consumption Agent\n\n'
@@ -1583,6 +1910,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
         '/add_photo — загрузить фото чека (OCR)\n'
         '/check — статистика\n'
+        '/add_item <название> [| бренд X] [| замена N мес] — добавить вещь в инвентарь\n'
+        '/items [all|категория] — инвентарь вещей по категориям\n'
         '/ml_last [N] — последние записи Memory Lane\n'
         '/topic_set <слово> <тема> — задать тему для слова\n'
         '/topic_list [тема] — показать все правила тем\n'
@@ -1902,6 +2231,8 @@ def main():
     app.add_handler(CommandHandler('last_drives', cmd_last_drives))
     app.add_handler(CommandHandler('find_car', cmd_find_car))
     app.add_handler(CommandHandler('add', cmd_add))
+    app.add_handler(CommandHandler('add_item', cmd_add_item))
+    app.add_handler(CommandHandler('items', cmd_items))
     app.add_handler(CommandHandler('add_photo', add_photo))
     app.add_handler(CommandHandler('parse', cmd_parse))
     app.add_handler(CommandHandler('debts', cmd_debts))
