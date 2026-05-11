@@ -33,3 +33,20 @@
 4. Telegram-бот: список вещей, алерты, `/list`, `/alerts`
 
 Всё. Никакой матрицы, никакого Memory Lane, никаких 6 фаз. Если этот slice окажется полезным — наращиваем. Если нет — пересматриваем.
+
+## Git pre-receive hook (added 11.05.2026)
+
+The bare repo at `C:\Users\Yuri Artamonov\CLaudeCodeConsumption\consumption_agent.git`
+has a `pre-receive` hook that rejects pushes containing `.py` files with `SyntaxError`.
+
+Run locally before pushing:
+
+```bash
+python3 -m py_compile <changed_file.py>
+```
+
+The hook was installed after commit `e2922a9` introduced SyntaxError into three
+files (`email_importer.py`, `import_ozon.py`, `ozon_cheques.py`) because
+`python -m py_compile` was not run before pushing. Tests on `telegram_bot.py`
+passed but the rest of the cron-import pipeline was silently broken until the
+next run.
