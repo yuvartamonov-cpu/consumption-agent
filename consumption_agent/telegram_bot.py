@@ -204,7 +204,7 @@ def _ocr_crop(image_path: str, box_ratio: tuple[float, float, float, float], lan
         crop.save(path)
         result = subprocess.run(
             ['tesseract', path, 'stdout', '-l', lang, '--oem', '1', '--psm', psm],
-            capture_output=True, text=True, check=False
+            capture_output=True, text=True, check=False, timeout=15
         )
         return _clean_ocr_lines(result.stdout.strip())
     except Exception as e:
@@ -271,14 +271,15 @@ def ocr_image(image_path: str) -> str:
             try:
                 result = subprocess.run(
                     ['tesseract', candidate, 'stdout', '-l', 'rus+eng', '--oem', '1', '--psm', psm],
-                    capture_output=True, text=True, check=True
+                    capture_output=True, text=True, check=True, timeout=15
                 )
                 text = _clean_ocr_lines(result.stdout.strip())
                 score = _score_ocr_text(text)
                 if score > best_score:
                     best_text = text
                     best_score = score
-            except (subprocess.CalledProcessError, FileNotFoundError):
+            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                log.warning(f'OCR timeout for {candidate} psm={psm}')
                 continue
 
     if not best_text:
@@ -358,7 +359,7 @@ def _extract_tag_size_from_image(image_path: str) -> str | None:
             for psm in ('6', '11'):
                 result = subprocess.run(
                     ['tesseract', path, 'stdout', '-l', 'eng', '--oem', '1', '--psm', psm, '-c', 'tessedit_char_whitelist=0123456789'],
-                    capture_output=True, text=True, check=False
+                    capture_output=True, text=True, check=False, timeout=15
                 )
                 nums = re.findall(r'\b(3[8-9]|4[0-9]|5[0-4])\b', result.stdout)
                 if nums:
@@ -692,19 +693,104 @@ logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('telegram').setLevel(logging.INFO)
 
 def generate_alerts() -> int:
-    """Generate daily alerts: warranty + expiry + low_stock."""
+    """Generate daily alerts: warranty + expiry + low_stock + replace."""
+    total = 0
+    # 1. Гарантии и сроки годности (warranty_check)
     try:
         from warranty_check import run_daily_alert_checks
-
         conn = get_db()
-        generated = run_daily_alert_checks(conn)
+        total = run_daily_alert_checks(conn)
         conn.close()
-        if generated:
-            log.info(f"Generated {generated} alerts")
-        return generated
     except Exception as e:
-        log.warning(f"generate_alerts failed: {e}")
+        log.warning(f"generate_alerts (warranty) failed: {e}")
+
+    # 2. Напоминания о замене вещей
+    try:
+        total += generate_replace_alerts()
+    except Exception as e:
+        log.warning(f"generate_alerts (replace) failed: {e}")
+
+    if total:
+        log.info(f"Generated {total} alerts total")
+    return total
+
+
+def generate_replace_alerts() -> int:
+    """Generate replacement reminders for items with replace_after_months.
+
+    Алерт создаётся за 30 дней до даты замены.
+    Повторно не создаётся, если уже есть pending/sent алерт за этот item
+    за последние 7 дней.
+    """
+    from calendar import monthrange
+
+    def add_months_safe(dt, months):
+        month = dt.month - 1 + months
+        year = dt.year + month // 12
+        month = month % 12 + 1
+        day = min(dt.day, monthrange(year, month)[1])
+        return dt.replace(year=year, month=month, day=day)
+
+    today = date.today()
+    conn = get_db()
+    try:
+        rows = conn.execute('''
+            SELECT id, name, brand, purchase_date, replace_after_months
+            FROM items
+            WHERE replace_after_months IS NOT NULL
+              AND purchase_date IS NOT NULL
+              AND deleted_at IS NULL
+              AND status != 'replaced'
+        ''').fetchall()
+
+        created = 0
+        for row in rows:
+            item_id = row['id']
+            name = row['name']
+            brand = row['brand']
+            pd = datetime.strptime(row['purchase_date'][:10], '%Y-%m-%d').date()
+            replace_date = add_months_safe(pd, row['replace_after_months'])
+            days_left = (replace_date - today).days
+
+            # Алерт только если замена через ≤30 дней или уже просрочена
+            if days_left > 30:
+                continue
+
+            # Проверяем, нет ли недавнего алерта (pending/sent за 7 дней)
+            recent = conn.execute('''
+                SELECT 1 FROM alerts
+                WHERE item_id = ? AND alert_type = 'replace_reminder'
+                  AND created_at >= datetime('now', '-7 days')
+                  AND status IN ('pending', 'sent')
+                LIMIT 1
+            ''', (item_id,)).fetchone()
+            if recent:
+                continue
+
+            if days_left <= 0:
+                title = f'🔴 Пора менять: {name}'
+                msg = f'Срок замены истёк {-days_left} дн. назад ({replace_date})'
+            else:
+                title = f'🔄 Скоро замена: {name}'
+                msg = f'Осталось {days_left} дн. до замены ({replace_date})'
+            if brand:
+                msg += f'\nБренд: {brand}'
+
+            conn.execute('''
+                INSERT INTO alerts (item_id, alert_type, title, message, scheduled_at, status)
+                VALUES (?, 'replace_reminder', ?, ?, datetime('now'), 'pending')
+            ''', (item_id, title, msg))
+            created += 1
+
+        conn.commit()
+        if created:
+            log.info(f"Generated {created} replace alerts")
+        return created
+    except Exception as e:
+        log.warning(f"generate_replace_alerts failed: {e}")
         return 0
+    finally:
+        conn.close()
 
 
 async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
@@ -728,7 +814,17 @@ async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
         ).fetchall()
         for row in rows:
             text = row['message'] or f"{row['title']} ({row['alert_type']})"
-            await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text)
+
+            # Для replace_reminder добавляем кнопку "✅ Заменено"
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            if row['alert_type'] == 'replace_reminder':
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton('✅ Заменено', callback_data=f'item_replaced:{row["id"]}')
+                ]])
+                await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text, reply_markup=kb)
+            else:
+                await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text)
+
             conn.execute("UPDATE alerts SET status='sent' WHERE id=?", (row['id'],))
             sent += 1
         conn.commit()
@@ -774,6 +870,26 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Get the highest resolution photo
     photo: PhotoSize = update.message.photo[-1]
     caption = update.message.caption or ''
+    log.info(f'photo_handler: message_id={update.message.message_id}, caption={caption!r}')
+
+    # === Редирект: /add_item + фото ===
+    # Если caption начинается с /add_item — перенаправляем в cmd_add_item
+    if caption.strip().startswith('/add_item'):
+        log.info(f'photo_handler: redirecting to cmd_add_item, args={caption.strip().split()[1:]}')
+        ctx.args = caption.strip().split()[1:]
+        await cmd_add_item(update, ctx)
+        return
+
+    # Если caption выглядит как описание вещи (есть бренд или срок замены)
+    # — тоже перенаправляем в cmd_add_item
+    if caption.strip():
+        from brand_parser import parse_brand_and_name
+        bp = parse_brand_and_name(caption)
+        if bp['name'] and (bp['brand'] or bp['replace_months']):
+            log.info(f'photo_handler: redirecting to cmd_add_item (detected item description), args={caption.strip().split()}')
+            ctx.args = caption.strip().split()
+            await cmd_add_item(update, ctx)
+            return
 
     # Phase B: Memory Lane fast path — если в caption есть триггер-слова или
     # хэштеги, сохраняем в memory_lane_items + media_assets и завершаем,
@@ -1823,17 +1939,25 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not category:
         category = 'cat_other'
 
+    # Формируем notes с информацией о замене
+    notes_parts = ['Добавлено через /add_item']
+    replace_days = bp.get('replace_days')
+    if replace_days:
+        notes_parts.append(f'Ожидается замена через {replace_days} дн.')
+    elif replace_months:
+        notes_parts.append(f'Ожидается замена через {replace_months} мес.')
+    notes = '\n'.join(notes_parts)
+
     # Сохраняем в БД
     conn = get_db()
     try:
         cur = conn.execute('''
             INSERT INTO items
-                (name, brand, category_id, status, lifespan_months, purchase_date,
+                (name, brand, category_id, status, replace_after_months, purchase_date,
                  notes, data_origin)
             VALUES (?, ?, ?, 'in_use', ?, date('now'),
                     ?, 'manual')
-        ''', (name, brand, category, replace_months,
-              f'Добавлено через /add_item'))
+        ''', (name, brand, category, replace_months, notes))
         conn.commit()
         item_id = cur.lastrowid
     finally:
@@ -1842,10 +1966,17 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Если есть фото — сохраняем и обогащаем через Vision API
     has_photo = False
     vision_enriched = {}
+    photos = []
     if update.message and update.message.photo:
+        photos = update.message.photo
+    # Если это reply на сообщение с фото — берём фото из оригинального сообщения
+    elif update.message and update.message.reply_to_message and update.message.reply_to_message.photo:
+        photos = update.message.reply_to_message.photo
+        log.info(f'add_item: using photo from reply_to_message {update.message.reply_to_message.message_id}')
+
+    if photos:
+        best = photos[-1]
         try:
-            photos = update.message.photo
-            best = photos[-1]
             file = await best.get_file()
             file_bytes = await file.download_as_bytearray()
 
@@ -1861,6 +1992,7 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         (item_id, asset_id))
                     mconn.commit()
                     has_photo = True
+                    log.info(f'add_item photo saved: item_id={item_id}, asset_id={asset_id}')
             finally:
                 mconn.close()
 
@@ -1871,7 +2003,10 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     fh.write(file_bytes)
                 from vision_item import recognize_item
                 vision_enriched = recognize_item(tmp_path)
-                os.remove(tmp_path)
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
                 if vision_enriched and 'error' not in vision_enriched:
                     # Бренд из текста приоритетнее, Vision как fallback
                     if not brand and vision_enriched.get('brand'):
@@ -1900,7 +2035,9 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if brand:
         lines.append(f'🏷 Бренд: {esc_md(brand)}')
     lines.append(f'📂 Категория: {esc_md(category)}')
-    if replace_months:
+    if replace_days:
+        lines.append(f'🔄 Замена: через {replace_days} дн.')
+    elif replace_months:
         lines.append(f'🔄 Замена: через {replace_months} мес.')
     if vision_enriched and 'error' not in vision_enriched:
         if vision_enriched.get('color'):
@@ -1915,7 +2052,13 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append('📸 Фото сохранено')
     lines.append(f'\nID: {item_id}')
 
-    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    # Кнопка удаления
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}')
+    ]])
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown', reply_markup=kb)
 
 
 async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2339,6 +2482,130 @@ async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer('✅ Штраф отмечен как оплаченный')
 
 
+async def item_replaced_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '✅ Заменено' для напоминаний о замене вещей."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('item_replaced:'):
+        return
+
+    try:
+        alert_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный alert id', show_alert=True)
+        return
+
+    conn = get_db()
+    try:
+        # Получаем alert и связанный item
+        alert = conn.execute(
+            'SELECT item_id FROM alerts WHERE id = ? AND alert_type = ?',
+            (alert_id, 'replace_reminder')
+        ).fetchone()
+        if not alert:
+            await query.answer('⚠️ Алерт не найден', show_alert=True)
+            return
+
+        item_id = alert['item_id']
+
+        # Помечаем item как заменённый
+        conn.execute(
+            "UPDATE items SET status = 'replaced', updated_at = datetime('now') WHERE id = ?",
+            (item_id,)
+        )
+        # Закрываем алерт
+        conn.execute(
+            "UPDATE alerts SET status = 'actioned' WHERE id = ?",
+            (alert_id,)
+        )
+        conn.commit()
+
+        # Обновляем сообщение
+        replaced_note = '\n\n✅ <b>Заменено</b>'
+        base_text = html.escape((query.message.text or '').rstrip())
+        new_text = base_text + replaced_note
+        try:
+            await query.edit_message_text(
+                new_text,
+                parse_mode='HTML',
+                reply_markup=None,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        await query.answer('✅ Отмечено как заменённое')
+    except Exception as e:
+        log.warning(f'item_replaced_callback failed: {e}')
+        await query.answer('⚠️ Ошибка при обновлении', show_alert=True)
+    finally:
+        conn.close()
+
+
+async def item_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '🗑 Удалить' для удаления item из инвентаря."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('item_delete:'):
+        return
+
+    try:
+        item_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный item id', show_alert=True)
+        return
+
+    conn = get_db()
+    try:
+        # Soft delete — помечаем deleted_at
+        conn.execute(
+            "UPDATE items SET deleted_at = datetime('now'), status = 'disposed' WHERE id = ?",
+            (item_id,)
+        )
+        conn.commit()
+
+        # Обновляем сообщение
+        deleted_note = '\n\n🗑 <b>Удалено из инвентаря</b>'
+        base_text = html.escape((query.message.text or '').rstrip())
+        new_text = base_text + deleted_note
+        try:
+            await query.edit_message_text(
+                new_text,
+                parse_mode='HTML',
+                reply_markup=None,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        await query.answer('🗑 Удалено')
+    except Exception as e:
+        log.warning(f'item_delete_callback failed: {e}')
+        await query.answer('⚠️ Ошибка при удалении', show_alert=True)
+    finally:
+        conn.close()
+
+
 def add_authorized_handler(app: Application, handler):
     """Оборачивает handler проверкой доступа перед добавлением в приложение."""
     original_callback = handler.callback
@@ -2403,6 +2670,8 @@ def main():
     add_authorized_handler(app, MessageHandler(filters.PHOTO, photo_handler))
     add_authorized_handler(app, CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(item_replaced_callback, pattern=r'^item_replaced:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(item_delete_callback, pattern=r'^item_delete:\d+$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()

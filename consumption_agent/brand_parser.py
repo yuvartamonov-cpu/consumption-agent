@@ -132,7 +132,7 @@ def parse_brand_and_name(text: str) -> dict:
             'cleaned_text': 'джемпер Hemington'  # без реакций и сроков
         }
     """
-    result = {'name': None, 'brand': None, 'replace_months': None, 'cleaned_text': text}
+    result = {'name': None, 'brand': None, 'replace_months': None, 'replace_days': None, 'cleaned_text': text}
     
     if not text or not text.strip():
         return result
@@ -154,11 +154,32 @@ def parse_brand_and_name(text: str) -> dict:
                 break
     
     # 3. Извлекаем срок замены
-    duration_match = re.search(
-        r'(?:замена|на|replace)\s+(\d+)\s*(мес(?:яц(?:а|ев)?)?|m(?:onths?)?|лет|год(?:а|ов)?|г|y(?:ears?)?)\b',
+    # Форматы: "замена 6 мес", "на 3 мес", "6 мес", "замена 30 дн", "45 дней"
+    # Сначала проверяем дни (более специфично), потом месяцы/годы
+    day_match = re.search(
+        r'(?:замена|на|replace)?\s*(\d+)\s*(дн(?:я|ей)?|day(?:s)?)\b',
         working, re.IGNORECASE
     )
-    if duration_match:
+    duration_match = re.search(
+        r'(?:замена|на|replace)?\s*(\d+)\s*(мес(?:яц(?:а|ев)?)?|m(?:onths?)?|лет|год(?:а|ов)?|г|y(?:ears?)?)\b',
+        working, re.IGNORECASE
+    )
+
+    def _skip_if_size(m):
+        """Проверяем, что перед числом нет слов-размеров (ступеней, штук и т.д.)"""
+        prefix = working[:m.start()].rstrip()
+        prefix_words = prefix.split() if prefix else []
+        last_word = prefix_words[-1].lower() if prefix_words else ''
+        skip_words = {'ступен', 'штук', 'шт', 'литр', 'кг', 'см', 'мм', 'метр', 'размер'}
+        return last_word in skip_words
+
+    if day_match and not _skip_if_size(day_match):
+        val = int(day_match.group(1))
+        result['replace_days'] = val
+        # Для БД тоже сохраняем в месяцах (приблизительно)
+        result['replace_months'] = max(1, round(val / 30))
+        working = working[:day_match.start()].strip().rstrip(',;')
+    elif duration_match and not _skip_if_size(duration_match):
         val = int(duration_match.group(1))
         unit = duration_match.group(2).lower()
         if unit in ('лет', 'год', 'года', 'годов', 'г', 'y', 'year', 'years'):
