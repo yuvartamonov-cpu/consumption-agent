@@ -2197,6 +2197,73 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /dayexp — чеки за сегодня с принудительным сканированием почт."""
+    await update.message.reply_text('🔍 Сканирую все почты и SMS на предмет чеков за сегодня...')
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, 'daily_cheque_scan.py'],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        log = result.stdout + result.stderr
+        print(f'[dayexp] scan result:\n{log[:500]}')
+    except Exception as e:
+        print(f'[dayexp] scan error: {e}')
+        await update.message.reply_text('⚠️ Ошибка сканирования почт.')
+        return
+
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT purchase_date, total_amount, store_name, source, notes
+            FROM purchases
+            WHERE purchase_date = date('now')
+              AND (deleted_at IS NULL OR deleted_at = '')
+            ORDER BY total_amount DESC
+        """).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text(f'📭 За сегодня ({datetime.now().strftime("%d.%m.%Y")}) покупок не найдено.')
+        return
+
+    total = sum(r[1] or 0 for r in rows)
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
+
+    lines = [f'📊 *Расходы за {datetime.now().strftime("%d.%m.%Y")}*']
+    lines.append(f'_{len(rows)} покупок, всего {total:,.0f} ₽_\n'.replace(',', ' '))
+
+    for r in rows:
+        date_str, amount, store, source, notes = r
+        amt = amount or 0
+        src_icon = source_icons.get(source or '', '📧')
+        store_clean = store or '—'
+        notes_clean = (notes or '').replace('\n', ' ').strip()
+        if notes_clean:
+            # Короткое описание: берём до первого товара или кратко
+            short_note = notes_clean[:80]
+            lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
+            lines.append(f'   {short_note}')
+        else:
+            lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
+
+    # По магазинам
+    by_store = {}
+    for r in rows:
+        s = r[2] or 'Другое'
+        by_store[s] = by_store.get(s, 0) + (r[1] or 0)
+    if len(by_store) > 1:
+        lines.append(f'\n📌 *По магазинам:*')
+        for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
+            lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+
 async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /warranties — отчёт по гарантиям."""
     try:
@@ -2797,6 +2864,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/last_drives — последние поездки каршеринга (все провайдеры)\n'
         '/debts — проверка кредитов и займов по почтам + SMS\n'
         '/fines — неоплаченные штрафы\n'
+        '/dayexp — расходы за сегодня с расшифровкой\n'
         '/warranties — отчёт по гарантиям\n'
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
         '/add_photo — загрузить фото чека (OCR)\n'
@@ -3536,6 +3604,7 @@ def main():
     add_authorized_handler(app, CommandHandler('add_photo', add_photo))
     add_authorized_handler(app, CommandHandler('debts', cmd_debts))
     add_authorized_handler(app, CommandHandler('fines', cmd_fines))
+    add_authorized_handler(app, CommandHandler('dayexp', cmd_dayexp))
     add_authorized_handler(app, CommandHandler('warranties', cmd_warranties))
     add_authorized_handler(app, CommandHandler('set_warranty', cmd_set_warranty))
     add_authorized_handler(app, CommandHandler('ml_last', cmd_ml_last))
