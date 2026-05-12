@@ -302,7 +302,12 @@ def scan_mailbox(config, conn):
                 from_val = msg.get('From', '')
                 subj_val = decode_mime(msg.get('Subject', ''))
                 sender_email = normalize_sender(from_val)
-                
+
+                # Пропускаем письма от самого consumption_agent (отчёты, уведомления)
+                if any(skip in (subj_val + ' ' + from_val + ' ' + sender_email).lower() for skip in ['отчёт о расходах', 'собираем чемоданы', 'consumption agent', 'consumption_agent']):
+                    log.info(f"   ⏭ Пропущено (self): {subj_val[:60]}")
+                    continue
+
                 # Извлекаем тело
                 body = ''
                 html = ''
