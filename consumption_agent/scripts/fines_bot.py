@@ -221,7 +221,7 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
         label = watcher['label']
         password = os.environ.get(watcher['pass_env'], '').replace('"', '').replace(' ', '')
         if not password:
-            print(f'  -- {label}: no password')
+            print(f'  -- {label}: нет пароля')
             continue
 
         imap_host = watcher.get('imap', 'imap.mail.ru')
@@ -259,7 +259,7 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
             if not fine_uids:
                 continue
 
-            print(f'  {label}/{sender}: {len(fine_uids)} messages')
+            print(f'  {label}/{sender}: {len(fine_uids)} писем')
 
             batch = ','.join(uid.decode() if isinstance(uid, bytes) else str(uid) for uid in fine_uids)
             try:
@@ -272,7 +272,7 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
                     text = html_to_text(html)
                     bodies[len(bodies)] = text
             except Exception as e:
-                print(f'    batch failed: {e}')
+                print(f'    ошибка пакета: {e}')
                 bodies = {}
                 for uid in fine_uids:
                     try:
@@ -338,7 +338,7 @@ def check_sms_fines():
                 'timestamp': ts,
             })
     except Exception as e:
-        print(f'  SMS error: {e}')
+        print(f'  ошибка SMS: {e}')
     return sms_fines
 
 
@@ -405,34 +405,34 @@ def check_new_fines(days: int = 7) -> list[dict]:
 
 def format_fine_for_bot(details: dict, mailbox: str) -> str:
     title_map = {
-        'new': 'New штраф',
-        'fined': 'Shtraf oplachen',
-        'paid': 'Oplata proshla',
-        'bill': 'Schent na oplatu',
-        'cancelled': 'Shtraf otmenyon',
-        'unknown': 'Uvedomlenie',
+        'new': '🆕 Новый штраф',
+        'fined': '✅ Штраф оплачен',
+        'paid': '✅ Оплата прошла',
+        'bill': '📄 Счёт на оплату',
+        'cancelled': '❌ Штраф отменён',
+        'unknown': '📋 Уведомление',
     }
 
     vendor_lower = (details.get('vendor') or '').lower()
     is_parking = any(pv in vendor_lower for pv in PARKING_VENDORS) or 'parkovk' in (details.get('description') or '').lower()
-    category = 'Parking' if is_parking else 'GIBDD'
+    category = '🅿️ Парковка' if is_parking else '🚦 ГИБДД'
 
     lines = [
-        f"{title_map.get(details['type'], 'Uvedomlenie')} | {category}",
-        f"Pochta: {mailbox}",
+        f"{title_map.get(details['type'], '📋 Уведомление')} | {category}",
+        f"📬 Почта: {mailbox}",
     ]
 
     if details.get('number'):
-        lines.append(f"N {details['number']}")
+        lines.append(f"№ {details['number']}")
     if details.get('amount'):
         amount_str = f"{details['amount']:,.0f}".replace(',', ' ')
-        lines.append(f"Summa: {amount_str} RUB")
+        lines.append(f"💰 Сумма: {amount_str} ₽")
     if details.get('description'):
         lines.append(f"{details['description'][:60]}")
     if details.get('vehicle'):
-        lines.append(f"TS: {details['vehicle']}")
+        lines.append(f"🚗 ТС: {details['vehicle']}")
     if details.get('date'):
-        lines.append(f"Data: {details['date']}")
+        lines.append(f"📅 Дата: {details['date']}")
     if details.get('vendor'):
         lines.append(f"{details['vendor'][:60]}")
 
@@ -440,35 +440,35 @@ def format_fine_for_bot(details: dict, mailbox: str) -> str:
 
 
 def format_summary_for_bot(new_fines, all_fines_in_db):
-    lines = ['EZEDNEVNAYa PROVERKA SHTRAFOV']
+    lines = ['📋 ЕЖЕДНЕВНАЯ ПРОВЕРКА ШТРАФОВ']
     lines.append(datetime.now().strftime('%d.%m.%Y %H:%M'))
     lines.append('')
 
     if new_fines:
-        lines.append(f'NOVYE ({len(new_fines)}):')
+        lines.append(f'🆕 НОВЫЕ ({len(new_fines)}):')
         for f in new_fines:
             mb = f.get('mailbox', '')
             amt = f.get('amount', 0)
             desc = (f.get('description') or '')[:40]
             amt_s = f'{amt:,.0f}'.replace(',', ' ') if amt else '?'
-            lines.append(f'  - {mb}: {amt_s} rub - {desc}')
+            lines.append(f'  - {mb}: {amt_s} ₽ — {desc}')
     else:
-        lines.append('Novyh shtrafov net')
+        lines.append('✅ Новых штрафов нет')
     lines.append('')
 
     unpaid = [f for f in all_fines_in_db if f.get('type') in ('new', 'bill')]
     if unpaid:
-        lines.append(f'Neoplachennye ({len(unpaid)}):')
+        lines.append(f'🔴 Неоплаченные ({len(unpaid)}):')
         for f in unpaid:
             mb = f.get('mailbox', '')
             amt = f.get('amount', 0)
             desc = (f.get('description') or '')[:40]
             d = (f.get('fine_date') or f.get('raw_date', ''))[:10]
             amt_s = f'{amt:,.0f}'.replace(',', ' ') if amt else '?'
-            lines.append(f'  - [{d}] {mb}: {amt_s} rub - {desc}')
+            lines.append(f'  - [{d}] {mb}: {amt_s} ₽ — {desc}')
         lines.append('')
 
-    lines.append('Proverennye pochty:')
+    lines.append('📫 Проверенные почты:')
     for w in FINE_WATCHERS:
         lines.append(f'  - {w["label"]} ({w["user"]})')
 
@@ -485,7 +485,7 @@ def notify_fines(fines: list[dict]):
     bot_token = os.environ.get('CONSUMPTION_BOT_TOKEN')
     chat_id = os.environ.get('OWNER_CHAT_ID', '1477860192')
     if not bot_token:
-        print('No token')
+        print('Нет токена')
         return
     try:
         import httpx
@@ -500,7 +500,7 @@ def notify_fines(fines: list[dict]):
         if fine['type'] in ('new', 'bill') and fine_id:
             keyboard = {
                 'inline_keyboard': [[
-                    {'text': 'Oplacheno', 'callback_data': f'fine_paid:{fine_id}'}
+                    {'text': '✅ Оплачено', 'callback_data': f'fine_paid:{fine_id}'}
                 ]]
             }
         try:
@@ -518,7 +518,7 @@ def send_telegram_msg(text):
     bot_token = os.environ.get('CONSUMPTION_BOT_TOKEN')
     chat_id = os.environ.get('OWNER_CHAT_ID', '1477860192')
     if not bot_token:
-        print('No token')
+        print('Нет токена')
         return
     try:
         import httpx
@@ -528,11 +528,11 @@ def send_telegram_msg(text):
             timeout=15
         )
         if r.status_code == 200:
-            print('Sent ok')
+            print('Отправлено')
         else:
-            print(f'Error: {r.text[:100]}')
+            print(f'Ошибка: {r.text[:100]}')
     except Exception as e:
-        print(f'HTTP: {e}')
+        print(f'Ошибка HTTP: {e}')
 
 
 def _mark_notified(uid: str):
@@ -575,7 +575,7 @@ def main():
             for sender in FINE_SENDERS:
                 status, ids = imap.search(None, 'FROM', sender)
                 all_ids = ids[0].split() if ids[0] else []
-                print(f'{watcher["label"]}: {len(all_ids)} from {sender}')
+                print(f'{watcher["label"]}: {len(all_ids)} от {sender}')
                 for uid in all_ids[-10:]:
                     _, fd = imap.fetch(uid, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])')
                     raw = fd[0][1].decode('utf-8', errors='replace')
@@ -589,11 +589,11 @@ def main():
             imap.logout()
         return
 
-    print(f'Checking fines last {args.days} days...')
+    print(f'Проверка штрафов за {args.days} дней...')
     new_fines = check_new_fines(args.days)
 
     if args.check_sms:
-        print('Checking SMS...')
+        print('Проверка SMS...')
         for s in check_sms_fines():
             new_fines.append({
                 'type': 'new', 'amount': None,
@@ -612,10 +612,10 @@ def main():
                 all_in_db.append(dict(zip(['type','number','amount','description','mailbox','fine_date','raw_date'], r)))
             conn.close()
         except Exception as e:
-            print(f'DB: {e}')
+            print(f'Ошибка БД: {e}')
         msg = format_summary_for_bot(new_fines, all_in_db)
         print(msg)
-        print('\nSending...')
+        print('\nОтправка...')
         send_telegram_msg(msg)
     else:
         if new_fines:
@@ -623,10 +623,10 @@ def main():
                 print(format_fine_for_bot(f, f.get('mailbox', '')))
                 print()
         else:
-            print('No new fines')
+            print('Новых штрафов нет')
 
         if args.notify:
-            print('Sending notifications...')
+            print('Отправка уведомлений...')
             notify_fines(new_fines)
 
 
