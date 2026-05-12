@@ -2267,7 +2267,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /monthexp — расходы с начала месяца с расшифровкой по дням.
     За текущий день — принудительное сканирование почт + SMS."""
-    await update.message.reply_text('🔍 Сканирую все почты и SMS на предмет чеков за сегодня...')
+    await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за текущий месяц...')
 
     try:
         import subprocess
