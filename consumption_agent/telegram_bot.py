@@ -2038,7 +2038,22 @@ async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /debts — кредиты к оплате в ближайшие 30 дней"""
+    """Команда /debts — принудительная проверка кредитов и займов.
+    Сканирует почты + SMS, показывает ближайшие платежи."""
+    await update.message.reply_text('🔍 Проверяю почты и SMS на предмет кредитных уведомлений...')
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, 'credit_alerts.py'],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        log = result.stdout + result.stderr
+        print(f'[debts] scan result:\n{log[:500]}')
+    except Exception as e:
+        print(f'[debts] scan error: {e}')
+
     conn = get_db()
     try:
         rows = conn.execute("""
@@ -2090,8 +2105,22 @@ async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /fines — неоплаченные и свежие штрафы.
-    Сначала список, потом каждый штраф отдельным сообщением с кнопкой ✅ Оплачено."""
+    """Команда /fines — принудительная проверка штрафов на всех почтах + SMS.
+    Показывает неоплаченные с кнопкой ✅ Оплачено."""
+    await update.message.reply_text('🔍 Проверяю почты и SMS на предмет штрафов...')
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, 'scripts/fines_bot.py', '--days', '7', '--check-sms'],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        log = result.stdout + result.stderr
+        print(f'[fines] scan result:\n{log[:500]}')
+    except Exception as e:
+        print(f'[fines] scan error: {e}')
+
     conn = get_db()
     try:
         rows = conn.execute("""
@@ -2766,7 +2795,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/alerts — алерты (гарантии, сроки)\n'
         '/find_car 3ч 80км — подбор тарифа каршеринга\n'
         '/last_drives — последние поездки каршеринга (все провайдеры)\n'
-        '/debts — кредиты к оплате в ближайшие 30 дней\n'
+        '/debts — проверка кредитов и займов по почтам + SMS\n'
         '/fines — неоплаченные штрафы\n'
         '/warranties — отчёт по гарантиям\n'
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
