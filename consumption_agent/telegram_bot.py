@@ -2198,21 +2198,23 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /dayexp — чеки за сегодня с принудительным сканированием почт."""
-    await update.message.reply_text('🔍 Сканирую все почты и SMS на предмет чеков за сегодня...')
+    """Команда /dayexp — чеки за сегодня с принудительным сканированием почт (фоново)."""
+    msg = await update.message.reply_text('🔍 Сканирую почты и SMS за сегодня...')
 
     try:
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, 'daily_cheque_scan.py'],
-            capture_output=True, text=True, timeout=120,
-            cwd=os.path.dirname(os.path.abspath(__file__))
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, 'daily_cheque_scan.py',
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        log = result.stdout + result.stderr
-        print(f'[dayexp] scan result:\n{log[:500]}')
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
+        print(f'[dayexp] scan result:\n{log_text}')
+    except asyncio.TimeoutError:
+        print('[dayexp] scan timeout')
     except Exception as e:
         print(f'[dayexp] scan error: {e}')
-        await update.message.reply_text('⚠️ Ошибка сканирования почт.')
+        await msg.edit_text('⚠️ Ошибка сканирования почт.')
         return
 
     conn = get_db()
@@ -2228,7 +2230,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not rows:
-        await update.message.reply_text(f'📭 За сегодня ({datetime.now().strftime("%d.%m.%Y")}) покупок не найдено.')
+        await msg.edit_text(f'📭 За сегодня ({datetime.now().strftime("%d.%m.%Y")}) покупок не найдено.')
         return
 
     total = sum(r[1] or 0 for r in rows)
@@ -2244,7 +2246,6 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         store_clean = store or '—'
         notes_clean = (notes or '').replace('\n', ' ').strip()
         if notes_clean:
-            # Короткое описание: берём до первого товара или кратко
             short_note = notes_clean[:80]
             lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
             lines.append(f'   {short_note}')
@@ -2261,23 +2262,26 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
             lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
 
-    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
 
 
 async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /monthexp — расходы с начала месяца с расшифровкой по дням.
-    За текущий день — принудительное сканирование почт + SMS."""
-    await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за текущий месяц...')
+    За текущий день — принудительное сканирование почт + SMS (фоново)."""
+    msg = await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за месяц...')
 
+    # Фоновое сканирование
     try:
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, 'daily_cheque_scan.py'],
-            capture_output=True, text=True, timeout=120,
-            cwd=os.path.dirname(os.path.abspath(__file__))
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, 'daily_cheque_scan.py',
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        log = result.stdout + result.stderr
-        print(f'[monthexp] scan result:\n{log[:500]}')
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
+        print(f'[monthexp] scan result:\n{log_text}')
+    except asyncio.TimeoutError:
+        print('[monthexp] scan timeout')
     except Exception as e:
         print(f'[monthexp] scan error: {e}')
 
@@ -2304,13 +2308,13 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not rows:
-        await update.message.reply_text(f'📭 За {month_name} покупок не найдено.')
+        await msg.edit_text(f'📭 За {month_name} (с 1 по {today.day}) покупок не найдено.')
         return
 
     grand_total = sum(r[1] or 0 for r in rows)
     source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
 
-    lines = [f'📊 *Расходы за {month_name}*']
+    lines = [f'📊 *Расходы с 1 {month_name.lower()} по {today.day} число*']
     lines.append(f'_{len(rows)} покупок, всего {grand_total:,.0f} ₽_\n'.replace(',', ' '))
 
     # Группировка по дням
@@ -2348,7 +2352,7 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
             lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
 
-    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+    await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
 
 
 async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
