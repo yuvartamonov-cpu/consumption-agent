@@ -2778,8 +2778,36 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tag_str = ' '.join(f'#{t}' for t in tags) if tags else ''
         topic = r['topic'] or '—'
         date = (r['created_at'] or '')[:10]
-        lines.append(f'#{r["id"]:>3}  {date}  [{topic}]  {cap}  {tag_str}'.rstrip())
+        has_photo = '📷' if r['media_asset_id'] else ''
+        lines.append(f'#{r["id"]:>3} {has_photo} {date}  [{topic}]  {cap}  {tag_str}'.rstrip())
     await update.message.reply_text('\n'.join(lines))
+
+    # Отправляем фото для записей, у которых есть media_asset_id
+    conn2 = get_db()
+    for r in rows:
+        media_asset_id = r['media_asset_id']
+        if not media_asset_id:
+            continue
+        try:
+            row = conn2.execute(
+                'SELECT file_path FROM media_assets WHERE id = ?', (media_asset_id,)
+            ).fetchone()
+            if not row or not os.path.exists(row[0]):
+                continue
+            caption_lines = [f'#{r["id"]}']
+            if r['caption']:
+                caption_lines.append(r['caption'].strip())
+            if r['topic']:
+                caption_lines.append(f'📂 {r["topic"]}')
+            caption_lines.append(f'🕒 {str(r["created_at"])[:10]}')
+            with open(row[0], 'rb') as fh:
+                await update.message.reply_photo(
+                    photo=fh.read(),
+                    caption='\n'.join(caption_lines)
+                )
+        except Exception as e:
+            log.warning(f'ml_last: failed to send photo for ml_id={r["id"]}: {e}')
+    conn2.close()
 
 
 async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
