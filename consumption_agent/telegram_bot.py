@@ -1019,39 +1019,49 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await file.download_to_drive(receipt_path)
     log.info(f'Saved receipt: {receipt_path}')
 
-    # Decode QR code (Ozon format)
-    qr_data = decode_qr(receipt_path)
+    # === Быстрая классификация типа фото (Vision API, ~1-2 токена) ===
+    # Определяем тип ДО OCR/QR, чтобы не тратить время на чеки для фото предметов
+    image_type = 'other'
+    try:
+        import asyncio
+        from vision_item import classify_photo_async
+        v_type = await asyncio.wait_for(
+            classify_photo_async(receipt_path),
+            timeout=15.0
+        )
+        if v_type and v_type != 'unknown':
+            image_type = v_type
+            log.info(f"Vision classify (fast path): {v_type}")
+    except asyncio.TimeoutError:
+        log.warning("Vision classify timeout after 15s (fast path)")
+    except Exception as e:
+        log.warning(f"Vision classify failed (fast path): {e}")
+
+    # QR/OCR только для чеков и бирок — для предметов не нужен
+    qr_data = None
     total_amount = None
     purchase_date = None
-    if qr_data:
-        total_amount = qr_data.get('s')  # Итоговая сумма (например, "1234.56")
-        if total_amount:
-            total_amount = float(total_amount)
-        # Дата в формате "20260504T2051" → "2026-05-04"
-        date_str = qr_data.get('t')
-        if date_str and len(date_str) >= 8:
-            purchase_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    text = ''
+    if image_type in ('receipt', 'tag'):
+        # Decode QR code (Ozon format)
+        qr_data = decode_qr(receipt_path)
+        if qr_data:
+            total_amount = qr_data.get('s')
+            if total_amount:
+                total_amount = float(total_amount)
+            date_str = qr_data.get('t')
+            if date_str and len(date_str) >= 8:
+                purchase_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
-    # Run OCR as fallback
-    text = ocr_image(receipt_path)
-    # Save raw OCR for debugging
-    with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
-        f.write(text or 'NO_OCR_TEXT')
+        # Run OCR only for receipts/tags
+        text = ocr_image(receipt_path)
+        # Save raw OCR for debugging
+        with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
+            f.write(text or 'NO_OCR_TEXT')
 
-    # Классификация: QR есть → чек, иначе Vision API
-    image_type = 'receipt' if qr_data else None
-    if not image_type:
-        # OCR-классификация как fallback
+    # Если fast path не сработал (image_type всё ещё 'other'), используем OCR-классификацию как fallback
+    if image_type == 'other':
         image_type = classify_image_type(text or '')
-        # Vision API классификация (точнее)
-        try:
-            from vision_item import classify_photo as vision_classify
-            v_type = vision_classify(receipt_path)
-            if v_type and v_type != 'unknown':
-                image_type = v_type
-                log.info(f"Vision classify: {v_type}")
-        except Exception as e:
-            log.warning(f"Vision classify failed: {e}")
 
     tag_probe = parse_clothing_tag(text or '', receipt_path)
     
@@ -1101,12 +1111,16 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.info(f'photo_handler: recognizing item, image_type={image_type}, path={receipt_path}')
         try:
             import asyncio
-            from vision_item import recognize_item
+            from vision_item import recognize_item_async
+            import time
             # Таймаут 30 секунд на распознавание
+            start_time = time.time()
             item_info = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(None, recognize_item, receipt_path),
+                recognize_item_async(receipt_path),
                 timeout=30.0
             )
+            elapsed = time.time() - start_time
+            log.info(f'photo_handler: recognize_item took {elapsed:.1f}s')
             log.info(f'photo_handler: recognize_item result={item_info}')
             if item_info and 'error' not in item_info and item_info.get('name'):
                 item_name = item_info.get('name', 'Предмет')
@@ -1199,8 +1213,36 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
         except asyncio.TimeoutError:
             log.warning(f'Vision item recognition timeout after 30s')
+            # Сохраняем товар с пометкой "не распознан"
+            conn = get_db()
+            cat_row = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
+            cat_id = cat_row[0] if cat_row else None
+            item_name = 'Товар (не распознан по фото)'
+            notes = 'Фото не распознано за 30 сек'
+            attrs = json.dumps({'vision_timeout': True, 'timeout_seconds': 30}, ensure_ascii=False)
+            cur = conn.execute(
+                "INSERT INTO items (name, category_id, attributes, notes, data_origin, purchase_date) "
+                "VALUES (?, ?, ?, ?, 'vision_photo_timeout', ?)",
+                (item_name, cat_id, attrs, notes, date.today().isoformat())
+            )
+            new_item_id = cur.lastrowid
+            # Сохраняем фото
+            try:
+                with open(receipt_path, 'rb') as fh:
+                    buf = fh.read()
+                import memory_lane as _ml2
+                _asset_id = _ml2.save_media(conn, buf, mime='image/jpeg')
+                if _asset_id:
+                    conn.execute(
+                        'INSERT OR IGNORE INTO item_photos (item_id, media_asset_id, is_primary) VALUES (?, ?, 1)',
+                        (new_item_id, _asset_id)
+                    )
+            except Exception as _e:
+                log.warning(f'vision_photo_timeout: failed to save photo: {_e}')
+            conn.commit()
+            conn.close()
             await update.message.reply_text(
-                '⏱️ Товар не распознан по фото (время ожидания истекло).\n\n'
+                f'❌ Товар не распознан по фото (ID: {new_item_id})\n\n'
                 'Попробуйте:\n'
                 '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
                 '• Использовать команду /add_item <название>'
@@ -1209,7 +1251,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.warning(f'Vision item recognition failed: {e}')
             await update.message.reply_text(
-                '❌ Товар не распознан по фото.\n\n'
+                '❌ Товар не распознан по фото\n\n'
                 'Попробуйте:\n'
                 '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
                 '• Использовать команду /add_item <название>'

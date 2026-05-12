@@ -63,7 +63,7 @@ def _call_vision(image_path: str, prompt: str, model: str = None, max_tokens: in
     ext = os.path.splitext(image_path)[1].lower().lstrip('.')
     mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(ext, "image/jpeg")
     
-    client = openai.OpenAI(api_key=api_key)
+    client = openai.OpenAI(api_key=api_key, timeout=25.0)
     response = client.chat.completions.create(
         model=model or VISION_MODEL,
         messages=[{
@@ -84,6 +84,16 @@ def _call_vision(image_path: str, prompt: str, model: str = None, max_tokens: in
     return response.choices[0].message.content.strip()
 
 
+async def _call_vision_async(image_path: str, prompt: str, model: str = None, max_tokens: int = 1000) -> str:
+    """Асинхронная версия вызова Vision API.
+    
+    Запускает синхронный _call_vision в отдельном потоке,
+    чтобы asyncio.wait_for мог прервать таймаут.
+    """
+    import asyncio
+    return await asyncio.to_thread(_call_vision, image_path, prompt, model, max_tokens)
+
+
 def classify_photo(image_path: str) -> str:
     """
     Быстрая классификация фото: receipt/tag/clothing/food/interior/tech/item/other.
@@ -96,6 +106,18 @@ def classify_photo(image_path: str) -> str:
         return result if result in valid else 'other'
     except Exception as e:
         log.error(f"classify_photo failed: {e}")
+        return 'unknown'
+
+
+async def classify_photo_async(image_path: str) -> str:
+    """Асинхронная версия classify_photo."""
+    try:
+        result = await _call_vision_async(image_path, CLASSIFY_PROMPT, max_tokens=10)
+        result = result.lower().strip().rstrip('.')
+        valid = {'receipt', 'tag', 'clothing', 'food', 'interior', 'tech', 'item', 'other'}
+        return result if result in valid else 'other'
+    except Exception as e:
+        log.error(f"classify_photo_async failed: {e}")
         return 'unknown'
 
 
@@ -115,6 +137,22 @@ def recognize_item(image_path: str, model: str = None) -> dict:
         return {"error": f"Invalid JSON: {e}", "type": "unknown"}
     except Exception as e:
         log.error(f"Vision item failed: {e}")
+        return {"error": str(e), "type": "unknown"}
+
+
+async def recognize_item_async(image_path: str, model: str = None) -> dict:
+    """Асинхронная версия recognize_item."""
+    try:
+        text = await _call_vision_async(image_path, ITEM_PROMPT, model=model)
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+        result = json.loads(text)
+        return result
+    except json.JSONDecodeError as e:
+        log.error(f"Vision item async: invalid JSON: {e}")
+        return {"error": f"Invalid JSON: {e}", "type": "unknown"}
+    except Exception as e:
+        log.error(f"Vision item async failed: {e}")
         return {"error": str(e), "type": "unknown"}
 
 
