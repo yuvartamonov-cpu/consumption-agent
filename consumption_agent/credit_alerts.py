@@ -91,28 +91,51 @@ async def process_sms_alerts():
     return new_alerts
 
 
-async def send_pending_alerts():
-    """Отправляет все ожидающие алерты."""
+async def send_daily_status():
+    """Ежедневная проверка и отправка статуса в 20:00.
+    
+    Если есть алерты — отправляет их.
+    Если нет — отправляет сообщение "Сегодня оповещений не поступало".
+    """
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Не задан CONSUMPTION_BOT_TOKEN")
         return
+    
+    from datetime import datetime
+    today = datetime.now().strftime('%d.%m.%Y')
     
     # Инициализируем таблицы
     init_credit_tables()
     
     # Проверяем почту
     print("📧 Проверка email...")
-    run_check()
+    try:
+        run_check()
+    except Exception as e:
+        print(f"⚠️ Ошибка проверки email: {e}")
     
     # Проверяем SMS
-    await process_sms_alerts()
+    try:
+        await process_sms_alerts()
+    except Exception as e:
+        print(f"⚠️ Ошибка проверки SMS: {e}")
     
     # Получаем все ожидающие по боевым правилам: >=3 дня / сегодня / просрочено
     pending = get_alerts_ready_for_notification()
     
     if not pending:
-        print("📭 Нет ожидающих алертов для отправки")
+        # Нет алертов — отправляем статусное сообщение
+        message = f"📋 <b>Ежедневный отчёт ({today})</b>\n\n" \
+                  f"Сегодня оповещений о платежах по кредитам и займам " \
+                  f"и новым штрафам не поступало."
+        await send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message)
+        print("📭 Нет алертов — отправлено статусное сообщение")
         return
+    
+    # Есть алерты — отправляем заголовок
+    header = f"🚨 <b>Ежедневный отчёт ({today})</b>\n\n" \
+             f"Найдено {len(pending)} оповещений:\n"
+    await send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, header)
     
     print(f"📤 Отправка {len(pending)} уведомлений...")
     
@@ -134,6 +157,11 @@ async def send_pending_alerts():
     
     if sent_ids:
         print(f"📤 Всего отправлено: {len(sent_ids)}")
+
+
+async def send_pending_alerts():
+    """Отправляет все ожидающие алерты (устаревшая, используй send_daily_status)."""
+    await send_daily_status()
 
 
 async def send_test_alerts(limit: int = 3):

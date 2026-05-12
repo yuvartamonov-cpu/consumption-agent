@@ -502,6 +502,10 @@ def check_email_account(config: dict, days_back: int = 7) -> List[CreditAlert]:
         return alerts
     
     try:
+        import socket
+        # Устанавливаем таймаут на сокет
+        socket.setdefaulttimeout(15)
+        
         mail = imaplib.IMAP4_SSL(config['host'], config['port'])
         # Для Gmail нужно использовать полный email как логин
         login_user = config['user']
@@ -510,11 +514,15 @@ def check_email_account(config: dict, days_back: int = 7) -> List[CreditAlert]:
         mail.login(login_user, password_clean)
         mail.select('INBOX')
         
-        # Ищем письма за последние N дней
+        # Ищем письма за последние N дней + только непрочитанные для скорости
         since_date = (datetime.now() - timedelta(days=days_back)).strftime('%d-%b-%Y')
-        _, message_numbers = mail.search(None, f'(SINCE {since_date})')
+        search_criteria = f'(SINCE {since_date} UNSEEN)'
+        _, message_numbers = mail.search(None, search_criteria)
         
-        for num in message_numbers[0].split():
+        nums = message_numbers[0].split()
+        print(f"   Писем за {days_back} дней (непрочитанных): {len(nums)}")
+        
+        for num in nums[:50]:  # Ограничиваем 50 письмами для скорости
             try:
                 _, msg_data = mail.fetch(num, '(RFC822)')
                 msg = email.message_from_bytes(msg_data[0][1])
@@ -547,8 +555,12 @@ def check_email_account(config: dict, days_back: int = 7) -> List[CreditAlert]:
         mail.close()
         mail.logout()
         
+    except socket.timeout:
+        print(f"⏱️ Таймаут подключения к {config['name']}")
     except Exception as e:
         print(f"❌ Ошибка подключения к {config['name']}: {e}")
+    finally:
+        socket.setdefaulttimeout(None)
     
     return alerts
 
