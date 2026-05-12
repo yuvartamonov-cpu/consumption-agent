@@ -14,7 +14,7 @@ Consumption Agent Telegram Bot
 
 import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback
 from calendar import monthrange
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
@@ -1886,6 +1886,7 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     name = bp['name'] or text
     brand = bp['brand']
     replace_months = bp['replace_months']
+    replace_days = bp.get('replace_days')
 
     # Нормализуем название — убираем лишнее
     name = name.strip().strip(',;')
@@ -1953,11 +1954,11 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         cur = conn.execute('''
             INSERT INTO items
-                (name, brand, category_id, status, replace_after_months, purchase_date,
+                (name, brand, category_id, status, replace_after_months, replace_after_days, purchase_date,
                  notes, data_origin)
-            VALUES (?, ?, ?, 'in_use', ?, date('now'),
+            VALUES (?, ?, ?, 'in_use', ?, ?, date('now'),
                     ?, 'manual')
-        ''', (name, brand, category, replace_months, notes))
+        ''', (name, brand, category, replace_months, replace_days, notes))
         conn.commit()
         item_id = cur.lastrowid
     finally:
@@ -2011,20 +2012,37 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     # Бренд из текста приоритетнее, Vision как fallback
                     if not brand and vision_enriched.get('brand'):
                         brand = vision_enriched['brand']
-                    # Обновляем запись в БД
+                    # Обновляем запись в БД: attributes + notes
                     uconn = get_db()
                     attrs = json.dumps({
                         'color': vision_enriched.get('color'),
                         'description': vision_enriched.get('description'),
                         'style_tags': vision_enriched.get('style_tags', []),
                         'material': vision_enriched.get('material'),
+                        'estimated_price_rub': vision_enriched.get('estimated_price_rub'),
                     }, ensure_ascii=False)
-                    uconn.execute(
-                        'UPDATE items SET brand=COALESCE(?, brand), attributes=? WHERE id=?',
-                        (brand, attrs, item_id))
+                    # Дополняем notes данными от Vision
+                    vision_notes = []
+                    if vision_enriched.get('color'):
+                        vision_notes.append(f"Цвет: {vision_enriched['color']}")
+                    if vision_enriched.get('material'):
+                        vision_notes.append(f"Материал: {vision_enriched['material']}")
+                    if vision_enriched.get('description'):
+                        vision_notes.append(f"Описание: {vision_enriched['description']}")
+                    if vision_enriched.get('estimated_price_rub'):
+                        vision_notes.append(f"Оценочная цена: ~{vision_enriched['estimated_price_rub']} ₽")
+                    if vision_notes:
+                        new_notes = notes + '\n' + '\n'.join(vision_notes)
+                        uconn.execute(
+                            'UPDATE items SET brand=COALESCE(?, brand), attributes=?, notes=? WHERE id=?',
+                            (brand, attrs, new_notes, item_id))
+                    else:
+                        uconn.execute(
+                            'UPDATE items SET brand=COALESCE(?, brand), attributes=? WHERE id=?',
+                            (brand, attrs, item_id))
                     uconn.commit()
                     uconn.close()
-                    log.info(f'Vision enriched add_item #{item_id}: brand={brand}')
+                    log.info(f'Vision enriched add_item #{item_id}: brand={brand}, fields={list(vision_enriched.keys())}')
             except Exception as e:
                 log.warning(f'Vision enrich for add_item failed: {e}')
         except Exception as e:
@@ -2070,7 +2088,7 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         all_items = conn.execute('''
             SELECT id, name, brand, category_id, lifespan_months,
-                   purchase_date, status, replace_after_months, notes
+                   purchase_date, status, replace_after_months, replace_after_days, notes
             FROM items
             WHERE deleted_at IS NULL AND is_delivery = 0
               AND data_origin IN ('manual', 'local')
@@ -2093,17 +2111,21 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif args == 'all':
         filtered = all_items
     else:
-        # По умолчанию: те, у кого есть replace_after_months или lifespan_months, и они истекают
+        # По умолчанию: те, у кого есть replace_after_months/days или lifespan_months, и они истекают
         filtered = []
         for r in all_items:
-            rep = r[7] or r[4]  # replace_after_months, потом lifespan_months
-            if not rep:
+            rep_days = r[8]  # replace_after_days (точное значение)
+            rep_months = r[7] or r[4]  # replace_after_months, потом lifespan_months
+            if not rep_months and not rep_days:
                 continue
             purchase = r[5]
             if purchase:
                 try:
                     pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
-                    replace_date = add_months_safe(pd, rep)
+                    if rep_days:
+                        replace_date = pd + timedelta(days=rep_days)
+                    else:
+                        replace_date = add_months_safe(pd, rep_months)
                     days_left = (replace_date - today).days
                     if days_left <= 90:  # ближайшие 3 месяца
                         filtered.append((days_left, r))
@@ -2188,6 +2210,183 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append('/items <категория> — фильтр')
 
     await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+
+async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /items_full — полный вывод с фото и всеми данными.
+    /items_full all — все вещи с полной информацией
+    /items_full — вещи с заменой <30 дней (с 🔴)"""
+    log.info(f'cmd_items_full called by chat_id={update.effective_chat.id if update.effective_chat else None}, args={ctx.args}')
+    conn = get_db()
+    try:
+        all_items = conn.execute('''
+            SELECT id, name, brand, category_id, lifespan_months,
+                   purchase_date, status, replace_after_months, replace_after_days, notes, attributes
+            FROM items
+            WHERE deleted_at IS NULL AND is_delivery = 0
+              AND data_origin IN ('manual', 'local', 'vision_photo')
+            ORDER BY category_id, name
+        ''').fetchall()
+        # Загружаем фото
+        photos = {}
+        for row in conn.execute('''
+            SELECT item_id, media_asset_id FROM item_photos
+            WHERE item_id IN (SELECT id FROM items WHERE deleted_at IS NULL)
+        '''):
+            photos[row[0]] = row[1]
+    finally:
+        conn.close()
+
+    if not all_items:
+        await update.message.reply_text('📭 В инвентаре пока нет вещей.')
+        return
+
+    today = datetime.now().date()
+    args = ' '.join(ctx.args).lower() if ctx.args else ''
+
+    if args == 'all':
+        filtered = all_items
+    else:
+        # По умолчанию: только с заменой <30 дней (🔴)
+        filtered = []
+        for r in all_items:
+            rep_days = r[8]  # replace_after_days
+            rep_months = r[7] or r[4]
+            if not rep_months and not rep_days:
+                continue
+            purchase = r[5]
+            if purchase:
+                try:
+                    pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
+                    if rep_days:
+                        replace_date = pd + timedelta(days=rep_days)
+                    else:
+                        replace_date = add_months_safe(pd, rep_months)
+                    days_left = (replace_date - today).days
+                    if days_left <= 30:
+                        filtered.append(r)
+                except (TypeError, ValueError):
+                    continue
+
+    if not filtered:
+        await update.message.reply_text('📭 Нет вещей с заменой <30 дней. Используй /items_full all')
+        return
+
+    cat_names = {
+        'cat_clo_everyday': '👕 Повседневная одежда',
+        'cat_clo_underwear': '👙 Нижнее бельё / носки',
+        'cat_clo_shoes': '👟 Обувь',
+        'cat_clo_access': '🧣 Аксессуары',
+        'cat_tech': '💻 Техника',
+        'cat_home': '🏠 Хозтовары',
+        'cat_home_furn': '🪑 Мебель',
+        'cat_home_kitchen': '🍳 Кухня',
+        'cat_cosmetics': '🧴 Косметика',
+        'cat_health_med': '💊 Здоровье',
+        'cat_culture_books': '📚 Книги',
+        'cat_hobbies': '🎮 Хобби',
+        'cat_pets': '🐾 Животные',
+        'cat_sport': '🏋️ Спорт',
+        'cat_auto': '🚗 Авто',
+        'cat_food': '🍎 Продукты',
+        'cat_other': '📦 Прочее',
+    }
+
+    # Отправляем каждый item отдельным сообщением (с фото если есть)
+    for r in filtered:
+        item_id = r[0]
+        name = r[1]
+        brand = r[2]
+        cat = r[3] or 'cat_other'
+        rep_months = r[7] or r[4]
+        rep_days = r[8]
+        purchase = r[5]
+        notes = r[9] or ''
+        attrs = {}
+        try:
+            attrs = json.loads(r[10] or '{}')
+        except json.JSONDecodeError:
+            pass
+
+        # Заголовок
+        header = f'*{esc_md(name)}*'
+        if brand:
+            header += f' ({esc_md(brand)})'
+
+        # Статус замены
+        status_line = ''
+        rep_days = r[8]
+        rep_months = r[7] or r[4]
+        if (rep_months or rep_days) and purchase:
+            try:
+                pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
+                if rep_days:
+                    replace_date = pd + timedelta(days=rep_days)
+                else:
+                    replace_date = add_months_safe(pd, rep_months)
+                days = (replace_date - today).days
+                if days <= 0:
+                    status_line = '🔴 *ПОРА МЕНЯТЬ!*'
+                elif days <= 30:
+                    status_line = f'🟡 Замена через *{days} дн.*'
+                else:
+                    status_line = f'🟢 Замена через {days} дн.'
+            except (TypeError, ValueError):
+                pass
+
+        # Детали
+        details = []
+        cat_label = cat_names.get(cat, cat)
+        details.append(f'📂 {cat_label}')
+        if attrs.get('color'):
+            details.append(f'🎨 Цвет: {attrs["color"]}')
+        if attrs.get('material'):
+            details.append(f'🧵 Материал: {attrs["material"]}')
+        if attrs.get('description'):
+            details.append(f'📝 {attrs["description"]}')
+        if attrs.get('style_tags'):
+            details.append(f'🏷️ Теги: {", ".join(attrs["style_tags"])}')
+        if attrs.get('estimated_price_rub'):
+            details.append(f'💰 Оценка: ~{attrs["estimated_price_rub"]} ₽')
+        if notes:
+            # Убираем служебные строки из notes для вывода
+            clean_notes = notes.replace('Добавлено через /add_item', '').strip()
+            if clean_notes:
+                details.append(f'📋 {clean_notes[:200]}')
+
+        text = f'{header}\n'
+        if status_line:
+            text += f'{status_line}\n'
+        text += '\n'.join(details)
+        text += f'\n\nID: `{item_id}`'
+
+        # Кнопка удаления если замена <30 дней
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = None
+        if status_line and ('🔴' in status_line or '🟡' in status_line):
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}')
+            ]])
+
+        # Отправляем фото если есть, иначе текст
+        photo_asset = photos.get(item_id)
+        if photo_asset:
+            media_dir = os.path.join(os.path.dirname(DB_PATH), 'data', 'media')
+            photo_path = os.path.join(media_dir, f'{photo_asset}.jpg')
+            if os.path.exists(photo_path):
+                try:
+                    with open(photo_path, 'rb') as f:
+                        await update.message.reply_photo(
+                            photo=f.read(),
+                            caption=text,
+                            parse_mode='Markdown',
+                            reply_markup=kb
+                        )
+                    continue
+                except Exception as e:
+                    log.warning(f'Failed to send photo for item {item_id}: {e}')
+
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2658,6 +2857,7 @@ def main():
     add_authorized_handler(app, CommandHandler('add', cmd_add))
     add_authorized_handler(app, CommandHandler('add_item', cmd_add_item))
     add_authorized_handler(app, CommandHandler('items', cmd_items))
+    add_authorized_handler(app, CommandHandler('items_full', cmd_items_full))
     add_authorized_handler(app, CommandHandler('add_photo', add_photo))
     add_authorized_handler(app, CommandHandler('debts', cmd_debts))
     add_authorized_handler(app, CommandHandler('fines', cmd_fines))
