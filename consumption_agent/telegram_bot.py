@@ -2227,11 +2227,13 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
               AND data_origin IN ('manual', 'local', 'vision_photo')
             ORDER BY category_id, name
         ''').fetchall()
-        # Загружаем фото
+        # Загружаем фото (file_path из media_assets)
         photos = {}
         for row in conn.execute('''
-            SELECT item_id, media_asset_id FROM item_photos
-            WHERE item_id IN (SELECT id FROM items WHERE deleted_at IS NULL)
+            SELECT ip.item_id, ma.file_path 
+            FROM item_photos ip
+            JOIN media_assets ma ON ip.media_asset_id = ma.id
+            WHERE ip.item_id IN (SELECT id FROM items WHERE deleted_at IS NULL)
         '''):
             photos[row[0]] = row[1]
     finally:
@@ -2360,31 +2362,22 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text += '\n'.join(details)
         text += f'\n\nID: `{item_id}`'
 
-        # Кнопка удаления если замена <30 дней
+        # Формируем кнопки
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        kb = None
+        buttons = []
+        
+        # Кнопка фото если есть
+        photo_path = photos.get(item_id)
+        has_photo = photo_path and os.path.exists(photo_path)
+        
+        if has_photo:
+            buttons.append(InlineKeyboardButton('📷 Фото', callback_data=f'item_photo:{item_id}'))
+        
+        # Кнопка удаления если замена <30 дней
         if status_line and ('🔴' in status_line or '🟡' in status_line):
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}')
-            ]])
-
-        # Отправляем фото если есть, иначе текст
-        photo_asset = photos.get(item_id)
-        if photo_asset:
-            media_dir = os.path.join(os.path.dirname(DB_PATH), 'data', 'media')
-            photo_path = os.path.join(media_dir, f'{photo_asset}.jpg')
-            if os.path.exists(photo_path):
-                try:
-                    with open(photo_path, 'rb') as f:
-                        await update.message.reply_photo(
-                            photo=f.read(),
-                            caption=text,
-                            parse_mode='Markdown',
-                            reply_markup=kb
-                        )
-                    continue
-                except Exception as e:
-                    log.warning(f'Failed to send photo for item {item_id}: {e}')
+            buttons.append(InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}'))
+        
+        kb = InlineKeyboardMarkup([buttons]) if buttons else None
 
         await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
 
@@ -2805,6 +2798,60 @@ async def item_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
 
+async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '📷 Фото' — отправляет фото товара."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('item_photo:'):
+        return
+
+    try:
+        item_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный item id', show_alert=True)
+        return
+
+    # Загружаем фото из БД
+    conn = get_db()
+    try:
+        row = conn.execute('''
+            SELECT ma.file_path 
+            FROM item_photos ip
+            JOIN media_assets ma ON ip.media_asset_id = ma.id
+            WHERE ip.item_id = ? LIMIT 1
+        ''', (item_id,)).fetchone()
+        if not row:
+            await query.answer('📭 Фото не найдено', show_alert=True)
+            return
+
+        photo_path = row[0]
+        if not os.path.exists(photo_path):
+            await query.answer('📭 Фото не найдено', show_alert=True)
+            return
+
+        # Отправляем фото ответом на сообщение
+        with open(photo_path, 'rb') as f:
+            await ctx.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=f.read(),
+                caption=f'📷 Фото товара ID: {item_id}'
+            )
+        await query.answer('📷 Фото отправлено')
+    except Exception as e:
+        log.warning(f'item_photo_callback failed: {e}')
+        await query.answer('⚠️ Ошибка при отправке фото', show_alert=True)
+    finally:
+        conn.close()
+
+
 def add_authorized_handler(app: Application, handler):
     """Оборачивает handler проверкой доступа перед добавлением в приложение."""
     original_callback = handler.callback
@@ -2872,6 +2919,7 @@ def main():
     add_authorized_handler(app, CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_replaced_callback, pattern=r'^item_replaced:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_delete_callback, pattern=r'^item_delete:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(item_photo_callback, pattern=r'^item_photo:\d+$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()
