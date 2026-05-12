@@ -204,7 +204,7 @@ def _ocr_crop(image_path: str, box_ratio: tuple[float, float, float, float], lan
         crop.save(path)
         result = subprocess.run(
             ['tesseract', path, 'stdout', '-l', lang, '--oem', '1', '--psm', psm],
-            capture_output=True, text=True, check=False, timeout=15
+            capture_output=True, text=True, check=False, timeout=30
         )
         return _clean_ocr_lines(result.stdout.strip())
     except Exception as e:
@@ -271,7 +271,7 @@ def ocr_image(image_path: str) -> str:
             try:
                 result = subprocess.run(
                     ['tesseract', candidate, 'stdout', '-l', 'rus+eng', '--oem', '1', '--psm', psm],
-                    capture_output=True, text=True, check=True, timeout=15
+                    capture_output=True, text=True, check=True, timeout=30
                 )
                 text = _clean_ocr_lines(result.stdout.strip())
                 score = _score_ocr_text(text)
@@ -359,7 +359,7 @@ def _extract_tag_size_from_image(image_path: str) -> str | None:
             for psm in ('6', '11'):
                 result = subprocess.run(
                     ['tesseract', path, 'stdout', '-l', 'eng', '--oem', '1', '--psm', psm, '-c', 'tessedit_char_whitelist=0123456789'],
-                    capture_output=True, text=True, check=False, timeout=15
+                    capture_output=True, text=True, check=False, timeout=30
                 )
                 nums = re.findall(r'\b(3[8-9]|4[0-9]|5[0-4])\b', result.stdout)
                 if nums:
@@ -1040,28 +1040,48 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     cat_row = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
                 cat_id = cat_row[0] if cat_row else None
 
+                # Формируем notes
+                notes_parts = ['Добавлено через распознавание фото']
+                if item_color:
+                    notes_parts.append(f'Цвет: {item_color}')
+                if item_info.get('material'):
+                    notes_parts.append(f'Материал: {item_info["material"]}')
+                if item_desc:
+                    notes_parts.append(f'Описание: {item_desc}')
+                if item_price:
+                    notes_parts.append(f'Оценочная цена: ~{item_price} ₽')
+                notes = '\n'.join(notes_parts)
+
                 attrs = json.dumps({
                     'color': item_color,
                     'description': item_desc,
                     'style_tags': style_tags,
                     'vision_type': item_info.get('type'),
                     'material': item_info.get('material'),
+                    'estimated_price_rub': item_price,
                 }, ensure_ascii=False)
 
-                conn.execute(
-                    "INSERT INTO items (name, brand, purchase_price, category_id, attributes, data_origin, purchase_date) "
-                    "VALUES (?, ?, ?, ?, ?, 'vision_photo', ?)",
-                    (item_name, item_brand, item_price, cat_id, attrs, date.today().isoformat())
+                cur = conn.execute(
+                    "INSERT INTO items (name, brand, purchase_price, category_id, attributes, notes, data_origin, purchase_date) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'vision_photo', ?)",
+                    (item_name, item_brand, item_price, cat_id, attrs, notes, date.today().isoformat())
                 )
+                new_item_id = cur.lastrowid
 
-                # Сохраняем фото
+                # Сохраняем фото и связываем с item
                 try:
                     with open(receipt_path, 'rb') as fh:
                         buf = fh.read()
                     import memory_lane as _ml2
                     _asset_id = _ml2.save_media(conn, buf, mime='image/jpeg')
-                except Exception:
-                    pass
+                    if _asset_id:
+                        conn.execute(
+                            'INSERT OR IGNORE INTO item_photos (item_id, media_asset_id, is_primary) VALUES (?, ?, 1)',
+                            (new_item_id, _asset_id)
+                        )
+                        log.info(f'vision_photo: linked photo to item_id={new_item_id}, asset_id={_asset_id}')
+                except Exception as e:
+                    log.warning(f'vision_photo: failed to save photo: {e}')
 
                 conn.commit()
                 conn.close()
@@ -2248,6 +2268,26 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if args == 'all':
         filtered = all_items
+    elif args:
+        # Фильтр по названию, бренду, описанию, категории
+        filtered = []
+        for r in all_items:
+            name = (r[1] or '').lower()
+            brand = (r[2] or '').lower()
+            cat = (r[3] or '').lower()
+            notes = (r[9] or '').lower()
+            attrs = {}
+            try:
+                attrs = json.loads(r[10] or '{}')
+            except json.JSONDecodeError:
+                pass
+            desc = (attrs.get('description') or '').lower()
+            tags = ' '.join(attrs.get('style_tags', [])).lower()
+            
+            # Ищем во всех полях
+            search_text = f'{name} {brand} {cat} {notes} {desc} {tags}'
+            if args in search_text:
+                filtered.append(r)
     else:
         # По умолчанию: только с заменой <30 дней (🔴)
         filtered = []
@@ -2271,7 +2311,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     continue
 
     if not filtered:
-        await update.message.reply_text('📭 Нет вещей с заменой <30 дней. Используй /items_full all')
+        await update.message.reply_text('📭 Ничего не найдено. Используй /items_full all или /items_full <название>')
         return
 
     cat_names = {
@@ -2295,8 +2335,12 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     }
 
     # Отправляем каждый item отдельным сообщением (с фото если есть)
-    for r in filtered:
+    import asyncio
+    for idx, r in enumerate(filtered):
         item_id = r[0]
+        # Задержка между сообщениями чтобы избежать rate limit
+        if idx > 0:
+            await asyncio.sleep(0.5)
         name = r[1]
         brand = r[2]
         cat = r[3] or 'cat_other'
