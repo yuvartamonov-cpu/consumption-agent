@@ -12,7 +12,7 @@ Consumption Agent Telegram Bot
 Запуск: CONSUMPTION_BOT_TOKEN=xxx python3 telegram_bot.py
 """
 
-import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback, random
+import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback, random, asyncio
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
