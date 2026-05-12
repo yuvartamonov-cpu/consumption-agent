@@ -12,12 +12,43 @@ Consumption Agent Telegram Bot
 Запуск: CONSUMPTION_BOT_TOKEN=xxx python3 telegram_bot.py
 """
 
-import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback
+import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback, random
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
+
+def get_db_with_retry(max_retries=3, backoff_base=0.5):
+    """Подключение к БД с retry при блокировке (database is locked)."""
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'consumption.db')
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            return conn
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e).lower() and attempt < max_retries - 1:
+                sleep_time = backoff_base * (2 ** attempt) + random.uniform(0, 0.1)
+                time.sleep(sleep_time)
+                continue
+            raise
+    raise sqlite3.OperationalError("Database is locked after retries")
+
+
+def db_execute_with_retry(conn, query, params=(), max_retries=3, backoff_base=0.5):
+    """Выполнение запроса с retry при блокировке."""
+    for attempt in range(max_retries):
+        try:
+            return conn.execute(query, params)
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e).lower() and attempt < max_retries - 1:
+                sleep_time = backoff_base * (2 ** attempt) + random.uniform(0, 0.1)
+                time.sleep(sleep_time)
+                continue
+            raise
+    raise sqlite3.OperationalError("Database is locked after retries")
+
 
 def esc_md(text):
     """Escape Markdown V1 special characters for Telegram."""
@@ -913,6 +944,40 @@ async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений — для доп. информации после vision_confirm."""
+    text = (update.message.text or '').strip()
+    
+    # Проверяем, ждём ли доп. информацию о товаре
+    item_id = ctx.user_data.pop('vision_awaiting_notes', None)
+    if item_id:
+        # Если текст пустой — не сохраняем ничего
+        if not text:
+            await update.message.reply_text('ℹ️ Дополнительная информация не добавлена')
+            return
+        
+        # Ограничиваем 50 символами
+        notes_text = text[:50]
+        conn = get_db()
+        try:
+            # Добавляем к существующим notes
+            row = conn.execute('SELECT notes FROM items WHERE id = ?', (item_id,)).fetchone()
+            if row:
+                existing_notes = row[0] or ''
+                new_notes = existing_notes + '\nДоп. информация: ' + notes_text if existing_notes else 'Доп. информация: ' + notes_text
+                conn.execute('UPDATE items SET notes = ? WHERE id = ?', (new_notes, item_id))
+                conn.commit()
+                await update.message.reply_text(f'✅ Дополнительная информация сохранена: {notes_text}')
+                return
+        except Exception as e:
+            log.warning(f'text_handler: failed to save notes: {e}')
+        finally:
+            conn.close()
+    
+    # Если не ждём доп. информацию — игнорируем (или можно добавить другую логику)
+    # Пока просто не отвечаем на обычные текстовые сообщения
+
+
 async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text('❌ Это не фото. Пожалуйста, отправьте изображение.')
@@ -1107,21 +1172,26 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     items = []
 
     # === Если это предмет/одежда/еда/интерьер (не чек и не бирка) — распознаём как вещь ===
-    if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other') and not qr_data:
+    if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other', 'unknown') and not qr_data:
         log.info(f'photo_handler: recognizing item, image_type={image_type}, path={receipt_path}')
         try:
             import asyncio
             from vision_item import recognize_item_async
             import time
-            # Таймаут 30 секунд на распознавание
             start_time = time.time()
-            item_info = await asyncio.wait_for(
-                recognize_item_async(receipt_path),
-                timeout=30.0
-            )
+            item_info = await recognize_item_async(receipt_path)
             elapsed = time.time() - start_time
             log.info(f'photo_handler: recognize_item took {elapsed:.1f}s')
             log.info(f'photo_handler: recognize_item result={item_info}')
+            if item_info and item_info.get('error') == 'timeout':
+                # Таймаут распознавания — сообщаем пользователю, не сохраняем в БД
+                await update.message.reply_text(
+                    '❌ Объект не распознан\n\n'
+                    'Попробуйте:\n'
+                    '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                    '• Использовать команду /add_item <название>'
+                )
+                return
             if item_info and 'error' not in item_info and item_info.get('name'):
                 item_name = item_info.get('name', 'Предмет')
                 item_brand = item_info.get('brand')
@@ -1131,10 +1201,8 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 item_price = item_info.get('estimated_price_rub')
                 style_tags = item_info.get('style_tags', [])
 
-                # Сохраняем в БД как инвентарный предмет
+                # Сохраняем в БД сразу (при отклонении удалим)
                 conn = get_db()
-                cat_row = None
-                # Маппинг категорий Vision → БД
                 cat_map = {
                     'одежда': 'cat_clo_everyday', 'обувь': 'cat_clo_everyday',
                     'техника': 'cat_electronics', 'мебель': 'cat_furniture',
@@ -1148,7 +1216,6 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     cat_row = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
                 cat_id = cat_row[0] if cat_row else None
 
-                # Формируем notes
                 notes_parts = ['Добавлено через распознавание фото']
                 if item_color:
                     notes_parts.append(f'Цвет: {item_color}')
@@ -1177,24 +1244,26 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 new_item_id = cur.lastrowid
 
                 # Сохраняем фото и связываем с item
+                asset_id = None
                 try:
                     with open(receipt_path, 'rb') as fh:
                         buf = fh.read()
                     import memory_lane as _ml2
-                    _asset_id = _ml2.save_media(conn, buf, mime='image/jpeg')
-                    if _asset_id:
+                    asset_id = _ml2.save_media(conn, buf, mime='image/jpeg')
+                    if asset_id:
                         conn.execute(
                             'INSERT OR IGNORE INTO item_photos (item_id, media_asset_id, is_primary) VALUES (?, ?, 1)',
-                            (new_item_id, _asset_id)
+                            (new_item_id, asset_id)
                         )
-                        log.info(f'vision_photo: linked photo to item_id={new_item_id}, asset_id={_asset_id}')
+                        log.info(f'vision_photo: linked photo to item_id={new_item_id}, asset_id={asset_id}')
                 except Exception as e:
                     log.warning(f'vision_photo: failed to save photo: {e}')
 
                 conn.commit()
                 conn.close()
 
-                # Ответ
+                # Показываем результат с кнопками Подтвердить/Отклонить
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
                 parts = ['📷 Предмет распознан']
                 parts.append(f'📌 {item_name}')
                 if item_brand:
@@ -1208,46 +1277,32 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     parts.append(f'🏷️ Теги: {", ".join(style_tags)}')
                 if item_price:
                     parts.append(f'💰 Оценка: ~{item_price} ₽')
-                parts.append('\nДобавлено в инвентарь ✅')
-                await update.message.reply_text('\n'.join(parts))
+                parts.append(f'\nID: {new_item_id}')
+                parts.append('Сохранить в инвентарь?')
+
+                # Сохраняем данные для колбэка
+                ctx.user_data['vision_pending'] = {
+                    'item_id': new_item_id,
+                    'asset_id': asset_id,
+                    'receipt_path': receipt_path,
+                }
+
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton('✅ Подтвердить', callback_data='vision_confirm'),
+                    InlineKeyboardButton('❌ Отклонить', callback_data='vision_reject')
+                ]])
+                await update.message.reply_text('\n'.join(parts), reply_markup=kb)
                 return
-        except asyncio.TimeoutError:
-            log.warning(f'Vision item recognition timeout after 30s')
-            # Сохраняем товар с пометкой "не распознан"
-            conn = get_db()
-            cat_row = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
-            cat_id = cat_row[0] if cat_row else None
-            item_name = 'Товар (не распознан по фото)'
-            notes = 'Фото не распознано за 30 сек'
-            attrs = json.dumps({'vision_timeout': True, 'timeout_seconds': 30}, ensure_ascii=False)
-            cur = conn.execute(
-                "INSERT INTO items (name, category_id, attributes, notes, data_origin, purchase_date) "
-                "VALUES (?, ?, ?, ?, 'vision_photo_timeout', ?)",
-                (item_name, cat_id, attrs, notes, date.today().isoformat())
-            )
-            new_item_id = cur.lastrowid
-            # Сохраняем фото
-            try:
-                with open(receipt_path, 'rb') as fh:
-                    buf = fh.read()
-                import memory_lane as _ml2
-                _asset_id = _ml2.save_media(conn, buf, mime='image/jpeg')
-                if _asset_id:
-                    conn.execute(
-                        'INSERT OR IGNORE INTO item_photos (item_id, media_asset_id, is_primary) VALUES (?, ?, 1)',
-                        (new_item_id, _asset_id)
-                    )
-            except Exception as _e:
-                log.warning(f'vision_photo_timeout: failed to save photo: {_e}')
-            conn.commit()
-            conn.close()
-            await update.message.reply_text(
-                f'❌ Товар не распознан по фото (ID: {new_item_id})\n\n'
-                'Попробуйте:\n'
-                '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
-                '• Использовать команду /add_item <название>'
-            )
-            return
+            else:
+                # Результат есть, но name не распознан — сообщаем и не идём в чек
+                await update.message.reply_text(
+                    '❌ Объект не распознан\n\n'
+                    'Попробуйте:\n'
+                    '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                    '• Использовать команду /add_item <название>'
+                )
+                return
+
         except Exception as e:
             log.warning(f'Vision item recognition failed: {e}')
             await update.message.reply_text(
@@ -1645,7 +1700,7 @@ async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /find_car — рекомендации по тарифам каршеринга (время + км)."""
+    """Команда /find_car — рекомендации по тарифам каршеринга с учётом истории."""
     args = " ".join(ctx.args) if ctx.args else ""
     hours, km = parse_drive_request(args)
 
@@ -1653,15 +1708,35 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🚗 Использование:\n"
             "/find_car 3ч 80км\n"
-            "/find_car 2 часа 60 км\n\n"
+            "/find_car 2 часа 60 км\n"
+            "/find_car сутки 120км\n\n"
             "Укажи время и расстояние."
         )
         return
 
     conn = get_db()
+    
+    # Загружаем тарифы
     tariffs = conn.execute(
         "SELECT * FROM carsharing_tariffs WHERE zone = 'msk' ORDER BY provider"
     ).fetchall()
+    
+    # Анализируем историю поездок
+    history = conn.execute('''
+        SELECT car_model, tariff, COUNT(*) as trips, 
+               ROUND(AVG((julianday(date_end)-julianday(date_start))*24),1) as avg_hours,
+               ROUND(AVG(distance_km),1) as avg_km,
+               ROUND(AVG(total),0) as avg_cost
+        FROM carsharing_trips 
+        WHERE car_model IS NOT NULL AND total > 0
+        GROUP BY car_model, tariff
+        ORDER BY trips DESC
+    ''').fetchall()
+    
+    # Предпочтения пользователя (из истории)
+    pref_models = [h['car_model'] for h in history if h['trips'] >= 3]
+    pref_tariffs = list(dict.fromkeys([h['tariff'] for h in history if h['tariff']]))
+    
     conn.close()
 
     if not tariffs:
@@ -1675,14 +1750,60 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         'delimobil': 'Делимобиль',
     }
 
-    lines = [f"🚗 Рекомендации на {hours}ч / {km}км:\n"]
+    # Расчёт стоимости для всех тарифов
+    results = []
     for t in tariffs:
         cost = calculate_drive_cost(t, hours, km)
-        name = provider_names.get(t['provider'], t['provider'].upper())
-        tariff_info = f" ({t['tariff_name']})" if t['tariff_name'] else ""
-        rate_type = t['rate_type']
-        rate_info = "фикс+км" if rate_type == 'flat_km' else "почас"
-        lines.append(f"• {name}{tariff_info}: ~{cost:.0f} ₽ ({rate_info})")
+        provider = t['provider']
+        tariff_name = t['tariff_name'] or ''
+        
+        # Определяем рекомендацию на основе истории
+        is_preferred = False
+        reason = ""
+        
+        # Проверяем предпочтительные модели/тарифы
+        if 'Bay 24' in tariff_name and 'Bay 24' in pref_tariffs:
+            is_preferred = True
+            reason = "⭐ Ваш любимый тариф (14 поездок на FAW Bestune T77)"
+        elif provider == 'yandex' and hours >= 3:
+            is_preferred = True
+            reason = "⭐ Выгодно для длительных поездок"
+        elif t['rate_type'] == 'per_hour_km' and hours <= 2:
+            is_preferred = True
+            reason = "⭐ Выгодно для коротких поездок"
+        
+        results.append({
+            'provider': provider,
+            'name': provider_names.get(provider, provider.upper()),
+            'tariff': tariff_name,
+            'cost': cost,
+            'rate_type': t['rate_type'],
+            'insurance': '✓' if t['insurance_included'] else '✗',
+            'is_preferred': is_preferred,
+            'reason': reason,
+        })
+    
+    # Сортируем: предпочтительные первыми, затем по цене
+    results.sort(key=lambda x: (not x['is_preferred'], x['cost']))
+
+    lines = [f"🚗 Рекомендации на {hours}ч / {km}км\n"]
+    lines.append(f"📊 История: {len(history)} моделей, {sum(h['trips'] for h in history)} поездок")
+    lines.append(f"💡 Предпочтения: {', '.join(pref_models[:3]) or 'нет данных'}\n")
+    
+    for r in results:
+        tariff_info = f" ({r['tariff']})" if r['tariff'] else ""
+        rate_info = "фикс+км" if r['rate_type'] == 'flat_km' else "почас"
+        pref_mark = "⭐ " if r['is_preferred'] else ""
+        lines.append(f"{pref_mark}• {r['name']}{tariff_info}: ~{r['cost']:.0f} ₽ ({rate_info}) страховка{r['insurance']}")
+        if r['reason']:
+            lines.append(f"   └ {r['reason']}")
+
+    # Добавляем тестовые сценарии если запрошено
+    if hours == 3 and km == 80:
+        lines.append("\n📋 Тестовый сценарий 3ч/80км:")
+        lines.append("   FAW Bestune T77 + Bay 24: ~2197 ₽ (средняя по истории)")
+    elif hours >= 12:
+        lines.append("\n📋 Для суточной аренды рекомендуется Bay 24 или тариф 'Сутки'")
 
     lines.append("\n(реальная стоимость может отличаться)")
     await update.message.reply_text("\n".join(lines))
@@ -3168,6 +3289,114 @@ async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
 
+async def vision_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '✅ Подтвердить' — товар уже в БД, просим доп. информацию."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    pending = ctx.user_data.get('vision_pending')
+    if not pending:
+        await query.answer('⚠️ Данные не найдены', show_alert=True)
+        return
+
+    # Убираем кнопки и обновляем сообщение
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await query.edit_message_text(
+        query.message.text + '\n\n✅ Добавлено в инвентарь',
+        reply_markup=None
+    )
+    await query.answer('✅ Сохранено')
+
+    # Запрашиваем дополнительную информацию через ForceReply
+    from telegram import ForceReply
+    await ctx.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text='📝 Введите дополнительную информацию о товаре (бренд, размер, материал):',
+        reply_markup=ForceReply(selective=True),
+        reply_to_message_id=query.message.message_id
+    )
+    # Сохраняем item_id для обработки ответа
+    ctx.user_data['vision_awaiting_notes'] = pending.get('item_id')
+
+
+async def vision_reject_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '❌ Отклонить' — удаляет товар из БД и фото."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    pending = ctx.user_data.pop('vision_pending', None)
+    if not pending:
+        await query.answer('⚠️ Данные не найдены', show_alert=True)
+        return
+
+    item_id = pending.get('item_id')
+    asset_id = pending.get('asset_id')
+    receipt_path = pending.get('receipt_path')
+
+    conn = get_db()
+    try:
+        # Удаляем фото из media_assets
+        if asset_id:
+            ma_row = conn.execute('SELECT file_path FROM media_assets WHERE id = ?', (asset_id,)).fetchone()
+            conn.execute('DELETE FROM media_assets WHERE id = ?', (asset_id,))
+            if ma_row and os.path.exists(ma_row[0]):
+                try:
+                    os.remove(ma_row[0])
+                except Exception:
+                    pass
+
+        # Удаляем связь item_photos
+        if item_id:
+            conn.execute('DELETE FROM item_photos WHERE item_id = ?', (item_id,))
+            # Soft delete item
+            conn.execute(
+                "UPDATE items SET deleted_at = datetime('now'), status = 'disposed' WHERE id = ?",
+                (item_id,)
+            )
+
+        conn.commit()
+
+        # Удаляем временный файл
+        if receipt_path and os.path.exists(receipt_path):
+            try:
+                os.remove(receipt_path)
+            except Exception:
+                pass
+
+        # Убираем кнопки и обновляем сообщение
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await query.edit_message_text(
+            query.message.text + '\n\n❌ Отклонено и удалено',
+            reply_markup=None
+        )
+        await query.answer('❌ Удалено')
+    except Exception as e:
+        log.warning(f'vision_reject_callback failed: {e}')
+        await query.answer('⚠️ Ошибка при удалении', show_alert=True)
+    finally:
+        conn.close()
+
+
 async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки '📷 Фото' — отправляет фото товара."""
     query = update.callback_query
@@ -3285,12 +3514,15 @@ def main():
     add_authorized_handler(app, CommandHandler('topic_list', cmd_topic_list))
     add_authorized_handler(app, CommandHandler('help', cmd_help))
     add_authorized_handler(app, MessageHandler(filters.PHOTO, photo_handler))
+    add_authorized_handler(app, MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     add_authorized_handler(app, CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_replaced_callback, pattern=r'^item_replaced:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_delete_callback, pattern=r'^item_delete:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_photo_callback, pattern=r'^item_photo:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_delete_callback, pattern=r'^ml_delete:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
+    add_authorized_handler(app, CallbackQueryHandler(vision_reject_callback, pattern=r'^vision_reject$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()

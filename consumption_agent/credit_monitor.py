@@ -127,9 +127,23 @@ class CreditAlert:
     paid_confirmed_via: str = ''
 
 
+def _db_connect():
+    """Подключение к БД с retry при блокировке."""
+    for attempt in range(3):
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=10)
+            conn.row_factory = sqlite3.Row
+            return conn
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e).lower() and attempt < 2:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            raise
+
+
 def init_credit_tables():
     """Создаёт таблицы для хранения кредитных алертов."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS credit_alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,7 +250,7 @@ def get_notification_kind(alert: CreditAlert) -> Optional[str]:
 
 def record_notification(alert_id: int, kind: str, telegram_chat_id: Optional[str] = None,
                         telegram_message_id: Optional[str] = None, is_test: bool = False):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.execute('''
         INSERT OR IGNORE INTO credit_alert_notifications
         (alert_id, kind, telegram_chat_id, telegram_message_id, is_test)
@@ -252,7 +266,7 @@ def record_notification(alert_id: int, kind: str, telegram_chat_id: Optional[str
 
 
 def was_notification_sent(alert_id: int, kind: str, is_test: bool = False) -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     row = conn.execute(
         'SELECT 1 FROM credit_alert_notifications WHERE alert_id = ? AND kind = ? AND is_test = ? LIMIT 1',
         (alert_id, kind, 1 if is_test else 0)
@@ -262,7 +276,7 @@ def was_notification_sent(alert_id: int, kind: str, is_test: bool = False) -> bo
 
 
 def get_alert_by_id(alert_id: int) -> Optional[CreditAlert]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     row = conn.execute('SELECT * FROM credit_alerts WHERE id = ?', (alert_id,)).fetchone()
     conn.close()
@@ -270,7 +284,7 @@ def get_alert_by_id(alert_id: int) -> Optional[CreditAlert]:
 
 
 def confirm_alert_paid(alert_id: int, via: str = 'telegram_button', note: str = '') -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     cur = conn.execute('''
         UPDATE credit_alerts
         SET paid_confirmed_at = datetime('now'),
@@ -287,7 +301,7 @@ def confirm_alert_paid(alert_id: int, via: str = 'telegram_button', note: str = 
 
 def get_alerts_ready_for_notification() -> List[Tuple[CreditAlert, str]]:
     init_credit_tables()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     rows = conn.execute('''
         SELECT * FROM credit_alerts
@@ -312,7 +326,7 @@ def get_alerts_ready_for_notification() -> List[Tuple[CreditAlert, str]]:
 
 def get_nearest_alerts(limit: int = 3) -> List[CreditAlert]:
     init_credit_tables()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     rows = conn.execute('''
         SELECT * FROM credit_alerts
@@ -543,7 +557,7 @@ def save_alerts(alerts: List[CreditAlert]) -> List[CreditAlert]:
     """Сохраняет алерты в БД, возвращает только новые."""
     new_alerts = []
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     
     for alert in alerts:
         # Проверяем, не существует ли уже такой алерт
@@ -583,7 +597,7 @@ def save_alerts(alerts: List[CreditAlert]) -> List[CreditAlert]:
 
 def get_pending_alerts(min_days: int = 3) -> List[CreditAlert]:
     """Получает алерты, по которым ещё не отправлено уведомление и платёж через min_days+ дней."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     
     rows = conn.execute('''
@@ -607,7 +621,7 @@ def get_pending_alerts(min_days: int = 3) -> List[CreditAlert]:
 
 def mark_notified(alert_ids: List[int]):
     """Отмечает алерты как отправленные."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     for alert_id in alert_ids:
         conn.execute(
             'UPDATE credit_alerts SET notified_at = datetime("now") WHERE id = ?',
