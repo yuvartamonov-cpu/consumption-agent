@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-11T23:20:51.302Z",
+  "updatedAt": "2026-05-12T18:16:15.628Z",
   "entries": {
     "memory:memory/2026-04-25.md:1:35": {
       "key": "memory:memory/2026-04-25.md:1:35",
@@ -715,6 +715,38 @@
         "отозван/заменён",
         "smtp-ssl",
         "yu.v.artamonov"
+      ]
+    },
+    "memory:memory/2026-05-12.md:1:27": {
+      "key": "memory:memory/2026-05-12.md:1:27",
+      "path": "memory/2026-05-12.md",
+      "startLine": 1,
+      "endLine": 27,
+      "source": "memory",
+      "snippet": "# 2026-05-12 ## Consumption Agent — Memory Lane improvements ### /ml_last fixed and enhanced - Исправлена ошибка `AttributeError: 'sqlite3.Row' object has no attribute 'get'` в `/ml_last` — переписано на прямой доступ по ключу `r['media_asset_id']` - Команда `/ml_last` теперь отправляет фото для записей с `media_asset_id` - У каждого фото — кнопка 🗑 Удалить (колбэк `ml_delete_callback`), которая удаляет запись из `memory_lane_items` + файл из `media_assets` ### Vision enrichment → БД - `save_memory_lane()` теперь принимает `vision_info` (name, description, brand из Vision API) - Добавлены колонки `name`, `description`, `brand` в таблицу `memory_lane_items` (через `_ensure_vision_columns`",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.8331250846385956,
+      "maxScore": 0.42205805778503414,
+      "firstRecalledAt": "2026-05-12T12:51:02.515Z",
+      "lastRecalledAt": "2026-05-12T18:16:15.628Z",
+      "queryHashes": [
+        "3ab94adaf455",
+        "5a26374e33a2"
+      ],
+      "recallDays": [
+        "2026-05-12"
+      ],
+      "conceptTags": [
+        "ml-last",
+        "sqlite3.row",
+        "media-asset-id",
+        "ml-delete-callback",
+        "memory-lane-items",
+        "media-assets",
+        "save-memory-lane",
+        "vision-info"
       ]
     }
   }

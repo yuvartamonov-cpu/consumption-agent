@@ -84,14 +84,57 @@ def _call_vision(image_path: str, prompt: str, model: str = None, max_tokens: in
     return response.choices[0].message.content.strip()
 
 
-async def _call_vision_async(image_path: str, prompt: str, model: str = None, max_tokens: int = 1000) -> str:
-    """Асинхронная версия вызова Vision API.
+def _call_vision_with_timeout(image_path: str, prompt: str, model: str = None, max_tokens: int = 1000, timeout: float = 30.0):
+    """Запускает _call_vision в отдельном процессе с жёстким таймаутом.
     
-    Запускает синхронный _call_vision в отдельном потоке,
-    чтобы asyncio.wait_for мог прервать таймаут.
+    Если процесс не завершился за timeout секунд — убивается.
+    Возвращает (result, timed_out).
     """
-    import asyncio
-    return await asyncio.to_thread(_call_vision, image_path, prompt, model, max_tokens)
+    import multiprocessing
+    import time
+    
+    manager = multiprocessing.Manager()
+    result_dict = manager.dict()
+    
+    def worker(path, pr, m, mt, rd):
+        try:
+            result = _call_vision(path, pr, m, mt)
+            rd['status'] = 'ok'
+            rd['result'] = result
+        except Exception as e:
+            rd['status'] = 'error'
+            rd['error'] = str(e)
+    
+    process = multiprocessing.Process(
+        target=worker,
+        args=(image_path, prompt, model, max_tokens, result_dict)
+    )
+    process.start()
+    
+    # Ждём с проверкой каждые 0.5 сек
+    elapsed = 0.0
+    while process.is_alive() and elapsed < timeout:
+        time.sleep(0.5)
+        elapsed += 0.5
+    
+    if process.is_alive():
+        log.warning(f"Vision process timeout after {timeout}s for {image_path}")
+        process.terminate()
+        process.join(timeout=5.0)
+        if process.is_alive():
+            process.kill()
+            process.join()
+        return None, True
+    
+    process.join(timeout=1.0)
+    
+    if result_dict.get('status') == 'ok':
+        return result_dict['result'], False
+    elif result_dict.get('status') == 'error':
+        raise RuntimeError(result_dict.get('error', 'Unknown error'))
+    else:
+        log.warning(f"Vision process no result for {image_path}")
+        return None, True
 
 
 def classify_photo(image_path: str) -> str:
@@ -100,7 +143,9 @@ def classify_photo(image_path: str) -> str:
     Дёшево (~2K tokens).
     """
     try:
-        result = _call_vision(image_path, CLASSIFY_PROMPT, max_tokens=10)
+        result, timed_out = _call_vision_with_timeout(image_path, CLASSIFY_PROMPT, max_tokens=10, timeout=30.0)
+        if timed_out:
+            return 'unknown'
         result = result.lower().strip().rstrip('.')
         valid = {'receipt', 'tag', 'clothing', 'food', 'interior', 'tech', 'item', 'other'}
         return result if result in valid else 'other'
@@ -110,15 +155,10 @@ def classify_photo(image_path: str) -> str:
 
 
 async def classify_photo_async(image_path: str) -> str:
-    """Асинхронная версия classify_photo."""
-    try:
-        result = await _call_vision_async(image_path, CLASSIFY_PROMPT, max_tokens=10)
-        result = result.lower().strip().rstrip('.')
-        valid = {'receipt', 'tag', 'clothing', 'food', 'interior', 'tech', 'item', 'other'}
-        return result if result in valid else 'other'
-    except Exception as e:
-        log.error(f"classify_photo_async failed: {e}")
-        return 'unknown'
+    """Асинхронная версия classify_photo с жёстким таймаутом 30 сек."""
+    import asyncio
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, classify_photo, image_path)
 
 
 def recognize_item(image_path: str, model: str = None) -> dict:
@@ -127,7 +167,9 @@ def recognize_item(image_path: str, model: str = None) -> dict:
     Возвращает dict с полями: type, name, brand, category, color, material, style_tags, description.
     """
     try:
-        text = _call_vision(image_path, ITEM_PROMPT, model=model)
+        text, timed_out = _call_vision_with_timeout(image_path, ITEM_PROMPT, model=model, timeout=30.0)
+        if timed_out:
+            return {"error": "timeout", "type": "unknown", "name": "Объект не распознан", "description": "Распознавание не завершилось за 30 секунд"}
         text = re.sub(r'^```(?:json)?\s*', '', text)
         text = re.sub(r'\s*```$', '', text)
         result = json.loads(text)
@@ -141,19 +183,10 @@ def recognize_item(image_path: str, model: str = None) -> dict:
 
 
 async def recognize_item_async(image_path: str, model: str = None) -> dict:
-    """Асинхронная версия recognize_item."""
-    try:
-        text = await _call_vision_async(image_path, ITEM_PROMPT, model=model)
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        result = json.loads(text)
-        return result
-    except json.JSONDecodeError as e:
-        log.error(f"Vision item async: invalid JSON: {e}")
-        return {"error": f"Invalid JSON: {e}", "type": "unknown"}
-    except Exception as e:
-        log.error(f"Vision item async failed: {e}")
-        return {"error": str(e), "type": "unknown"}
+    """Асинхронная версия recognize_item с жёстким таймаутом 30 сек."""
+    import asyncio
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, recognize_item, image_path, model)
 
 
 def enrich_memory_lane(image_path: str, caption: str = "") -> dict:

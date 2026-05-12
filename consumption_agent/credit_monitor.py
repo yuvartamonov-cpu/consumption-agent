@@ -544,7 +544,7 @@ def is_credit_message(subject: str, body: str) -> bool:
     return False
 
 
-def check_email_account(config: dict, days_back: int = 5) -> List[CreditAlert]:
+def check_email_account(config: dict, days_back: int = 1) -> List[CreditAlert]:
     """Проверяет почтовый ящик на кредитные сообщения."""
     alerts = []
     
@@ -565,22 +565,22 @@ def check_email_account(config: dict, days_back: int = 5) -> List[CreditAlert]:
         mail.login(login_user, password_clean)
         mail.select('INBOX')
         
-        # Ищем письма за последние N дней
-        since_date = (datetime.now() - timedelta(days=days_back)).strftime('%d-%b-%Y')
+        # Ищем письма ТОЛЬКО за текущий день (ON)
+        on_date = datetime.now().strftime('%d-%b-%Y')
         
         # Сначала пробуем только непрочитанные (быстро)
-        _, message_numbers = mail.search(None, f'(SINCE {since_date} UNSEEN)')
+        _, message_numbers = mail.search(None, f'(ON {on_date} UNSEEN)')
         nums = message_numbers[0].split()
         
-        # Если непрочитанных нет — ищем все (медленнее, но надёжнее)
+        # Если непрочитанных нет — ищем все за сегодня
         if not nums:
-            _, message_numbers = mail.search(None, f'(SINCE {since_date})')
+            _, message_numbers = mail.search(None, f'(ON {on_date})')
             nums = message_numbers[0].split()
-            print(f"   Писем за {days_back} дней (все): {len(nums)}")
+            print(f"   Писем за сегодня (все): {len(nums)}")
         else:
-            print(f"   Писем за {days_back} дней (непрочитанных): {len(nums)}")
+            print(f"   Писем за сегодня (непрочитанных): {len(nums)}")
         
-        for num in nums[:50]:  # Ограничиваем 50 письмами для скорости
+        for num in nums[:100]:  # Ограничиваем 100 письмами для скорости
             try:
                 _, msg_data = mail.fetch(num, '(RFC822)')
                 msg = email.message_from_bytes(msg_data[0][1])
@@ -739,7 +739,7 @@ def check_all_emails() -> List[CreditAlert]:
     
     for config in IMAP_CONFIGS:
         print(f"📧 Проверяем {config['name']}...")
-        alerts = check_email_account(config, days_back=5)
+        alerts = check_email_account(config, days_back=1)
         print(f"   Найдено {len(alerts)} кредитных сообщений")
         all_alerts.extend(alerts)
     
