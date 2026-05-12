@@ -308,37 +308,37 @@ def check_sms_fines():
     files = glob_mod.glob(db_glob)
     if not files:
         return sms_fines
-    phone_db_path = files[0]
-    if not os.path.exists(phone_db_path):
-        return sms_fines
-    try:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
-        shutil.copy2(phone_db_path, tmp.name)
-        conn = sqlite3.connect(tmp.name)
-        rows = conn.execute("""
-            SELECT body, from_address, timestamp FROM message
-            WHERE body LIKE '%шраф%'
-               OR body LIKE '%гибдд%'
-               OR body LIKE '%платная дорога%'
-               OR body LIKE '%цкад%'
-               OR body LIKE '%автодор%'
-               OR body LIKE '%нарушение%'
-               OR body LIKE '%постановление%'
-               OR body LIKE '%пдд%'
-               OR body LIKE '%ам пп%'
-            ORDER BY timestamp DESC LIMIT 10
-        """).fetchall()
-        conn.close()
-        os.unlink(tmp.name)
-        for body, sender, ts in rows:
-            sms_fines.append({
-                'source': 'SMS',
-                'sender': sender,
-                'body': body[:100],
-                'timestamp': ts,
-            })
-    except Exception as e:
-        print(f'  ошибка SMS: {e}')
+    for phone_db_path in files:
+        if not os.path.exists(phone_db_path):
+            continue
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+            shutil.copy2(phone_db_path, tmp.name)
+            conn = sqlite3.connect(tmp.name)
+            rows = conn.execute("""
+                SELECT body, from_address, timestamp FROM message
+                WHERE body LIKE '%шраф%'
+                   OR body LIKE '%гибдд%'
+                   OR body LIKE '%платная дорога%'
+                   OR body LIKE '%цкад%'
+                   OR body LIKE '%автодор%'
+                   OR body LIKE '%нарушение%'
+                   OR body LIKE '%постановление%'
+                   OR body LIKE '%пдд%'
+                   OR body LIKE '%ам пп%'
+                ORDER BY timestamp DESC LIMIT 10
+            """).fetchall()
+            conn.close()
+            os.unlink(tmp.name)
+            for body, sender, ts in rows:
+                sms_fines.append({
+                    'source': 'SMS',
+                    'sender': sender,
+                    'body': body[:100],
+                    'timestamp': ts,
+                })
+        except Exception as e:
+            print(f'  ошибка SMS ({phone_db_path}): {e}')
     return sms_fines
 
 
