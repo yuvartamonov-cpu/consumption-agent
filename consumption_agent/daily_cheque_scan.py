@@ -147,7 +147,7 @@ def is_already_imported(conn, date_str, amount, store_name):
     return row is not None
 
 
-def add_purchase(conn, date_str, total_amount, store_name, items, source_name, notes_suffix='', payment_method='card'):
+def add_purchase(conn, date_str, total_amount, store_name, items, source_name, notes_suffix='', payment_method='card', email_msg_id=None):
     if not date_str or not total_amount or not store_name:
         return None
     # дата
@@ -163,12 +163,21 @@ def add_purchase(conn, date_str, total_amount, store_name, items, source_name, n
     notes = f"{store_name}: {', '.join(item_names)}"
     if notes_suffix:
         notes += f" ({notes_suffix})"
+
+    # Дедупликация по email_message_id (только для писем)
+    if email_msg_id:
+        existing = conn.execute(
+            "SELECT id FROM purchases WHERE email_message_id = ?", (email_msg_id,)
+        ).fetchone()
+        if existing:
+            log.info(f"   ⏭ Уже есть (msg_id): {email_msg_id}")
+            return None
     
     try:
         cur = conn.execute("""
-            INSERT INTO purchases (purchase_date, total_amount, payment_method, source, store_name, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (d, float(total_amount), payment_method, source_name, store_name, notes[:500]))
+            INSERT INTO purchases (purchase_date, total_amount, payment_method, source, store_name, notes, email_message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (d, float(total_amount), payment_method, source_name, store_name, notes[:500], email_msg_id))
         pid = cur.lastrowid
         log.info(f"   ✅ {d} | {float(total_amount):.0f} ₽ | {store_name} ({len(items)} товаров)")
         return pid
@@ -380,9 +389,10 @@ def scan_mailbox(config, conn):
                 
                 # 5. Если магазин определён — добавляем
                 if store_name and total:
+                    email_id = msg.get('Message-ID', '').strip()
                     if not is_already_imported(conn, date_str, total, store_name):
                         items_data = items if items else [(subj_val[:100], '')]
-                        add_purchase(conn, date_str, total, store_name, items_data, config['name'])
+                        add_purchase(conn, date_str, total, store_name, items_data, config['name'], email_msg_id=email_id)
                         added += 1
                     else:
                         log.info(f"   ⏭ Уже есть: {date_str} {total:.0f} ₽ {store_name}")
