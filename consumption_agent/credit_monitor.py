@@ -493,7 +493,7 @@ def is_credit_message(subject: str, body: str) -> bool:
     return False
 
 
-def check_email_account(config: dict, days_back: int = 7) -> List[CreditAlert]:
+def check_email_account(config: dict, days_back: int = 5) -> List[CreditAlert]:
     """Проверяет почтовый ящик на кредитные сообщения."""
     alerts = []
     
@@ -681,7 +681,7 @@ def check_all_emails() -> List[CreditAlert]:
     
     for config in IMAP_CONFIGS:
         print(f"📧 Проверяем {config['name']}...")
-        alerts = check_email_account(config)
+        alerts = check_email_account(config, days_back=5)
         print(f"   Найдено {len(alerts)} кредитных сообщений")
         all_alerts.extend(alerts)
     
