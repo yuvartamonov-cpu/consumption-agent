@@ -475,11 +475,26 @@ def extract_payment_amount(text: str) -> Optional[float]:
     return None
 
 
+# Маркетинговые слова — исключаем письма с этими терминами
+MARKETING_KEYWORDS = [
+    'скидка', 'кэшбэк', 'кешбэк', 'подарок', 'акция', 'промокод',
+    'выгода', 'экономьте', 'бонус', 'кешбек', 'кэшбек',
+    'страховка жилья', 'страхование', 'полис',
+    'самокат', 'доставка', 'город мчит',
+    'топливо', 'заправка', 'азс',
+    'пицца', 'шашлык', 'майские',
+]
+
 def is_credit_message(subject: str, body: str) -> bool:
-    """Проверяет, является ли сообщение кредитным."""
+    """Проверяет, является ли сообщение кредитным (не маркетинговым)."""
     text = (subject + ' ' + body).lower()
     
-    # Проверяем ключевые слова
+    # Сначала проверяем маркетинг — исключаем
+    for mk in MARKETING_KEYWORDS:
+        if mk in text:
+            return False
+    
+    # Проверяем ключевые слова кредитов
     for keyword in CREDIT_KEYWORDS:
         if re.search(keyword, text):
             return True
@@ -514,13 +529,20 @@ def check_email_account(config: dict, days_back: int = 5) -> List[CreditAlert]:
         mail.login(login_user, password_clean)
         mail.select('INBOX')
         
-        # Ищем письма за последние N дней + только непрочитанные для скорости
+        # Ищем письма за последние N дней
         since_date = (datetime.now() - timedelta(days=days_back)).strftime('%d-%b-%Y')
-        search_criteria = f'(SINCE {since_date} UNSEEN)'
-        _, message_numbers = mail.search(None, search_criteria)
         
+        # Сначала пробуем только непрочитанные (быстро)
+        _, message_numbers = mail.search(None, f'(SINCE {since_date} UNSEEN)')
         nums = message_numbers[0].split()
-        print(f"   Писем за {days_back} дней (непрочитанных): {len(nums)}")
+        
+        # Если непрочитанных нет — ищем все (медленнее, но надёжнее)
+        if not nums:
+            _, message_numbers = mail.search(None, f'(SINCE {since_date})')
+            nums = message_numbers[0].split()
+            print(f"   Писем за {days_back} дней (все): {len(nums)}")
+        else:
+            print(f"   Писем за {days_back} дней (непрочитанных): {len(nums)}")
         
         for num in nums[:50]:  # Ограничиваем 50 письмами для скорости
             try:
