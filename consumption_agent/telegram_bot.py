@@ -546,6 +546,57 @@ def find_product_image_urls(query: str) -> dict:
     return result
 
 
+def search_product_info_gemini(brand: str, article: str, barcode: str = None) -> dict:
+    """Ищет информацию о товаре через Gemini API по данным бирки."""
+    try:
+        import google.generativeai as genai
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            log.warning('GEMINI_API_KEY not set, skipping Gemini search')
+            return {}
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        query_parts = [f'Бренд: {brand}']
+        if article:
+            query_parts.append(f'Артикул: {article}')
+        if barcode:
+            query_parts.append(f'Штрихкод: {barcode}')
+        
+        prompt = f"""Найди информацию о товаре одежды по данным бирки:
+{'\n'.join(query_parts)}
+
+Верни результат в формате JSON:
+{{
+  "name": "название товара",
+  "category": "категория (одежда/обувь/аксессуары)",
+  "description": "описание",
+  "color": "цвет",
+  "material": "материал",
+  "price_rub": "цена в рублях (число или null)",
+  "image_url": "URL фото товара или null",
+  "product_url": "URL страницы товара или null"
+}}
+
+Если не нашёл информацию, верни пустые значения."""
+        
+        response = model.generate_content(prompt)
+        text = response.text
+        
+        # Извлекаем JSON из ответа
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            log.info(f'Gemini search result: {result}')
+            return result
+        
+        return {}
+    except Exception as e:
+        log.warning(f'Gemini search failed: {e}')
+        return {}
+
+
 def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
     """Извлекает данные с бирки одежды."""
     text = ocr_text or ''
@@ -1003,9 +1054,45 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             log.warning(f"Vision classify failed: {e}")
 
     tag_probe = parse_clothing_tag(text or '', receipt_path)
-    if image_type in ('unknown', 'other') and (tag_probe.get('brand') or tag_probe.get('article') or tag_probe.get('barcode')) and not total_amount:
+    
+    # Проверяем штрихкод через pyzbar (более надёжный метод)
+    pyzbar_barcode = None
+    try:
+        from pyzbar.pyzbar import decode
+        from PIL import Image
+        img = Image.open(receipt_path)
+        codes = decode(img)
+        if codes:
+            pyzbar_barcode = codes[0].data.decode('utf-8')
+            log.info(f'pyzbar found barcode: {pyzbar_barcode}')
+    except Exception as e:
+        log.debug(f'pyzbar failed: {e}')
+    
+    # Считаем биркой только если:
+    # 1. Есть brand + (article или barcode)
+    # 2. ИЛИ есть чёткий штрихкод EAN-13 (через OCR или pyzbar)
+    # 3. И текст содержит признаки бирки (размер, состав, страна)
+    has_barcode = (tag_probe.get('barcode') and len(str(tag_probe.get('barcode'))) >= 8) or (pyzbar_barcode and len(pyzbar_barcode) >= 8)
+    has_article = tag_probe.get('article') and len(str(tag_probe.get('article'))) >= 5
+    has_brand = tag_probe.get('brand') and len(str(tag_probe.get('brand'))) >= 2
+    
+    # Проверяем, есть ли в тексте признаки бирки
+    raw_text = (tag_probe.get('raw') or '').upper()
+    tag_indicators = ['СОСТАВ', 'СТРАНА', 'РАЗМЕР', 'SIZE', 'MADE IN', 'АРТИКУЛ', 'ARTICLE', 'CARE', 'WASH']
+    has_tag_indicators = any(ind in raw_text for ind in tag_indicators)
+    
+    is_real_tag = (
+        (has_brand and (has_article or has_barcode)) or
+        (has_barcode and has_tag_indicators) or
+        (pyzbar_barcode and len(pyzbar_barcode) >= 10)  # EAN-13 штрихкод = точно бирка
+    )
+    
+    # Если Vision API сказал tech/other, но есть признаки бирки — переопределяем
+    if image_type in ('unknown', 'other', 'tech') and is_real_tag and not total_amount:
         image_type = 'tag'
-    log.info(f"Тип изображения: {image_type}")
+        log.info(f"Тип изображения: tag (brand={tag_probe.get('brand')}, article={tag_probe.get('article')}, barcode={pyzbar_barcode or tag_probe.get('barcode')})")
+    else:
+        log.info(f"Тип изображения: {image_type} (is_real_tag={is_real_tag}, has_brand={has_brand}, has_article={has_article}, has_barcode={has_barcode}, pyzbar={pyzbar_barcode})")
 
     items = []
 
@@ -1013,10 +1100,15 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other') and not qr_data:
         log.info(f'photo_handler: recognizing item, image_type={image_type}, path={receipt_path}')
         try:
+            import asyncio
             from vision_item import recognize_item
-            item_info = recognize_item(receipt_path)
+            # Таймаут 30 секунд на распознавание
+            item_info = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, recognize_item, receipt_path),
+                timeout=30.0
+            )
             log.info(f'photo_handler: recognize_item result={item_info}')
-            if item_info and 'error' not in item_info:
+            if item_info and 'error' not in item_info and item_info.get('name'):
                 item_name = item_info.get('name', 'Предмет')
                 item_brand = item_info.get('brand')
                 item_cat = item_info.get('category', 'другое')
@@ -1105,12 +1197,28 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parts.append('\nДобавлено в инвентарь ✅')
                 await update.message.reply_text('\n'.join(parts))
                 return
+        except asyncio.TimeoutError:
+            log.warning(f'Vision item recognition timeout after 30s')
+            await update.message.reply_text(
+                '⏱️ Товар не распознан по фото (время ожидания истекло).\n\n'
+                'Попробуйте:\n'
+                '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                '• Использовать команду /add_item <название>'
+            )
+            return
         except Exception as e:
             log.warning(f'Vision item recognition failed: {e}')
-            # fall through to receipt handler
+            await update.message.reply_text(
+                '❌ Товар не распознан по фото.\n\n'
+                'Попробуйте:\n'
+                '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                '• Использовать команду /add_item <название>'
+            )
+            return
 
     if image_type == 'tag':
         # === Обработка бирки ===
+        log.info(f'photo_handler: processing tag, brand={tag_probe.get("brand")}, article={tag_probe.get("article")}')
         tag = tag_probe
         fx_date = purchase_date or date.today().isoformat()
         rate = get_fx_rate(tag['currency'], fx_date)
@@ -1140,6 +1248,14 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         search_query = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('article'), tag.get('color')] if x) or (tag.get('barcode') or 'fashion tag')
+        
+        # Ищем информацию через Gemini
+        gemini_info = search_product_info_gemini(
+            tag.get('brand', ''),
+            tag.get('article', ''),
+            tag.get('barcode')
+        )
+        
         google_images_url = f"https://www.google.com/search?tbm=isch&q={quote_plus(search_query)}"
         yandex_images_url = f"https://yandex.ru/images/search?text={quote_plus(search_query)}"
         bing_images_url = f"https://www.bing.com/images/search?q={quote_plus(search_query)}"
@@ -1161,13 +1277,40 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 response_lines.append(f"Цена: {tag['price']} {tag['currency']} (≈ {price_rub:.0f} ₽)")
         response_lines.append("Пробую прислать фото.")
-        response_lines.append(f"Ссылки на фото:\nGoogle: {google_images_url}\nYandex: {yandex_images_url}\nBing: {bing_images_url}")
+        # Добавляем информацию от Gemini
+        if gemini_info:
+            response_lines.append('\n🔍 Найдено через Gemini:')
+            if gemini_info.get('name'):
+                response_lines.append(f"📌 Название: {gemini_info['name']}")
+            if gemini_info.get('category'):
+                response_lines.append(f"📂 Категория: {gemini_info['category']}")
+            if gemini_info.get('color'):
+                response_lines.append(f"🎨 Цвет: {gemini_info['color']}")
+            if gemini_info.get('material'):
+                response_lines.append(f"🧵 Материал: {gemini_info['material']}")
+            if gemini_info.get('price_rub'):
+                response_lines.append(f"💰 Цена: ~{gemini_info['price_rub']} ₽")
+            if gemini_info.get('product_url'):
+                response_lines.append(f"🔗 Ссылка: {gemini_info['product_url']}")
+        
+        response_lines.append(f"\nСсылки на фото:\nGoogle: {google_images_url}\nYandex: {yandex_images_url}\nBing: {bing_images_url}")
         if not tag.get('brand'):
             response_lines.append("⚠️ Бренд не найден в OCR. Нужна часть бирки с логотипом/названием бренда крупным планом.")
         if not tag.get('brand') and not tag.get('article'):
             response_lines.append(f"OCR: {(text or '')[:180].replace(chr(10), ' ')}")
         await update.message.reply_text('\n'.join(response_lines))
 
+        # Отправляем фото от Gemini если есть
+        if gemini_info and gemini_info.get('image_url'):
+            try:
+                await update.message.reply_photo(
+                    photo=gemini_info['image_url'],
+                    caption=f"🔍 Gemini: {gemini_info.get('name', search_query)}"
+                )
+            except Exception as e:
+                log.warning(f"Failed to send Gemini image: {e}")
+        
+        # Отправляем фото из поиска
         image_urls = find_product_image_urls(search_query)
         for engine_url in image_urls.values():
             if not engine_url or engine_url.startswith('https://www.google.com/search'):
@@ -2128,8 +2271,26 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Фильтр
     args = ' '.join(ctx.args).lower() if ctx.args else ''
     if args and args != 'all':
-        # Поиск по категории или названию
-        filtered = [r for r in all_items if args in (r[3] or '').lower() or args in (r[1] or '').lower()]
+        # Поиск по названию, бренду, категории, описанию, тегам
+        filtered = []
+        for r in all_items:
+            name = (r[1] or '').lower()
+            brand = (r[2] or '').lower()
+            cat = (r[3] or '').lower()
+            notes = (r[9] or '').lower()
+            attrs = {}
+            try:
+                attrs = json.loads(r[10] or '{}')
+            except json.JSONDecodeError:
+                pass
+            desc = (attrs.get('description') or '').lower()
+            tags = ' '.join(attrs.get('style_tags', [])).lower()
+            color = (attrs.get('color') or '').lower()
+            material = (attrs.get('material') or '').lower()
+            
+            search_text = f'{name} {brand} {cat} {notes} {desc} {tags} {color} {material}'
+            if args in search_text:
+                filtered.append(r)
     elif args == 'all':
         filtered = all_items
     else:
