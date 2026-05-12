@@ -384,10 +384,11 @@ def scan_mailbox(config, conn):
                         if 'подписк' in full_text or 'plus' in full_text:
                             total = 449.0
                 
-                # 4. Определение магазина по отправителю
+                # 4. Определение магазина по отправителю (только email + тема, не всё тело)
                 if not store_name:
+                    sender_subj = (sender_email + ' ' + subj_val.lower()).lower()
                     for keywords, sname in TARGET_SENDERS:
-                        if any(kw in sender_email or kw in subj_val.lower() or kw in full_text for kw in keywords):
+                        if any(kw in sender_subj for kw in keywords):
                             store_name = sname
                             total = extract_amount_from_body(body, html)
                             break
