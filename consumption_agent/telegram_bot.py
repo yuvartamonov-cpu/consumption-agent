@@ -2264,6 +2264,88 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
 
 
+async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /monthexp — расходы с начала месяца с расшифровкой по дням.
+    За текущий день — принудительное сканирование почт + SMS."""
+    await update.message.reply_text('🔍 Сканирую все почты и SMS на предмет чеков за сегодня...')
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, 'daily_cheque_scan.py'],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        log = result.stdout + result.stderr
+        print(f'[monthexp] scan result:\n{log[:500]}')
+    except Exception as e:
+        print(f'[monthexp] scan error: {e}')
+
+    today = datetime.now()
+    month_start = today.strftime('%Y-%m-01')
+    today_str = today.strftime('%Y-%m-%d')
+    month_name = today.strftime('%B %Y')
+
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT purchase_date, total_amount, store_name, source, notes
+            FROM purchases
+            WHERE purchase_date >= ? AND purchase_date <= ?
+              AND (deleted_at IS NULL OR deleted_at = '')
+            ORDER BY purchase_date, total_amount DESC
+        """, (month_start, today_str)).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text(f'📭 За {month_name} покупок не найдено.')
+        return
+
+    grand_total = sum(r[1] or 0 for r in rows)
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
+
+    lines = [f'📊 *Расходы за {month_name}*']
+    lines.append(f'_{len(rows)} покупок, всего {grand_total:,.0f} ₽_\n'.replace(',', ' '))
+
+    # Группировка по дням
+    by_day = {}
+    for r in rows:
+        d = r[0]
+        if d not in by_day:
+            by_day[d] = []
+        by_day[d].append(r)
+
+    for day in sorted(by_day.keys(), reverse=True):
+        day_rows = by_day[day]
+        day_total = sum(r[1] or 0 for r in day_rows)
+        day_label = 'Сегодня' if day == today_str else day
+        lines.append(f'\n📅 *{day_label}* — {day_total:,.0f} ₽ ({len(day_rows)} покупок)'.replace(',', ' '))
+
+        for r in day_rows:
+            date_str, amount, store, source, notes = r
+            amt = amount or 0
+            src_icon = source_icons.get(source or '', '📧')
+            store_clean = store or '—'
+            notes_clean = (notes or '').replace('\n', ' ').strip()[:60]
+            if notes_clean:
+                lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽ · {notes_clean}'.replace(',', ' '))
+            else:
+                lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
+
+    # По магазинам
+    by_store = {}
+    for r in rows:
+        s = r[2] or 'Другое'
+        by_store[s] = by_store.get(s, 0) + (r[1] or 0)
+    if len(by_store) > 1:
+        lines.append(f'\n📌 *Всего по магазинам:*')
+        for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
+            lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+
 async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /warranties — отчёт по гарантиям."""
     try:
@@ -2865,6 +2947,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/debts — проверка кредитов и займов по почтам + SMS\n'
         '/fines — неоплаченные штрафы\n'
         '/dayexp — расходы за сегодня с расшифровкой\n'
+        '/monthexp — расходы за месяц с расшифровкой по дням\n'
         '/warranties — отчёт по гарантиям\n'
         '/add <название> [<цена>] [<категория>] — добавить товар\n'
         '/add_photo — загрузить фото чека (OCR)\n'
@@ -3605,6 +3688,7 @@ def main():
     add_authorized_handler(app, CommandHandler('debts', cmd_debts))
     add_authorized_handler(app, CommandHandler('fines', cmd_fines))
     add_authorized_handler(app, CommandHandler('dayexp', cmd_dayexp))
+    add_authorized_handler(app, CommandHandler('monthexp', cmd_monthexp))
     add_authorized_handler(app, CommandHandler('warranties', cmd_warranties))
     add_authorized_handler(app, CommandHandler('set_warranty', cmd_set_warranty))
     add_authorized_handler(app, CommandHandler('ml_last', cmd_ml_last))
