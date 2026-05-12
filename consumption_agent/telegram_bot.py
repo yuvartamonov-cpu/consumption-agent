@@ -1011,9 +1011,11 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # === Если это предмет/одежда/еда/интерьер (не чек и не бирка) — распознаём как вещь ===
     if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other') and not qr_data:
+        log.info(f'photo_handler: recognizing item, image_type={image_type}, path={receipt_path}')
         try:
             from vision_item import recognize_item
             item_info = recognize_item(receipt_path)
+            log.info(f'photo_handler: recognize_item result={item_info}')
             if item_info and 'error' not in item_info:
                 item_name = item_info.get('name', 'Предмет')
                 item_brand = item_info.get('brand')
