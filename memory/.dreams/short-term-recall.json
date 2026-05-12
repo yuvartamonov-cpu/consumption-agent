@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-11T18:29:48.166Z",
+  "updatedAt": "2026-05-11T23:20:51.302Z",
   "entries": {
     "memory:memory/2026-04-25.md:1:35": {
       "key": "memory:memory/2026-04-25.md:1:35",
@@ -684,6 +684,37 @@
         "all-senders",
         "extract-amount-from-html",
         "fetch-head-batch"
+      ]
+    },
+    "memory:memory/2026-05-10.md:1:6": {
+      "key": "memory:memory/2026-05-10.md:1:6",
+      "path": "memory/2026-05-10.md",
+      "startLine": 1,
+      "endLine": 6,
+      "source": "memory",
+      "snippet": "- У consumption_agent roadmap обновлён: добавлены отдельные задачи по Госуслугам и поиску полной истории чеков Яндекс Драйв. - Код consumption_agent синхронизирован с Paperclip AI через git; при ребейзе был конфликт в telegram_bot.py, его разрешили объединением /find_car и /warranties. - Автоотправка roadmap на Gmail из WSL 10.05.2026 не заработала: SMTP/STARTTLS таймаутится даже при работающем VPN на Windows. - Старый Gmail app password считался скомпрометированным и был отозван/заменён пользователем 10.05.2026; секреты в память не записывать. - После замены Gmail app password отправка почты из WSL заработала через SMTP_SSL:465; roadmap успешно отправлен на yu.v.artamonov@gmail.com.",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4049908697605133,
+      "maxScore": 0.4049908697605133,
+      "firstRecalledAt": "2026-05-11T23:20:51.302Z",
+      "lastRecalledAt": "2026-05-11T23:20:51.302Z",
+      "queryHashes": [
+        "736c9fb7c717"
+      ],
+      "recallDays": [
+        "2026-05-12"
+      ],
+      "conceptTags": [
+        "consumption-agent",
+        "telegram-bot.py",
+        "find-car",
+        "10.05.2026",
+        "smtp/starttls",
+        "отозван/заменён",
+        "smtp-ssl",
+        "yu.v.artamonov"
       ]
     }
   }
