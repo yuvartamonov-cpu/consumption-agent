@@ -2351,8 +2351,14 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if attrs.get('estimated_price_rub'):
             details.append(f'💰 Оценка: ~{attrs["estimated_price_rub"]} ₽')
         if notes:
-            # Убираем служебные строки из notes для вывода
+            # Убираем служебные строки и Vision-данные (уже показаны в attributes)
             clean_notes = notes.replace('Добавлено через /add_item', '').strip()
+            # Убираем строки с цветом, материалом, описанием, ценой (дубли из Vision)
+            for prefix in ['Цвет:', 'Материал:', 'Описание:', 'Оценочная цена:']:
+                clean_notes = '\n'.join(
+                    line for line in clean_notes.split('\n') 
+                    if not line.strip().startswith(prefix)
+                ).strip()
             if clean_notes:
                 details.append(f'📋 {clean_notes[:200]}')
 
