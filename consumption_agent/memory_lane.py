@@ -308,15 +308,30 @@ def save_memory_lane(
     media_asset_id: int | None,
     parsed: dict | None = None,
     source: str = 'telegram',
+    vision_info: dict | None = None,
 ) -> int:
-    """Insert a memory_lane_items row using parsed signals from parse_caption."""
+    """Insert a memory_lane_items row using parsed signals from parse_caption.
+    
+    vision_info: результат enrich_memory_lane (name, description, brand, color, estimated_price_rub)
+    """
     ensure_memory_lane_schema(conn)
+    # Добавляем колонки name/description/brand, если их нет
+    _ensure_vision_columns(conn)
     parsed = parsed if parsed is not None else parse_caption(caption, conn)
+    
+    name = None
+    description = None
+    brand = None
+    if vision_info and vision_info.get('name'):
+        name = vision_info.get('name')
+        description = vision_info.get('description')
+        brand = vision_info.get('brand')
+    
     cur = conn.execute(
         """
         INSERT INTO memory_lane_items
-            (caption, liked_features, disliked_features, style_tags, topic, media_asset_id, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (caption, liked_features, disliked_features, style_tags, topic, media_asset_id, source, name, description, brand)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             caption,
@@ -326,19 +341,33 @@ def save_memory_lane(
             parsed.get('topic'),
             media_asset_id,
             source,
+            name,
+            description,
+            brand,
         ),
     )
     conn.commit()
     return cur.lastrowid
 
 
+def _ensure_vision_columns(conn):
+    """Добавляет колонки name, description, brand в memory_lane_items, если их нет."""
+    for col, col_type in [('name', 'TEXT'), ('description', 'TEXT'), ('brand', 'TEXT')]:
+        try:
+            conn.execute(f'ALTER TABLE memory_lane_items ADD COLUMN {col} {col_type}')
+        except sqlite3.OperationalError:
+            pass  # уже существует
+
+
 def list_recent(conn: sqlite3.Connection, n: int = 10, topic: str | None = None) -> list:
     """Return last N memory_lane rows, newest first. Optionally filter by topic."""
     ensure_memory_lane_schema(conn)
+    _ensure_vision_columns(conn)
     if topic:
         rows = conn.execute(
             """
-            SELECT id, created_at, caption, style_tags, topic, media_asset_id
+            SELECT id, created_at, caption, style_tags, topic, media_asset_id,
+                   name, description, brand
             FROM memory_lane_items
             WHERE topic = ?
             ORDER BY id DESC
@@ -349,7 +378,8 @@ def list_recent(conn: sqlite3.Connection, n: int = 10, topic: str | None = None)
     else:
         rows = conn.execute(
             """
-            SELECT id, created_at, caption, style_tags, topic, media_asset_id
+            SELECT id, created_at, caption, style_tags, topic, media_asset_id,
+                   name, description, brand
             FROM memory_lane_items
             ORDER BY id DESC
             LIMIT ?

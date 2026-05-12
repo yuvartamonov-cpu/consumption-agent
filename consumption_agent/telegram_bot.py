@@ -980,7 +980,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     log.warning(f'Vision enrich failed (non-critical): {e}')
 
-                item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed)
+                item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed, vision_info=vision_info or None)
             finally:
                 conn.close()
 
@@ -2779,7 +2779,11 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         topic = r['topic'] or '—'
         date = (r['created_at'] or '')[:10]
         has_photo = '📷' if r['media_asset_id'] else ''
-        lines.append(f'#{r["id"]:>3} {has_photo} {date}  [{topic}]  {cap}  {tag_str}'.rstrip())
+        name = r['name'] or ''
+        desc = (r['description'] or '')[:40] if r['description'] else ''
+        name_part = f' {name}' if name else ''
+        desc_part = f' — {desc}…' if desc else ''
+        lines.append(f'#{r["id"]:>3}{has_photo} {date} [{topic}]{name_part}{desc_part}'.rstrip())
     await update.message.reply_text('\n'.join(lines))
 
     # Отправляем фото для записей, у которых есть media_asset_id
@@ -2794,16 +2798,29 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ).fetchone()
             if not row or not os.path.exists(row[0]):
                 continue
-            caption_lines = [f'#{r["id"]}']
+            caption_lines = [f'📌 {r["name"]}' if r['name'] else f'#{r["id"]}']
+            if r['name']:
+                caption_lines[0] = f'📌 {r["name"]}'
+            else:
+                caption_lines[0] = f'#{r["id"]}'
+            if r['description']:
+                caption_lines.append(r['description'])
             if r['caption']:
-                caption_lines.append(r['caption'].strip())
+                cap = r['caption'].strip()
+                if cap != (r['name'] or '') and not cap.startswith('#'):
+                    caption_lines.append(cap)
             if r['topic']:
                 caption_lines.append(f'📂 {r["topic"]}')
             caption_lines.append(f'🕒 {str(r["created_at"])[:10]}')
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton('🗑 Удалить', callback_data=f'ml_delete:{r["id"]}')
+            ]])
             with open(row[0], 'rb') as fh:
                 await update.message.reply_photo(
                     photo=fh.read(),
-                    caption='\n'.join(caption_lines)
+                    caption='\n'.join(caption_lines),
+                    reply_markup=kb
                 )
         except Exception as e:
             log.warning(f'ml_last: failed to send photo for ml_id={r["id"]}: {e}')
@@ -3081,6 +3098,76 @@ async def item_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
 
+async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '🗑 Удалить' для Memory Lane записей в /ml_last."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('ml_delete:'):
+        return
+
+    try:
+        ml_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный id', show_alert=True)
+        return
+
+    conn = get_db()
+    try:
+        # Получаем media_asset_id для удаления
+        row = conn.execute(
+            'SELECT media_asset_id FROM memory_lane_items WHERE id = ?', (ml_id,)
+        ).fetchone()
+        if not row:
+            await query.answer('⚠️ Запись не найдена', show_alert=True)
+            return
+
+        media_asset_id = row[0]
+
+        # Удаляем запись из memory_lane_items
+        conn.execute('DELETE FROM memory_lane_items WHERE id = ?', (ml_id,))
+
+        # Удаляем связанный media_asset (файл + запись в БД)
+        if media_asset_id:
+            ma_row = conn.execute(
+                'SELECT file_path FROM media_assets WHERE id = ?', (media_asset_id,)
+            ).fetchone()
+            conn.execute('DELETE FROM media_assets WHERE id = ?', (media_asset_id,))
+            if ma_row and os.path.exists(ma_row[0]):
+                try:
+                    os.remove(ma_row[0])
+                except Exception:
+                    pass
+
+        conn.commit()
+
+        # Обновляем сообщение (убираем фото, меняем подпись)
+        try:
+            await query.edit_message_caption(
+                caption=f'🗑 Запись #{ml_id} удалена',
+                reply_markup=None
+            )
+        except Exception:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
+        await query.answer('🗑 Запись удалена')
+    except Exception as e:
+        log.warning(f'ml_delete_callback failed: {e}')
+        await query.answer('⚠️ Ошибка при удалении', show_alert=True)
+    finally:
+        conn.close()
+
+
 async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки '📷 Фото' — отправляет фото товара."""
     query = update.callback_query
@@ -3203,6 +3290,7 @@ def main():
     add_authorized_handler(app, CallbackQueryHandler(item_replaced_callback, pattern=r'^item_replaced:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_delete_callback, pattern=r'^item_delete:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_photo_callback, pattern=r'^item_photo:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(ml_delete_callback, pattern=r'^ml_delete:\d+$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()
