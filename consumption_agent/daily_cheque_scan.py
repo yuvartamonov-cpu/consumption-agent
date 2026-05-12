@@ -447,12 +447,11 @@ def windows_ticks_to_datetime(value: int) -> Optional[datetime]:
     except: return None
 
 
-def find_phone_link_db():
+def find_phone_link_dbs():
     matches = glob.glob(WINDOWS_PHONE_LINK_DB_GLOB)
     matches = [m for m in matches if os.path.exists(m)]
-    if not matches: return None
     matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-    return matches[0]
+    return matches
 
 
 def copy_db_bundle(src_db: str) -> str:
@@ -466,138 +465,132 @@ def copy_db_bundle(src_db: str) -> str:
 
 
 def scan_sms_today(parent_conn):
-    """Сканирует SMS за сегодняшний день на предмет расходов.
+    """Сканирует SMS из всех БД Phone Link (Z Fold 3 + Z Fold 4) за сегодня.
     Возвращает количество добавленных записей.
     """
-    db_path = find_phone_link_db()
-    if not db_path:
-        log.warning("   ⚠️ База Phone Link не найдена")
+    db_paths = find_phone_link_dbs()
+    if not db_paths:
+        log.warning("   ⚠️ Базы Phone Link не найдены")
         return 0
     
-    local_db = copy_db_bundle(db_path)
-    try:
-        sms_conn = sqlite3.connect(local_db)
-        sms_conn.row_factory = sqlite3.Row
-        
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        # FILETIME для сегодня
-        today_ft = (int(today_start.timestamp()) + 11644473600) * 10_000_000
-        
-        rows = sms_conn.execute(
-            'SELECT message_id, from_address, body, timestamp, type FROM message WHERE timestamp >= ? ORDER BY timestamp',
-            (today_ft,)
-        ).fetchall()
-        
-        if not rows:
-            # если за сегодня нет, проверь за последние 2 дня
-            two_days_ago = today_start - timedelta(days=2)
-            two_days_ft = (int(two_days_ago.timestamp()) + 11644473600) * 10_000_000
+    total_added = 0
+    for db_path in db_paths:
+        log.info(f"   📱 Phone Link: {db_path}")
+        local_db = copy_db_bundle(db_path)
+        try:
+            sms_conn = sqlite3.connect(local_db)
+            sms_conn.row_factory = sqlite3.Row
+
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_ft = (int(today_start.timestamp()) + 11644473600) * 10_000_000
+
             rows = sms_conn.execute(
                 'SELECT message_id, from_address, body, timestamp, type FROM message WHERE timestamp >= ? ORDER BY timestamp',
-                (two_days_ft,)
+                (today_ft,)
             ).fetchall()
-        
-        sms_conn.close()
-        
-        if not rows:
-            log.info(f"   Нет SMS за последние 2 дня")
-            return 0
-        
-        added = 0
-        sms_found = 0
-        
-        for row in rows:
-            body = row['body'] or ''
-            from_addr = str(row['from_address'] or '')
-            dt = windows_ticks_to_datetime(row['timestamp'])
-            
-            if not body.strip():
+
+            if not rows:
+                two_days_ago = today_start - timedelta(days=2)
+                two_days_ft = (int(two_days_ago.timestamp()) + 11644473600) * 10_000_000
+                rows = sms_conn.execute(
+                    'SELECT message_id, from_address, body, timestamp, type FROM message WHERE timestamp >= ? ORDER BY timestamp',
+                    (two_days_ft,)
+                ).fetchall()
+
+            sms_conn.close()
+
+            if not rows:
+                log.info(f"   Нет SMS за последние 2 дня")
                 continue
-            
-            text = f"{from_addr} {body}".lower()
-            
-            # Ищем расходы (покупки, списания, оплаты)
-            is_charge = False
-            
-            # Сбер 900
-            if '900' in from_addr:
-                if any(re.search(p, text, re.IGNORECASE) for p in INTERESTING_SMS_KEYWORDS):
-                    is_charge = True
-            
-            # Сторонние банки
-            if any(kw in text for kw in ['покупка', 'списание', 'оплата', 'дебет']):
-                is_charge = True
-            
-            if not is_charge:
-                # Игнорируем: коды, пополнения, зачисления, балансы, переводы
-                if any(p in text for p in ['код', 'пополнен', 'зачислен', 'поступил', 'баланс', 'никому не сообщай', 'перевод', 'зачисление']):
+
+            added = 0
+            sms_found = 0
+
+            for row in rows:
+                body = row['body'] or ''
+                from_addr = str(row['from_address'] or '')
+                dt = windows_ticks_to_datetime(row['timestamp'])
+
+                if not body.strip():
                     continue
-                # Ищем сумму + слово "карта" или "р"
-                if re.search(r'(\d[\d\s]*[.,]?\d*)\s*(?:₽|руб|р\.)', text):
-                    if any(kw in text for kw in ['карт', 'терминал', 'спис', 'оплат']):
+
+                text = f"{from_addr} {body}".lower()
+
+                is_charge = False
+
+                if '900' in from_addr:
+                    if any(re.search(p, text, re.IGNORECASE) for p in INTERESTING_SMS_KEYWORDS):
                         is_charge = True
-            
-            if not is_charge:
-                continue
-            
-            # Извлекаем сумму
-            amount = None
-            m = re.search(r'(-?\d[\d\s]*[.,]?\d*)\s*(?:₽|руб|р\.)', text)
-            if m:
-                try:
-                    amount = abs(float(m.group(1).replace(' ', '').replace(',', '.')))
-                except: pass
-            
-            if not amount:
-                continue
-            
-            # Извлекаем магазин
-            store = None
-            m = re.search(r'(?:покупка|терминал|оплата)\s+([А-Яа-яA-Za-z][А-Яа-яA-Za-z\s.\-&\d]{1,40})', text)
-            if m:
-                store = m.group(1).strip()
-                store = re.sub(r'\s+\d+[.,]?\d*$', '', store)
-                store = re.sub(r'\s+₽.*$', '', store)
-                if len(store) < 3:
-                    store = None
-            
-            if not store:
-                # Пробуем определить по ключевым словам
-                if any(p in text for p in ['штраф', 'гибдд', 'постановление']):
-                    store = 'Штраф ГИБДД'
-                elif any(p in text for p in ['платн', 'проезд', 'дорог', 'транспондер', 'автодор']):
-                    store = 'Платные дороги'
-                elif any(p in text for p in ['парковк', 'ампп', 'мсд']):
-                    store = 'Парковка / МСД'
-                elif any(p in text for p in ['госуслуг', 'gosuslugi']):
-                    store = 'Госуслуги'
+
+                if any(kw in text for kw in ['покупка', 'списание', 'оплата', 'дебет']):
+                    is_charge = True
+
+                if not is_charge:
+                    if any(p in text for p in ['код', 'пополнен', 'зачислен', 'поступил', 'баланс', 'никому не сообщай', 'перевод', 'зачисление']):
+                        continue
+                    if re.search(r'(\d[\d\s]*[.,]?\d*)\s*(?:₽|руб|р\.)', text):
+                        if any(kw in text for kw in ['карт', 'терминал', 'спис', 'оплат']):
+                            is_charge = True
+
+                if not is_charge:
+                    continue
+
+                amount = None
+                m = re.search(r'(-?\d[\d\s]*[.,]?\d*)\s*(?:₽|руб|р\.)', text)
+                if m:
+                    try:
+                        amount = abs(float(m.group(1).replace(' ', '').replace(',', '.')))
+                    except:
+                        pass
+
+                if not amount:
+                    continue
+
+                store = None
+                m = re.search(r'(?:покупка|терминал|оплата)\s+([А-Яа-яA-Za-z][А-Яа-яA-Za-z\s.\-&\d]{1,40})', text)
+                if m:
+                    store = m.group(1).strip()
+                    store = re.sub(r'\s+\d+[.,]?\d*$', '', store)
+                    store = re.sub(r'\s+₽.*$', '', store)
+                    if len(store) < 3:
+                        store = None
+
+                if not store:
+                    if any(p in text for p in ['штраф', 'гибдд', 'постановление']):
+                        store = 'Штраф ГИБДД'
+                    elif any(p in text for p in ['платн', 'проезд', 'дорог', 'транспондер', 'автодор']):
+                        store = 'Платные дороги'
+                    elif any(p in text for p in ['парковк', 'ампп', 'мсд']):
+                        store = 'Парковка / МСД'
+                    elif any(p in text for p in ['госуслуг', 'gosuslugi']):
+                        store = 'Госуслуги'
+                    else:
+                        store = 'SMS payment'
+
+                if amount > 10000 and store == 'SMS payment':
+                    log.info(f"   ⏭ SMS пропущен (крупная сумма, не расход): {amount:.0f} ₽")
+                    continue
+
+                sms_found += 1
+                date_str = dt.strftime('%Y-%m-%d') if dt else datetime.now().strftime('%Y-%m-%d')
+
+                if not is_already_imported(parent_conn, date_str, amount, store):
+                    add_purchase(parent_conn, date_str, amount, store, [(body[:100], '')], 'sms', 'через SMS')
+                    added += 1
                 else:
-                    store = 'SMS payment'
-            
-            # Исключаем переводы между своими счетами (крупные суммы без названия магазина)
-            if amount > 10000 and store == 'SMS payment':
-                log.info(f"   ⏭ SMS пропущен (крупная сумма, не расход): {amount:.0f} ₽")
-                continue
-            
-            sms_found += 1
-            date_str = dt.strftime('%Y-%m-%d') if dt else datetime.now().strftime('%Y-%m-%d')
-            
-            if not is_already_imported(parent_conn, date_str, amount, store):
-                add_purchase(parent_conn, date_str, amount, store, [(body[:100], '')], 'sms', 'через SMS')
-                added += 1
-            else:
-                log.info(f"   ⏭ SMS уже есть: {date_str} {amount:.0f} ₽ {store}")
-        
-        parent_conn.commit()
-        log.info(f"   📱 SMS: всего найдено {sms_found}, добавлено новых: {added}")
-        return added
-        
-    except Exception as e:
-        log.error(f"   ❌ SMS ошибка: {e}")
-        return 0
-    finally:
-        if os.path.exists(local_db):
-            shutil.rmtree(os.path.dirname(local_db), ignore_errors=True)
+                    log.info(f"   ⏭ SMS уже есть: {date_str} {amount:.0f} ₽ {store}")
+
+            parent_conn.commit()
+            total_added += added
+            log.info(f"   📱 SMS: всего найдено {sms_found}, добавлено новых: {added}")
+
+        except Exception as e:
+            log.error(f"   ❌ SMS ошибка ({db_path}): {e}")
+        finally:
+            if local_db and os.path.exists(local_db):
+                shutil.rmtree(os.path.dirname(local_db), ignore_errors=True)
+
+    return total_added
 
 
 # ============================================================
