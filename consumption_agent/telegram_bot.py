@@ -2284,7 +2284,12 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     today = datetime.now()
     month_start = today.strftime('%Y-%m-01')
     today_str = today.strftime('%Y-%m-%d')
-    month_name = today.strftime('%B %Y')
+    month_names = {
+        1:'Январь', 2:'Февраль', 3:'Март', 4:'Апрель',
+        5:'Май', 6:'Июнь', 7:'Июль', 8:'Август',
+        9:'Сентябрь', 10:'Октябрь', 11:'Ноябрь', 12:'Декабрь'
+    }
+    month_name = f'{month_names.get(today.month, "")} {today.year}'
 
     conn = get_db()
     try:
