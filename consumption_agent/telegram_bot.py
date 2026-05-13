@@ -12,6 +12,7 @@ Consumption Agent Telegram Bot
 Запуск: CONSUMPTION_BOT_TOKEN=xxx python3 telegram_bot.py
 """
 
+import asyncio
 import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback
 from datetime import date, datetime
 from pathlib import Path
@@ -60,16 +61,40 @@ except ImportError:
     auto_categorize = lambda n: None
     slug_to_cat_id = lambda s: None
 
-DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
+try:
+    from consumption.db import DB_PATH, connect as db_connect
+except ImportError:
+    DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
+    db_connect = None
+
 RECEIPTS_DIR = os.path.join(SCRIPT_DIR, 'receipts')
 Path(RECEIPTS_DIR).mkdir(exist_ok=True)
 TOKEN = os.environ.get('CONSUMPTION_BOT_TOKEN', '')
 OWNER_CHAT_ID = int(os.environ.get('OWNER_CHAT_ID', '1477860192'))
 
 
+def _parse_allowed_chat_ids(raw: str | None) -> set[int]:
+    ids: set[int] = set()
+    for part in (raw or '').replace(';', ',').split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.add(int(part))
+        except ValueError:
+            logging.getLogger(__name__).warning(f"Invalid TELEGRAM_ALLOWED_CHAT_IDS entry ignored: {part!r}")
+    return ids
+
+
+ALLOWED_CHAT_IDS = _parse_allowed_chat_ids(
+    os.environ.get('TELEGRAM_ALLOWED_CHAT_IDS') or os.environ.get('ALLOWED_CHAT_IDS')
+)
+if not ALLOWED_CHAT_IDS and OWNER_CHAT_ID:
+    ALLOWED_CHAT_IDS = {OWNER_CHAT_ID}
+
+
 def get_credit_alert(alert_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_db()
     row = conn.execute(
         'SELECT id, sender_name, payment_date, payment_amount, paid_confirmed_at FROM credit_alerts WHERE id = ?',
         (alert_id,)
@@ -79,8 +104,7 @@ def get_credit_alert(alert_id: int):
 
 
 def get_fine(fine_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_db()
     row = conn.execute(
         'SELECT id, type, number, amount, description, vehicle, fine_date, vendor, paid_confirmed_at FROM fines WHERE id = ?',
         (fine_id,)
@@ -90,7 +114,7 @@ def get_fine(fine_id: int):
 
 
 def confirm_fine_paid(fine_id: int, via: str = 'telegram_button') -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db()
     cur = conn.execute(
         '''
         UPDATE fines
@@ -106,7 +130,7 @@ def confirm_fine_paid(fine_id: int, via: str = 'telegram_button') -> bool:
 
 
 def confirm_credit_alert_paid(alert_id: int, via: str = 'telegram_button') -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db()
     cur = conn.execute(
         '''
         UPDATE credit_alerts
@@ -722,10 +746,15 @@ async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
 
 def get_db(max_retries=3, delay=1):
     """Connect to DB with retry on lock."""
+    if db_connect is not None:
+        return db_connect(DB_PATH, timeout=10, max_retries=max_retries, delay=delay)
     for i in range(max_retries):
         try:
             conn = sqlite3.connect(DB_PATH, timeout=10)
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=10000")
             return conn
         except sqlite3.OperationalError as e:
             if "locked" in str(e) and i < max_retries - 1:
@@ -744,6 +773,92 @@ async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '📸 Отправьте фото чека (одно фото за раз).\n'
         'Я распознаю текст и добавлю товары в инвентарь.'
     )
+
+
+def _write_text_file(path: str, text: str) -> None:
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text or 'NO_OCR_TEXT')
+
+
+def _save_memory_lane_photo(caption: str, image_path: str):
+    import memory_lane as _ml
+
+    with open(image_path, 'rb') as fh:
+        buf = fh.read()
+    conn = get_db()
+    try:
+        asset_id = _ml.save_media(conn, buf, mime='image/jpeg')
+        parsed = _ml.parse_caption(caption)
+        item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed)
+        return item_id, parsed
+    finally:
+        conn.close()
+
+
+def _save_tag_item(tag: dict, fx_date: str, price_rub: float | None) -> None:
+    conn = get_db()
+    try:
+        cat_id = conn.execute("SELECT id FROM categories WHERE slug='cat_clo_everyday' LIMIT 1").fetchone()
+        if not cat_id:
+            cat_id = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
+        cat_id = cat_id[0] if cat_id else None
+
+        item_name = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('color')] if x) or (tag.get('article') or 'tag_item')
+        attrs = json.dumps({
+            'size': tag.get('size'),
+            'color': tag.get('color'),
+            'barcode': tag.get('barcode'),
+            'ocr_raw': tag.get('raw', '')[:250]
+        }, ensure_ascii=False)
+
+        conn.execute(
+            "INSERT INTO items (name, brand, model, sku, purchase_price, purchase_currency, purchase_date, attributes, category_id, data_origin) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'telegram_tag')",
+            (item_name, tag.get('brand'), tag.get('model'), tag.get('article'), price_rub,
+             tag.get('currency', 'RUB'), fx_date, attrs, cat_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _save_receipt_purchase(items: list[dict], total_amount: float | None, purchase_date: str | None) -> tuple[int | None, str | None]:
+    conn = get_db()
+    purchase_id = None
+    try:
+        if items or total_amount:
+            purchase_date = purchase_date or date.today().isoformat()
+            cur = conn.execute(
+                "INSERT INTO purchases (purchase_date, total_amount, source, data_origin) "
+                "VALUES (?, ?, 'telegram_photo', 'telegram_photo')",
+                (purchase_date, total_amount)
+            )
+            purchase_id = cur.lastrowid
+
+        if items:
+            for item in items:
+                category_id = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()[0]
+                for keyword, cat_slug in {
+                    'корм': 'cat_pets_food', 'собака': 'cat_pets', 'кошка': 'cat_pets',
+                    'доставка': 'cat_services_log', 'услуга': 'cat_services_log',
+                    'еда': 'cat_food', 'продукты': 'cat_food'
+                }.items():
+                    if keyword in item['name'].lower():
+                        cat_row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (cat_slug,)).fetchone()
+                        if cat_row:
+                            category_id = cat_row[0]
+                            break
+                conn.execute(
+                    "INSERT INTO items (name, purchase_price, purchase_date, category_id, data_origin, purchase_id) "
+                    "VALUES (?, ?, ?, ?, 'telegram_photo', ?)",
+                    (item['name'], item['price'], purchase_date, category_id, purchase_id)
+                )
+
+        if purchase_id:
+            conn.commit()
+        return purchase_id, purchase_date
+    finally:
+        conn.close()
 
 
 async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -765,19 +880,10 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if _ml is not None and _ml.is_memory_lane_caption(caption):
         try:
             file = await photo.get_file()
-            buf = bytearray()
             tmp_path = os.path.join(RECEIPTS_DIR, f'_ml_{update.message.message_id}.jpg')
             await file.download_to_drive(tmp_path)
-            with open(tmp_path, 'rb') as fh:
-                buf = fh.read()
+            item_id, parsed = await asyncio.to_thread(_save_memory_lane_photo, caption, tmp_path)
             os.remove(tmp_path)
-            conn = get_db()
-            try:
-                asset_id = _ml.save_media(conn, buf, mime='image/jpeg')
-                parsed = _ml.parse_caption(caption)
-                item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed)
-            finally:
-                conn.close()
             liked = ', '.join(parsed.get('liked', [])) or '—'
             tags = ', '.join(parsed.get('style_tags', [])) or '—'
             topic = parsed.get('topic') or '—'
@@ -798,7 +904,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     log.info(f'Saved receipt: {receipt_path}')
 
     # Decode QR code (Ozon format)
-    qr_data = decode_qr(receipt_path)
+    qr_data = await asyncio.to_thread(decode_qr, receipt_path)
     total_amount = None
     purchase_date = None
     if qr_data:
@@ -811,14 +917,13 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             purchase_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
     # Run OCR as fallback
-    text = ocr_image(receipt_path)
+    text = await asyncio.to_thread(ocr_image, receipt_path)
     # Save raw OCR for debugging
-    with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
-        f.write(text or 'NO_OCR_TEXT')
+    await asyncio.to_thread(_write_text_file, receipt_path.replace('.jpg', '_ocr.txt'), text or 'NO_OCR_TEXT')
 
     # Классификация типа изображения
-    image_type = classify_image_type(text or '')
-    tag_probe = parse_clothing_tag(text or '', receipt_path)
+    image_type = await asyncio.to_thread(classify_image_type, text or '')
+    tag_probe = await asyncio.to_thread(parse_clothing_tag, text or '', receipt_path)
     if image_type == 'unknown' and (tag_probe.get('brand') or tag_probe.get('article') or tag_probe.get('barcode')) and not total_amount:
         image_type = 'tag'
     log.info(f"Тип изображения: {image_type}")
@@ -829,31 +934,10 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === Обработка бирки ===
         tag = tag_probe
         fx_date = purchase_date or date.today().isoformat()
-        rate = get_fx_rate(tag['currency'], fx_date)
+        rate = await asyncio.to_thread(get_fx_rate, tag['currency'], fx_date)
         price_rub = round(tag['price'] * rate, 2) if tag['price'] else None
 
-        conn = get_db()
-        cat_id = conn.execute("SELECT id FROM categories WHERE slug='cat_clo_everyday' LIMIT 1").fetchone()
-        if not cat_id:
-            cat_id = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
-        cat_id = cat_id[0] if cat_id else None
-
-        item_name = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('color')] if x) or (tag.get('article') or 'tag_item')
-        attrs = json.dumps({
-            'size': tag.get('size'),
-            'color': tag.get('color'),
-            'barcode': tag.get('barcode'),
-            'ocr_raw': tag.get('raw', '')[:250]
-        }, ensure_ascii=False)
-
-        conn.execute(
-            "INSERT INTO items (name, brand, model, sku, purchase_price, purchase_currency, purchase_date, attributes, category_id, data_origin) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'telegram_tag')",
-            (item_name, tag.get('brand'), tag.get('model'), tag.get('article'), price_rub,
-             tag.get('currency', 'RUB'), fx_date, attrs, cat_id)
-        )
-        conn.commit()
-        conn.close()
+        await asyncio.to_thread(_save_tag_item, tag, fx_date, price_rub)
 
         search_query = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('article'), tag.get('color')] if x) or (tag.get('barcode') or 'fashion tag')
         google_images_url = f"https://www.google.com/search?tbm=isch&q={quote_plus(search_query)}"
@@ -884,7 +968,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             response_lines.append(f"OCR: {(text or '')[:180].replace(chr(10), ' ')}")
         await update.message.reply_text('\n'.join(response_lines))
 
-        image_urls = find_product_image_urls(search_query)
+        image_urls = await asyncio.to_thread(find_product_image_urls, search_query)
         for engine_url in image_urls.values():
             if not engine_url or engine_url.startswith('https://www.google.com/search'):
                 continue
@@ -898,12 +982,11 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # === Если НЕ бирка — используем новый OCR-пайплайн ===
     try:
         from scripts import receipt_ocr
-        ocr_result = receipt_ocr.process_receipt(receipt_path)
+        ocr_result = await asyncio.to_thread(receipt_ocr.process_receipt, receipt_path)
         if ocr_result.ocr_score >= 30 and (ocr_result.items or ocr_result.total):
             items = [{'name': it.name, 'price': it.price, 'qty': it.qty, 'total': it.total} for it in ocr_result.items]
             total_amount = total_amount or ocr_result.total
-            receipt_date = receipt_date or ocr_result.date
-            shop = ocr_result.shop or shop
+            purchase_date = purchase_date or ocr_result.date
             log.info(f"receipt_ocr: {ocr_result.shop}, {len(items)} items, total={ocr_result.total}, score={ocr_result.ocr_score}")
         else:
             log.warning(f"receipt_ocr: low score {ocr_result.ocr_score}, fallback to old parser")
@@ -917,36 +1000,9 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if m:
             total_amount = float(m.group(1).replace(',', '.'))
 
-    conn = get_db()
-    purchase_id = None
-
-    if items or total_amount:
-        purchase_date = purchase_date or date.today().isoformat()
-        cur = conn.execute(
-            "INSERT INTO purchases (purchase_date, total_amount, source, data_origin) "
-            "VALUES (?, ?, 'telegram_photo', 'telegram_photo')",
-            (purchase_date, total_amount)
-        )
-        purchase_id = cur.lastrowid
-
-    if items:
-        for item in items:
-            category_id = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()[0]
-            for keyword, cat_slug in {
-                'корм': 'cat_pets_food', 'собака': 'cat_pets', 'кошка': 'cat_pets',
-                'доставка': 'cat_services_log', 'услуга': 'cat_services_log',
-                'еда': 'cat_food', 'продукты': 'cat_food'
-            }.items():
-                if keyword in item['name'].lower():
-                    cat_row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (cat_slug,)).fetchone()
-                    if cat_row:
-                        category_id = cat_row[0]
-                        break
-            conn.execute(
-                "INSERT INTO items (name, purchase_price, purchase_date, category_id, data_origin, purchase_id) "
-                "VALUES (?, ?, ?, ?, 'telegram_photo', ?)",
-                (item['name'], item['price'], purchase_date, category_id, purchase_id)
-            )
+    purchase_id, purchase_date = await asyncio.to_thread(
+        _save_receipt_purchase, items, total_amount, purchase_date
+    )
 
     # Формируем структурированный вывод как для бирок
     response_parts = ['🧾 Чек распознан']
@@ -972,9 +1028,6 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     response_text = '\n'.join(response_parts)
 
-    if purchase_id:
-        conn.commit()
-    conn.close()
     await update.message.reply_text(response_text)
 
 
@@ -1600,44 +1653,45 @@ def main():
         print('   export CONSUMPTION_BOT_TOKEN=...')
         sys.exit(1)
     app = Application.builder().token(TOKEN).build()
-    # Whitelist for Telegram bot (only allow specific chat IDs)
-    ALLOWED_CHAT_IDS = {1477860192}  # YuV's chat ID
 
     async def check_access(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat.id not in ALLOWED_CHAT_IDS:
-            log.warning(f"Доступ запрещён для chat_id={update.effective_chat.id}")
-            await update.message.reply_text('❌ Доступ запрещён.')
+        chat = update.effective_chat
+        chat_id = chat.id if chat else None
+        if chat_id not in ALLOWED_CHAT_IDS:
+            log.warning(f"Access denied for chat_id={chat_id}")
+            if update.effective_message:
+                await update.effective_message.reply_text('Access denied.')
+            elif update.callback_query:
+                await update.callback_query.answer('Access denied.', show_alert=True)
             return False
-        log.info(f"Доступ разрешён для chat_id={update.effective_chat.id}")
+        log.info(f"Access allowed for chat_id={chat_id}")
         return True
 
-    # Add access check to all command handlers
-    for handler in app.handlers:
-        if isinstance(handler, (CommandHandler, MessageHandler)):
-            original_callback = handler.callback
-            async def wrapped_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-                if await check_access(update, ctx):
-                    await original_callback(update, ctx)
-            handler.callback = wrapped_callback
+    def guarded(callback):
+        async def wrapped_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+            if await check_access(update, ctx):
+                return await callback(update, ctx)
+            return None
+        return wrapped_callback
 
-    app.add_handler(CommandHandler('start', start))
+    log.info(f"Allowed Telegram chat ids: {sorted(ALLOWED_CHAT_IDS)}")
 
-    app.add_handler(CommandHandler('list', cmd_list))
-    app.add_handler(CommandHandler('alerts', cmd_alerts))
-    app.add_handler(CommandHandler('parse', cmd_parse))
-    app.add_handler(CommandHandler('check', cmd_check))
-    app.add_handler(CommandHandler('last_drives', cmd_last_drives))
-    app.add_handler(CommandHandler('find_car', cmd_find_car))
-    app.add_handler(CommandHandler('add', cmd_add))
-    app.add_handler(CommandHandler('add_photo', add_photo))
-    app.add_handler(CommandHandler('parse', cmd_parse))
-    app.add_handler(CommandHandler('warranties', cmd_warranties))
-    app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
-    app.add_handler(CommandHandler('ml_last', cmd_ml_last))
-    app.add_handler(CommandHandler('help', cmd_help))
-    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-    app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
-    app.add_handler(CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
+    app.add_handler(CommandHandler('start', guarded(start)))
+    app.add_handler(CommandHandler('list', guarded(cmd_list)))
+    app.add_handler(CommandHandler('alerts', guarded(cmd_alerts)))
+    app.add_handler(CommandHandler('parse', guarded(cmd_parse)))
+    app.add_handler(CommandHandler('check', guarded(cmd_check)))
+    app.add_handler(CommandHandler('last_drives', guarded(cmd_last_drives)))
+    app.add_handler(CommandHandler('find_car', guarded(cmd_find_car)))
+    app.add_handler(CommandHandler('add', guarded(cmd_add)))
+    app.add_handler(CommandHandler('add_photo', guarded(add_photo)))
+    app.add_handler(CommandHandler('warranties', guarded(cmd_warranties)))
+    app.add_handler(CommandHandler('set_warranty', guarded(cmd_set_warranty)))
+    app.add_handler(CommandHandler('ml_last', guarded(cmd_ml_last)))
+    app.add_handler(CommandHandler('help', guarded(cmd_help)))
+    app.add_handler(MessageHandler(filters.PHOTO, guarded(photo_handler)))
+    app.add_handler(CallbackQueryHandler(guarded(credit_paid_callback), pattern=r'^credit_paid:\d+$'))
+    app.add_handler(CallbackQueryHandler(guarded(fine_paid_callback), pattern=r'^fine_paid:\d+$'))
 
     # Generate alerts once at startup
     gen = generate_alerts()

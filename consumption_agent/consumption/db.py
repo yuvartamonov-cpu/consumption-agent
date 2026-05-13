@@ -7,12 +7,27 @@ db.py — централизованный доступ к БД consumption.db.
 import os
 import sqlite3
 import time
+from os import PathLike
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(ROOT, 'consumption.db')
 
 
-def connect(timeout: float = 10.0, max_retries: int = 3, delay: float = 1.0) -> sqlite3.Connection:
+def _configure_connection(conn: sqlite3.Connection, busy_timeout_ms: int) -> sqlite3.Connection:
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+    return conn
+
+
+def connect(
+    db_path: str | PathLike[str] = DB_PATH,
+    timeout: float = 10.0,
+    max_retries: int = 3,
+    delay: float = 1.0,
+    busy_timeout_ms: int = 10000,
+) -> sqlite3.Connection:
     """
     Подключение к БД с retry при блокировке.
     Возвращает sqlite3.Connection с row_factory = Row.
@@ -20,9 +35,8 @@ def connect(timeout: float = 10.0, max_retries: int = 3, delay: float = 1.0) -> 
     last_err = None
     for i in range(max_retries):
         try:
-            conn = sqlite3.connect(DB_PATH, timeout=timeout)
-            conn.row_factory = sqlite3.Row
-            return conn
+            conn = sqlite3.connect(str(db_path), timeout=timeout)
+            return _configure_connection(conn, busy_timeout_ms)
         except sqlite3.OperationalError as e:
             last_err = e
             if "locked" in str(e) and i < max_retries - 1:

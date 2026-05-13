@@ -8,8 +8,8 @@ import sqlite3
 import os
 import json
 from datetime import date, datetime
+from consumption.db import DB_PATH, connect
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 OLD_TABLES = ['purchases', 'purchase_items', 'recognized_items', 'cheques_log']
 
 
@@ -302,7 +302,7 @@ def main():
     # Для первого запуска удаляем старые таблицы и создаём новые
     db_exists = os.path.exists(DB_PATH)
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect(DB_PATH)
     
     if db_exists and check_is_initialized(conn):
         print("БД уже инициализирована. Пропускаю.")
