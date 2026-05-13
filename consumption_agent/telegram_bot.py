@@ -12,7 +12,8 @@ Consumption Agent Telegram Bot
 Запуск: CONSUMPTION_BOT_TOKEN=xxx python3 telegram_bot.py
 """
 
-import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback, random, asyncio
+import logging, os, sys, re, json, subprocess, tempfile, time, html, traceback, random, asyncio
+import sqlite3
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -115,12 +116,15 @@ DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
 RECEIPTS_DIR = os.path.join(SCRIPT_DIR, 'receipts')
 Path(RECEIPTS_DIR).mkdir(exist_ok=True)
 TOKEN = os.environ.get('CONSUMPTION_BOT_TOKEN', '')
-OWNER_CHAT_ID = int(os.environ.get('OWNER_CHAT_ID', '1477860192'))
+# OWNER_CHAT_ID — ID владельца бота. Обязательный параметр окружения.
+# Default только для локальной разработки. В продакшене задаётся через .env.
+_owner_default = os.environ.get('OWNER_CHAT_ID_DEFAULT', '1477860192')
+OWNER_CHAT_ID = int(os.environ.get('OWNER_CHAT_ID', _owner_default))
 
 
 def get_credit_alert(alert_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
     row = conn.execute(
         'SELECT id, sender_name, payment_date, payment_amount, paid_confirmed_at FROM credit_alerts WHERE id = ?',
         (alert_id,)
@@ -130,8 +134,8 @@ def get_credit_alert(alert_id: int):
 
 
 def get_fine(fine_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
     row = conn.execute(
         'SELECT id, type, number, amount, description, vehicle, fine_date, vendor, paid_confirmed_at FROM fines WHERE id = ?',
         (fine_id,)
@@ -141,7 +145,8 @@ def get_fine(fine_id: int):
 
 
 def confirm_fine_paid(fine_id: int, via: str = 'telegram_button') -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
     cur = conn.execute(
         '''
         UPDATE fines
@@ -157,7 +162,8 @@ def confirm_fine_paid(fine_id: int, via: str = 'telegram_button') -> bool:
 
 
 def confirm_credit_alert_paid(alert_id: int, via: str = 'telegram_button') -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
     cur = conn.execute(
         '''
         UPDATE credit_alerts
@@ -1108,8 +1114,9 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     purchase_date = None
     text = ''
     if image_type in ('receipt', 'tag'):
-        # Decode QR code (Ozon format)
-        qr_data = decode_qr(receipt_path)
+        # Decode QR code (Ozon format) — в отдельном потоке
+        log.info(f'photo_handler: decoding QR in thread for {receipt_path}')
+        qr_data = await asyncio.to_thread(decode_qr, receipt_path)
         if qr_data:
             total_amount = qr_data.get('s')
             if total_amount:
@@ -1118,8 +1125,9 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if date_str and len(date_str) >= 8:
                 purchase_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
-        # Run OCR only for receipts/tags
-        text = ocr_image(receipt_path)
+        # Run OCR only for receipts/tags — в отдельном потоке
+        log.info(f'photo_handler: running OCR in thread for {receipt_path}')
+        text = await asyncio.to_thread(ocr_image, receipt_path)
         # Save raw OCR for debugging
         with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
             f.write(text or 'NO_OCR_TEXT')
@@ -1128,7 +1136,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if image_type == 'other':
         image_type = classify_image_type(text or '')
 
-    tag_probe = parse_clothing_tag(text or '', receipt_path)
+    tag_probe = await asyncio.to_thread(parse_clothing_tag, text or '', receipt_path)
     
     # Проверяем штрихкод через pyzbar (более надёжный метод)
     pyzbar_barcode = None
@@ -2606,7 +2614,7 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                    purchase_date, status, replace_after_months, replace_after_days, notes
             FROM items
             WHERE deleted_at IS NULL AND is_delivery = 0
-              AND data_origin IN ('manual', 'local')
+              AND data_origin IN ('manual', 'local', 'telegram_photo', 'vision_photo', 'telegram_tag')
             ORDER BY category_id, name
         ''').fetchall()
     finally:
@@ -2757,7 +2765,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                    purchase_date, status, replace_after_months, replace_after_days, notes, attributes
             FROM items
             WHERE deleted_at IS NULL AND is_delivery = 0
-              AND data_origin IN ('manual', 'local', 'vision_photo')
+              AND data_origin IN ('manual', 'local', 'vision_photo', 'telegram_photo', 'telegram_tag')
             ORDER BY category_id, name
         ''').fetchall()
         # Загружаем фото (file_path из media_assets)
