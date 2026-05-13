@@ -176,6 +176,25 @@ def create_new_schema(conn):
     ''')
 
 
+def ensure_indexes(conn):
+    """Create read-path indexes that are safe to apply to existing databases."""
+    conn.executescript('''
+        CREATE INDEX IF NOT EXISTS idx_items_deleted_at
+            ON items(deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_items_category_id
+            ON items(category_id);
+        CREATE INDEX IF NOT EXISTS idx_items_purchase_id
+            ON items(purchase_id);
+        CREATE INDEX IF NOT EXISTS idx_purchases_deleted_at
+            ON purchases(deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_alerts_status
+            ON alerts(status);
+        CREATE INDEX IF NOT EXISTS idx_recognized_items_log_match_source
+            ON recognized_items_log(matched_item_id, source_type);
+    ''')
+    conn.commit()
+
+
 def seed_categories(conn):
     """Заполняет дерево категорий."""
     categories = [
@@ -305,6 +324,7 @@ def main():
     conn = connect(DB_PATH)
     
     if db_exists and check_is_initialized(conn):
+        ensure_indexes(conn)
         print("БД уже инициализирована. Пропускаю.")
         conn.close()
         return
@@ -319,6 +339,7 @@ def main():
 
     
     create_new_schema(conn)
+    ensure_indexes(conn)
     ensure_default_profile(conn)
     seed_categories(conn)
     
