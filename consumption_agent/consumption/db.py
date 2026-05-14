@@ -16,12 +16,19 @@ def connect(timeout: float = 10.0, max_retries: int = 3, delay: float = 1.0) -> 
     """
     Подключение к БД с retry при блокировке.
     Возвращает sqlite3.Connection с row_factory = Row.
+    Включает оптимальные PRAGMA для производительности и надёжности.
     """
     last_err = None
     for i in range(max_retries):
         try:
             conn = sqlite3.connect(DB_PATH, timeout=timeout)
             conn.row_factory = sqlite3.Row
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA foreign_keys=ON')
+            conn.execute('PRAGMA busy_timeout=5000')
+            conn.execute('PRAGMA synchronous=NORMAL')
+            conn.execute('PRAGMA cache_size=-8000')  # 8 MB cache
+            conn.execute('PRAGMA temp_store=MEMORY')
             return conn
         except sqlite3.OperationalError as e:
             last_err = e

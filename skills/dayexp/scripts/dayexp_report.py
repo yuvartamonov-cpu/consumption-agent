@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Скрипт для команды /dayexp — расходы за сегодня.
-Запускает daily_cheque_scan.py (сканирование почт + SMS) и выводит отчёт за текущий день.
+"""Скрипт для команды /dayexp [N] — расходы за N дней (включая сегодня).
+Запускает daily_cheque_scan.py (сканирование почт + SMS) и выводит отчёт.
 
 Использование:
-  python3 dayexp_report.py
+  python3 dayexp_report.py        # только сегодня
+  python3 dayexp_report.py -n 7   # последние 7 дней
 """
-import subprocess, sys, os, sqlite3, json
+import subprocess, sys, os, sqlite3, argparse
 from datetime import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,29 +30,32 @@ def run_scan():
     return result.stdout + result.stderr
 
 
-def get_today_purchases():
-    """Выбрать покупки за сегодня из БД."""
+def get_purchases(n_days=1):
+    """Выбрать покупки за N дней (включая сегодня) из БД."""
     conn = sqlite3.connect(DB_PATH)
     try:
         rows = conn.execute("""
             SELECT purchase_date, total_amount, store_name, source, notes
             FROM purchases
-            WHERE purchase_date = date('now')
+            WHERE purchase_date >= date('now', ?)
+              AND purchase_date <= date('now')
               AND (deleted_at IS NULL OR deleted_at = '')
-            ORDER BY total_amount DESC
-        """).fetchall()
+            ORDER BY purchase_date DESC, total_amount DESC
+        """, (f'-{n_days - 1} days',)).fetchall()
         return rows
     finally:
         conn.close()
 
 
-def format_report(rows, today_str):
+def format_report(rows, today_str, n_days=1):
     """Сформировать текстовый отчёт."""
     if not rows:
-        return f'📭 За сегодня ({today_str}) покупок не найдено.'
+        label = f'сегодня ({today_str})' if n_days == 1 else f'последние {n_days} дн. (по {today_str})'
+        return f'📭 За {label} покупок не найдено.'
 
     total = sum(r[1] or 0 for r in rows)
-    lines = [f'📊 *Расходы за {today_str}*']
+    title = f'📊 *Расходы за сегодня ({today_str})*' if n_days == 1 else f'📊 *Расходы за последние {n_days} дн. (по {today_str})*'
+    lines = [title]
     lines.append(f'_{len(rows)} покупок, всего {total:,.0f} ₽_\n'.replace(',', ' '))
 
     for r in rows:
@@ -78,16 +82,22 @@ def format_report(rows, today_str):
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Отчёт по расходам за N дней')
+    parser.add_argument('-n', type=int, default=1, help='Количество дней (включая сегодня), по умолчанию 1')
+    args = parser.parse_args()
+    n_days = max(args.n, 1)
+
     today_str = datetime.now().strftime('%d.%m.%Y')
+    day_label = f'последние {n_days} дн.' if n_days > 1 else 'сегодня'
 
     # Шаг 1: сканирование почт и SMS
-    print(f'🔍 Сканирую почты и SMS за сегодня ({today_str})...')
+    print(f'🔍 Сканирую почты и SMS за {day_label} ({today_str})...')
     log = run_scan()
     print(f'[log] {log[:300]}')
 
     # Шаг 2: формирование отчёта
-    rows = get_today_purchases()
-    report = format_report(rows, today_str)
+    rows = get_purchases(n_days)
+    report = format_report(rows, today_str, n_days)
     print('\n' + report)
 
 

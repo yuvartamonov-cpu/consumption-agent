@@ -22,3 +22,22 @@ receipts/
 *.jpg
 *.png
 data/
+backups/
+archive/
+patches/
+
+# Runtime artifacts
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
