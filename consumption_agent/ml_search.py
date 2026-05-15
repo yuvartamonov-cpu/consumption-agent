@@ -248,52 +248,184 @@ async def search_by_image_yandex(photo_path: str) -> Optional[Dict]:
         return None
 
 
-async def search_web_best_match(query: str, photo_path: Optional[str] = None) -> Optional[Dict]:
-    """Ищет лучшее соответствие через web_search или по фото.
+async def search_ozon(query: str) -> Optional[Dict]:
+    """Поиск товара на Ozon через их API.
     
     Returns:
         Dict с title, url, price, store или None
     """
-    # Сначала пробуем поиск по фото (если есть)
-    if photo_path and os.path.exists(photo_path):
-        result = await search_by_image_yandex(photo_path)
-        if result:
-            return result
-    
-    # Fallback на текстовый поиск
     try:
-        from web_search import web_search
+        import requests
+        import urllib.parse
         
-        # Ищем с приоритетом на маркетплейсы
-        search_queries = [
-            query + ' site:ozon.ru',
-            query + ' site:wildberries.ru',
-            query + ' site:market.yandex.ru',
-            query + ' купить',
-        ]
+        encoded = urllib.parse.quote(query)
+        url = f"https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/search/?text={encoded}&layout_container=searchMegapagination&layout_page_index=1"
         
-        for sq in search_queries:
-            results = web_search(sq, count=3)
-            if results:
-                for r in results:
-                    title = r.get('title', '')
-                    url = r.get('url', '')
-                    # Ищем цену
-                    price_match = re.search(r'(\d[\d\s]*)\s*(?:₽|руб|RUB)', title)
-                    price = price_match.group(1).replace(' ', '') if price_match else None
-                    
-                    if any(s in url for s in ['ozon', 'wildberries', 'market.yandex']):
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return None
+        
+        data = response.json()
+        
+        # Ищем товары в ответе
+        if 'widgetStates' in data:
+            for key, widget in data['widgetStates'].items():
+                if 'searchResultsV2' in key or 'catalogResults' in key:
+                    items = widget.get('items', [])
+                    if items:
+                        item = items[0]
                         return {
-                            'title': title,
-                            'url': url,
-                            'price': price,
-                            'store': 'Ozon' if 'ozon' in url else 'Wildberries' if 'wildberries' in url else 'Яндекс.Маркет'
+                            'title': item.get('title', 'Товар на Ozon'),
+                            'url': f"https://www.ozon.ru/product/{item.get('id', '')}",
+                            'price': str(item.get('price', '')),
+                            'store': 'Ozon'
                         }
         
         return None
     except Exception as e:
-        print(f"Ошибка web поиска: {e}")
+        print(f"Ошибка Ozon API: {e}")
         return None
+
+
+async def search_wildberries(query: str) -> Optional[Dict]:
+    """Поиск товара на Wildberries через их API.
+    
+    Returns:
+        Dict с title, url, price, store или None
+    """
+    try:
+        import requests
+        import urllib.parse
+        
+        encoded = urllib.parse.quote(query)
+        url = f"https://search.wb.ru/exactmatch/ru/common/v4/search?query={encoded}&resultset=catalog&limit=1&sort=popular"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return None
+        
+        data = response.json()
+        
+        if 'data' in data and 'products' in data['data']:
+            products = data['data']['products']
+            if products:
+                product = products[0]
+                return {
+                    'title': product.get('name', 'Товар на Wildberries'),
+                    'url': f"https://www.wildberries.ru/catalog/{product.get('id', '')}/detail.aspx",
+                    'price': str(product.get('salePriceU', product.get('priceU', '')))[:-2] if product.get('salePriceU') else '',
+                    'store': 'Wildberries'
+                }
+        
+        return None
+    except Exception as e:
+        print(f"Ошибка Wildberries API: {e}")
+        return None
+
+
+async def search_yandex_market(query: str) -> Optional[Dict]:
+    """Поиск товара на Яндекс.Маркете.
+    
+    Returns:
+        Dict с title, url, price, store или None
+    """
+    try:
+        import requests
+        import urllib.parse
+        
+        encoded = urllib.parse.quote(query)
+        url = f"https://market.yandex.ru/api/v1/search?text={encoded}&page=1"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return None
+        
+        data = response.json()
+        
+        if 'results' in data:
+            items = data['results'].get('items', [])
+            if items:
+                item = items[0]
+                return {
+                    'title': item.get('title', 'Товар на Яндекс.Маркет'),
+                    'url': f"https://market.yandex.ru/product/{item.get('id', '')}",
+                    'price': str(item.get('price', {}).get('value', '')),
+                    'store': 'Яндекс.Маркет'
+                }
+        
+        return None
+    except Exception as e:
+        print(f"Ошибка Яндекс.Маркет API: {e}")
+        return None
+
+
+async def search_web_best_match(query: str, photo_path: Optional[str] = None) -> Optional[Dict]:
+    """Ищет лучшее соответствие через API маркетплейсов.
+    
+    Пробует Ozon, Wildberries, Яндекс.Маркет.
+    Возвращает лучший результат по цене.
+    
+    Returns:
+        Dict с title, url, price, store или None
+    """
+    results = []
+    
+    # Пробуем все маркетплейсы параллельно
+    import asyncio
+    
+    tasks = [
+        search_ozon(query),
+        search_wildberries(query),
+        search_yandex_market(query),
+    ]
+    
+    # Добавляем поиск по фото если есть
+    if photo_path and os.path.exists(photo_path):
+        tasks.append(search_by_image_yandex(photo_path))
+    
+    # Ждём все результаты
+    done = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    for result in done:
+        if isinstance(result, dict) and result:
+            results.append(result)
+    
+    if not results:
+        return None
+    
+    # Выбираем лучший результат по цене (если есть)
+    best = None
+    for r in results:
+        if not best:
+            best = r
+            continue
+        
+        # Сравниваем по цене
+        try:
+            price_r = int(r.get('price', '0').replace(' ', '')) if r.get('price') else 0
+            price_best = int(best.get('price', '0').replace(' ', '')) if best.get('price') else 0
+            
+            if price_r > 0 and (price_best == 0 or price_r < price_best):
+                best = r
+        except:
+            pass
+    
+    return best
 
 
 def escape_html(text: Optional[str]) -> str:
