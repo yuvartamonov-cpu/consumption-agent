@@ -39,7 +39,7 @@ target-version = "py311"
 select = ["E", "F", "W", "I"]
 
 [tool.setuptools]
-packages = ["consumption"]
+packages = ["bot", "consumption", "repositories", "services"]
 
 [tool.mypy]
 python_version = "3.11"
