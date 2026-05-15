@@ -2284,7 +2284,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     total = sum(r[1] or 0 for r in rows)
-    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'sms_sber': '📱', 'sber_statement': '🏦', 'local': '📝', 'manual': '✏️'}
 
     today_str = datetime.now().strftime('%d.%m.%Y')
     title = f'📊 *Расходы за сегодня ({today_str})*' if n_days == 1 else f'📊 *Расходы за последние {n_days} дн. (по {today_str})*'
