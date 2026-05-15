@@ -2614,9 +2614,15 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 caption_lines.append(f'📂 {r["topic"]}')
             caption_lines.append(f'🕒 {str(r["created_at"])[:10]}')
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton('🗑 Удалить', callback_data=f'ml_delete:{r["id"]}')
-            ]])
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton('🔍 Искать', callback_data=f'ml_search:{r["id"]}'),
+                    InlineKeyboardButton('⏰ Напомнить', callback_data=f'ml_remind:{r["id"]}'),
+                ],
+                [
+                    InlineKeyboardButton('🗑 Удалить', callback_data=f'ml_delete:{r["id"]}'),
+                ]
+            ])
             with open(row[0], 'rb') as fh:
                 await update.message.reply_photo(
                     photo=fh.read(),
@@ -2963,6 +2969,122 @@ async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
 
+async def ml_search_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '🔍 Искать' для Memory Lane записей."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('ml_search:'):
+        return
+
+    try:
+        ml_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный id', show_alert=True)
+        return
+
+    try:
+        from ml_search import search_item
+        result = search_item(ml_id)
+        if result:
+            await query.message.reply_text(result, parse_mode='Markdown', disable_web_page_preview=True)
+            await query.answer('🔍 Результаты поиска')
+        else:
+            await query.answer('⚠️ Товар не найден', show_alert=True)
+    except Exception as e:
+        log.warning(f'ml_search_callback failed: {e}')
+        await query.answer('⚠️ Ошибка поиска', show_alert=True)
+
+
+async def ml_remind_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '⏰ Напомнить' — предлагает выбрать когда напомнить."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('ml_remind:'):
+        return
+
+    try:
+        ml_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный id', show_alert=True)
+        return
+
+    # Сохраняем ID товара в контексте
+    ctx.user_data['ml_remind_id'] = ml_id
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton('📅 Через 7 дней', callback_data='ml_remind_set:7'),
+            InlineKeyboardButton('📅 Через 30 дней', callback_data='ml_remind_set:30'),
+        ],
+        [
+            InlineKeyboardButton('📅 Через 3 месяца', callback_data='ml_remind_set:90'),
+            InlineKeyboardButton('📅 Через 6 месяцев', callback_data='ml_remind_set:180'),
+        ],
+        [
+            InlineKeyboardButton('❌ Не напоминать', callback_data='ml_remind_set:0'),
+        ]
+    ])
+
+    await query.message.reply_text(
+        '⏰ Когда напомнить об этом товаре?',
+        reply_markup=kb
+    )
+
+
+async def ml_remind_set_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик выбора срока напоминания."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    data = query.data or ''
+    if not data.startswith('ml_remind_set:'):
+        return
+
+    try:
+        days = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Ошибка', show_alert=True)
+        return
+
+    ml_id = ctx.user_data.get('ml_remind_id')
+    if not ml_id:
+        await query.answer('⚠️ Товар не найден', show_alert=True)
+        return
+
+    if days == 0:
+        await query.edit_message_text('❌ Напоминание отменено')
+        return
+
+    try:
+        from ml_search import set_reminder
+        if set_reminder(ml_id, days=days):
+            await query.edit_message_text(f'✅ Напомню через {days} дней')
+        else:
+            await query.answer('⚠️ Ошибка сохранения', show_alert=True)
+    except Exception as e:
+        log.warning(f'ml_remind_set_callback failed: {e}')
+        await query.answer('⚠️ Ошибка', show_alert=True)
+
+
 async def vision_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки '✅ Подтвердить' — товар уже в БД, просим доп. информацию."""
     query = update.callback_query
@@ -3158,6 +3280,9 @@ def main():
     add_authorized_handler(app, CallbackQueryHandler(item_delete_callback, pattern=r'^item_delete:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(item_photo_callback, pattern=r'^item_photo:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_delete_callback, pattern=r'^ml_delete:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(ml_search_callback, pattern=r'^ml_search:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(ml_remind_callback, pattern=r'^ml_remind:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(ml_remind_set_callback, pattern=r'^ml_remind_set:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
     add_authorized_handler(app, CallbackQueryHandler(vision_reject_callback, pattern=r'^vision_reject$'))
 
