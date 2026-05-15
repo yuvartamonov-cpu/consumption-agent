@@ -28,16 +28,39 @@ PHONE_LINK_DB_GLOB = (
     "Microsoft.YourPhone_8wekyb3d8bbwe/LocalCache/Indexed/*/System/Database/phone.db"
 )
 
-# Паттерны для расходных SMS Сбербанка
-EXPENSE_PATTERNS = [
-    # Формат: "Счёт карты MIR-XXXX HH:MM Покупка 399р TUTORPLACE Баланс: 27124.11р"
-    r'(?:Счёт карты|СЧЁТ)\s+\S+\s+\d{2}:\d{2}\s+(?:Покупка|Оплата|Списание|Покупка по СБП|Оплата по СБП)\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Баланс:',
-    # Формат: "Счёт карты MIR-XXXX HH:MM Покупка по СБП 350р slx Баланс:"
-    r'(?:Счёт карты|СЧЁТ)\s+\S+\s+\d{2}:\d{2}\s+(?:Покупка|Оплата|Списание)\s+по\s+СБП\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Баланс:',
-    # Старые форматы
-    r'(?:Списание|Покупка|Оплата|Списано)\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Баланс:',
-    r'(?:Списание|Покупка|Оплата|Списано)\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Доступно:',
-]
+# Паттерны для расходных SMS (Сбербанк, ВТБ, Альфа, Т-Банк, Совкомбанк)
+EXPENSE_PATTERNS = {
+    'sberbank': [
+        # Формат: "Счёт карты MIR-XXXX HH:MM Покупка 399р TUTORPLACE Баланс: 27124.11р"
+        r'(?:Счёт карты|СЧЁТ)\s+\S+\s+\d{2}:\d{2}\s+(?:Покупка|Оплата|Списание|Покупка по СБП|Оплата по СБП)\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Баланс:',
+        # Формат: "Счёт карты MIR-XXXX HH:MM Покупка по СБП 350р slx Баланс:"
+        r'(?:Счёт карты|СЧЁТ)\s+\S+\s+\d{2}:\d{2}\s+(?:Покупка|Оплата|Списание)\s+по\s+СБП\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Баланс:',
+    ],
+    'vtb': [
+        # ВТБ: "Списание с карты *1234 1000р МАГАЗИН Доступно: 5000р"
+        r'Списание\s+с\s+карты\s+\*?\d{4}\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Доступно:',
+        # ВТБ: "Покупка 500р МАГАЗИН Остаток: 10000р"
+        r'(?:Покупка|Оплата)\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Остаток:',
+    ],
+    'alfa': [
+        # Альфа: "Списание 1000р МАГАЗИН Баланс: 5000р"
+        r'Списание\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Баланс:',
+        # Альфа: "Оплата 500р УСЛУГА Доступно: 10000р"
+        r'Оплата\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Доступно:',
+    ],
+    'tinkoff': [
+        # Т-Банк: "Покупка 1000р МАГАЗИН Доступно: 5000р"
+        r'Покупка\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Доступно:',
+        # Т-Банк: "Списание 500р УСЛУГА Баланс: 10000р"
+        r'Списание\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Баланс:',
+    ],
+    'sovcombank': [
+        # Совкомбанк: "Оплата 1000р МАГАЗИН Остаток: 5000р"
+        r'Оплата\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Остаток:',
+        # Совкомбанк: "Списание 500р УСЛУГА Доступно: 10000р"
+        r'Списание\s+([\d\s]+[,.]?\d*)\s*(?:р|руб|₽)?\s+(.+?)\s+Доступно:',
+    ],
+}
 
 # Маппинг магазинов
 STORE_MAP = {
@@ -89,18 +112,37 @@ def windows_ticks_to_datetime(value: int) -> datetime:
     return datetime.fromtimestamp(unix_seconds)
 
 
-def parse_sms_body(body: str) -> Optional[Dict]:
-    """Парсит тело SMS на предмет расхода."""
+def parse_sms_body(body: str, sender: str = '') -> Optional[Dict]:
+    """Парсит тело SMS на предмет расхода.
+    
+    Определяет банк по отправителю и применяет соответствующие паттерны.
+    """
     body = body.strip().replace('\xa0', ' ')  # неразрывный пробел → обычный
     
-    for pattern in EXPENSE_PATTERNS:
+    # Определяем банк по отправителю
+    bank = 'sberbank'  # по умолчанию
+    sender_lower = sender.lower()
+    if 'vtb' in sender_lower or 'втб' in body.lower():
+        bank = 'vtb'
+    elif 'alfa' in sender_lower or 'альфа' in body.lower():
+        bank = 'alfa'
+    elif 'tinkoff' in sender_lower or 't-bank' in sender_lower or 'тинькофф' in body.lower() or 'т-банк' in body.lower():
+        bank = 'tinkoff'
+    elif 'sovcom' in sender_lower or 'совком' in body.lower() or 'halva' in sender_lower:
+        bank = 'sovcombank'
+    
+    # Пробуем паттерны для определённого банка, затем общие
+    patterns = EXPENSE_PATTERNS.get(bank, [])
+    if bank != 'sberbank':
+        patterns = patterns + EXPENSE_PATTERNS.get('sberbank', [])
+    
+    for pattern in patterns:
         match = re.search(pattern, body, re.IGNORECASE)
         if match:
             groups = match.groups()
             if len(groups) == 2:
                 amount_str, store = groups
             elif len(groups) == 3:
-                # Карта *XXXX: сумма магазин
                 amount_str, store = groups[1], groups[2]
             else:
                 continue
@@ -123,6 +165,7 @@ def parse_sms_body(body: str) -> Optional[Dict]:
                 'amount': amount,
                 'store': store.strip(),
                 'raw': body,
+                'bank': bank,
             }
     
     return None
@@ -151,12 +194,19 @@ def scan_sms_expenses(days_back: int = 7) -> List[Dict]:
             rows = conn.execute("""
                 SELECT m.body, m.timestamp, m.from_address as sender
                 FROM message m
-                WHERE (m.from_address = '900' 
+                WHERE (m.from_address IN ('900', 'VTB', 'Альфа-Банк', 'Tinkoff', 'T-Bank', 'Совкомбанк', 'Халва')
                        OR m.from_address LIKE '%sber%'
                        OR m.from_address LIKE '%сбер%'
+                       OR m.from_address LIKE '%vtb%'
+                       OR m.from_address LIKE '%альфа%'
+                       OR m.from_address LIKE '%tinkoff%'
+                       OR m.from_address LIKE '%t-bank%'
+                       OR m.from_address LIKE '%совком%'
+                       OR m.from_address LIKE '%halva%'
                        OR m.body LIKE '%Списание%'
                        OR m.body LIKE '%Покупка%'
-                       OR m.body LIKE '%Оплата%')
+                       OR m.body LIKE '%Оплата%'
+                       OR m.body LIKE '%Списано%')
                   AND m.timestamp > ?
                   AND m.body IS NOT NULL
                 ORDER BY m.timestamp DESC
@@ -168,7 +218,7 @@ def scan_sms_expenses(days_back: int = 7) -> List[Dict]:
                     continue
                 seen_bodies.add(body)
                 
-                parsed = parse_sms_body(body)
+                parsed = parse_sms_body(body, row['sender'])
                 if parsed:
                     # Фильтруем переводы и крупные операции
                     if 'перевод' in body.lower() and parsed['amount'] > 5000:
