@@ -173,7 +173,7 @@ def scan_sms_expenses(days_back: int = 7) -> List[Dict]:
                     # Фильтруем переводы и крупные операции
                     if 'перевод' in body.lower() and parsed['amount'] > 5000:
                         continue
-                    # Фильтруем чаевые
+                    # Чаевые — это расходы
                     if 'SBERTIPS' in body or 'SBERCHAEVYE' in body:
                         parsed['store'] = 'СберЧаевые'
                     parsed['date'] = windows_ticks_to_datetime(row['timestamp']).date()
