@@ -81,7 +81,10 @@ name, description, brand  ← добавочные, от Vision API
 - **`/ml_last [N]`** — показать последние N записей:
   1. Текстовый список с названием товара (если распознано) и описанием
   2. Для каждой записи с фото — отправляет фото с подписью (название, описание, тема, дата)
-  3. У каждого фото — кнопка 🗑 Удалить (вызывает `ml_delete_callback`, удаляет запись и файл)
+  3. У каждого фото — кнопки:
+     - 🔍 Искать — поиск товара на маркетплейсах
+     - ⏰ Напомнить — напомнить через N дней/месяцев
+     - 🗑 Удалить — удалить запись
 
 - **`/topic_set <слово> <тема>`** — добавить/обновить ассоциацию (пишется как правило `topic_rules`)
 - **`/topic_list [тема]`** — показать все правила
@@ -95,6 +98,33 @@ name, description, brand  ← добавочные, от Vision API
 Тема: мебель
 📝 Диван с кожаной обивкой. Современный стиль.
 ```
+
+## Поиск товаров из Memory Lane
+
+При нажатии 🔍 Искать в `/ml_last`:
+1. **Распознавание фото** — OpenAI Vision API (gpt-4o-mini) генерирует описание:
+   - `name` — название товара
+   - `brand` — бренд
+   - `category` — категория
+   - `article` — артикул/модель
+   - `search_query` — оптимальный запрос для поиска
+2. **Поиск через API маркетплейсов** (параллельно):
+   - Ozon API
+   - Wildberries API
+   - Яндекс.Маркет API
+3. **Выбор лучшего** — по минимальной цене
+4. **Вывод** — название, цена, магазин, ссылка
+
+### Fallback
+Если API недоступны:
+- Поиск по фото через Яндекс.Картинки
+- Прямые ссылки на поиск в маркетплейсах
+
+### Напоминания
+При нажатии ⏰ Напомнить:
+- Варианты: 7 дней, 30 дней, 3 месяца, 6 месяцев, не напоминать
+- Сохраняется в таблицу `ml_reminders`
+- Проверка через cron/heartbeat
 
 ## Vision API enrichment
 
@@ -170,7 +200,8 @@ def _call_vision_with_timeout(image_path, prompt, timeout=30.0):
         process.join(timeout=5.0)
         if process.is_alive():
             process.kill()
-        return None, True  # timed_out
+    
+    return result_dict.get('result'), result_dict.get('timed_out', False)
 ```
 
 ## Рабочая заметка: отправка писем из этого окружения
@@ -203,6 +234,16 @@ with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
 
 Важно: просто `source .env` может не экспортировать переменные в Python-процесс. Нужен именно `set -a`.
 
+## Ключевые файлы
+
+| Файл | Назначение |
+|------|-----------|
+| `memory_lane.py` | Ядро: парсинг, сохранение, topic_rules |
+| `vision_item.py` | Распознавание предметов через OpenAI Vision API |
+| `ml_search.py` | Поиск товаров из Memory Lane на маркетплейсах |
+| `telegram_bot.py` | Интеграция: photo_handler, /ml_last, /topic_set, /topic_list, кнопки |
+| `consumption.db` | SQLite: таблицы `memory_lane_items`, `media_assets`, `topic_rules`, `ml_reminders` |
+
 ## Диагностика
 
 **Тема не определена (topic = None / —):**
@@ -216,3 +257,8 @@ with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
 **Название/описание не сохраняются:**
 - Проверить, что `vision_info` передан в `save_memory_lane`
 - Проверить, что `_ensure_vision_columns` добавил колонки (если не сработало — выполнить вручную)
+
+**Поиск не работает:**
+- Проверить `ml_search.py` — импортируется ли корректно
+- Проверить API-ключи для OpenAI Vision
+- Проверить наличие `photo_path` в `memory_lane_items` (через `media_assets`)
