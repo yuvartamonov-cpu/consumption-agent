@@ -42,24 +42,33 @@ def get_ml_item(item_id: int) -> Optional[Dict]:
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute('''
-            SELECT id, name, brand, category, description, 
-                   style_tags, liked, photo_path, created_at
+            SELECT id, name, brand, topic, description, 
+                   style_tags, media_asset_id, created_at
             FROM memory_lane_items
-            WHERE id = ? AND deleted_at IS NULL
+            WHERE id = ?
         ''', (item_id,)).fetchone()
         
         if not row:
             return None
         
+        # Получаем путь к фото
+        photo_path = None
+        if row['media_asset_id']:
+            ma_row = conn.execute(
+                'SELECT file_path FROM media_assets WHERE id = ?',
+                (row['media_asset_id'],)
+            ).fetchone()
+            if ma_row:
+                photo_path = ma_row[0]
+        
         return {
             'id': row['id'],
             'name': row['name'],
             'brand': row['brand'],
-            'category': row['category'],
+            'category': row['topic'],  # topic используем как category
             'description': row['description'],
             'style_tags': json.loads(row['style_tags'] or '[]'),
-            'liked': row['liked'],
-            'photo_path': row['photo_path'],
+            'photo_path': photo_path,
             'created_at': row['created_at'],
         }
     finally:
