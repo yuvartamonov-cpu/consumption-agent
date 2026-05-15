@@ -95,6 +95,40 @@ def generate_marketplace_links(query: str) -> Dict[str, str]:
     }
 
 
+async def enrich_item_from_photo(item: Dict) -> Dict:
+    """Дополняет товар описанием по фото через Vision API.
+    
+    Если у товара есть фото и нет описания/названия — распознаёт.
+    """
+    photo_path = item.get('photo_path')
+    if not photo_path or not os.path.exists(photo_path):
+        return item
+    
+    # Если уже есть название и бренд — не перезаписываем
+    if item.get('name') and item.get('brand'):
+        return item
+    
+    try:
+        # Используем Vision API для распознавания
+        from vision_item import enrich_memory_lane
+        vision_info = enrich_memory_lane(photo_path, item.get('caption', ''))
+        
+        if vision_info:
+            if not item.get('name') and vision_info.get('name'):
+                item['name'] = vision_info['name']
+            if not item.get('brand') and vision_info.get('brand'):
+                item['brand'] = vision_info['brand']
+            if not item.get('description') and vision_info.get('description'):
+                item['description'] = vision_info['description']
+            if not item.get('category') and vision_info.get('category'):
+                item['category'] = vision_info['category']
+        
+        return item
+    except Exception as e:
+        print(f"Ошибка распознавания фото: {e}")
+        return item
+
+
 async def search_web_best_match(query: str) -> Optional[Dict]:
     """Ищет лучшее соответствие через web_search.
     
@@ -242,12 +276,19 @@ def check_reminders() -> List[Dict]:
 async def search_item(item_id: int) -> Optional[str]:
     """Основная функция поиска товара.
     
+    1. Получает товар из БД
+    2. Если нет описания — распознаёт по фото через Vision API
+    3. Ищет лучшее предложение через web_search
+    
     Returns:
-        Markdown-строка с результатами поиска или None
+        HTML-строка с результатами поиска или None
     """
     item = get_ml_item(item_id)
     if not item:
         return None
+    
+    # Распознаём по фото если нет данных
+    item = await enrich_item_from_photo(item)
     
     query = build_search_query(item)
     links = generate_marketplace_links(query)
