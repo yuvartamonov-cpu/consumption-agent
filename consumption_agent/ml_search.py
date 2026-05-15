@@ -76,7 +76,19 @@ def get_ml_item(item_id: int) -> Optional[Dict]:
 
 
 def build_search_query(item: Dict) -> str:
-    """Формирует поисковый запрос для товара."""
+    """Формирует поисковый запрос для товара.
+    
+    Использует сгенерированный нейросетью запрос если есть,
+    иначе формирует из названия + бренда.
+    """
+    # Если есть сгенерированный запрос от Vision API
+    if item.get('search_query'):
+        return item['search_query']
+    
+    # Если есть артикул — ищем по нему (самый точный способ)
+    if item.get('article'):
+        return f"{item['article']} {item.get('brand', '')}".strip()
+    
     name = item.get('name', '')
     brand = item.get('brand', '')
     category = item.get('category', '')
@@ -105,9 +117,10 @@ def generate_marketplace_links(query: str) -> Dict[str, str]:
 
 
 async def enrich_item_from_photo(item: Dict) -> Dict:
-    """Дополняет товар описанием по фото через Vision API.
+    """Дополняет товар описанием по фото через Vision API (OpenAI).
     
-    Если у товара есть фото и нет описания/названия — распознаёт.
+    Использует GPT-4o-mini для распознавания товара по фото.
+    Возвращает структурированное описание: название, бренд, категория, артикул.
     """
     photo_path = item.get('photo_path')
     if not photo_path or not os.path.exists(photo_path):
@@ -118,19 +131,59 @@ async def enrich_item_from_photo(item: Dict) -> Dict:
         return item
     
     try:
-        # Используем Vision API для распознавания
-        from vision_item import enrich_memory_lane
-        vision_info = enrich_memory_lane(photo_path, item.get('caption', ''))
+        import base64
+        import openai
         
-        if vision_info:
+        # Читаем фото
+        with open(photo_path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+        
+        # Запрос к OpenAI Vision
+        client = openai.OpenAI()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты эксперт по распознаванию товаров. Опиши товар на фото для поиска в интернет-магазинах."
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Опиши товар на фото. Нужно:\n1. Точное название (на русском)\n2. Бренд (если виден)\n3. Категория (одежда, обувь, техника и т.д.)\n4. Артикул/модель (если виден)\n5. Ключевые признаки для поиска\n\nОтветь в формате JSON:\n{\n  \"name\": \"название\",\n  \"brand\": \"бренд\",\n  \"category\": \"категория\",\n  \"article\": \"артикул\",\n  \"search_query\": \"запрос для поиска\"\n}"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_data}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=500,
+            temperature=0.3
+        )
+        
+        # Парсим ответ
+        content = response.choices[0].message.content
+        # Извлекаем JSON из ответа
+        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        if json_match:
+            vision_info = json.loads(json_match.group())
+            
             if not item.get('name') and vision_info.get('name'):
                 item['name'] = vision_info['name']
             if not item.get('brand') and vision_info.get('brand'):
                 item['brand'] = vision_info['brand']
-            if not item.get('description') and vision_info.get('description'):
-                item['description'] = vision_info['description']
             if not item.get('category') and vision_info.get('category'):
                 item['category'] = vision_info['category']
+            if vision_info.get('search_query'):
+                item['search_query'] = vision_info['search_query']
+            if vision_info.get('article'):
+                item['article'] = vision_info['article']
         
         return item
     except Exception as e:
