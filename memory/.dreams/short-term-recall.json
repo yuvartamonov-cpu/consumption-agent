@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-08T04:33:56.657Z",
+  "updatedAt": "2026-05-12T18:16:15.628Z",
   "entries": {
     "memory:memory/2026-04-25.md:1:35": {
       "key": "memory:memory/2026-04-25.md:1:35",
@@ -430,22 +430,24 @@
       "endLine": 35,
       "source": "memory",
       "snippet": "# 02.05.2026 — Consumption Agent: день 1 ## Что сделано - Написан полный скрипт consumption_agent_full_020526.py (467 строк, 29 KB, синтаксис валидный) - Прошёл code review через Claude Code (11 замечаний, 8 исправлено) - Инициализирована БД, созданы индексы (7 шт) - Импортировано 54 покупки (только Ozon), 494 товара, 34 категории - Добавлены гарантии (20 товаров) и сроки годности (12 товаров) - Пароль Gmail вынесен в ~/.bashrc (IMAP_USER, IMAP_PASSWORD) - PDF-отчёт работает (33 KB) - Написан TZ.md (v2.0, актуальное состояние) ## Текущее состояние базы - Товаров: 494 активных, 0 без категории, 35 привязаны к покупкам - Покупок: 54 (все Ozon), чеков: 83 - Алертов: 0 (ничего не просрочено) -",
-      "recallCount": 3,
+      "recallCount": 4,
       "dailyCount": 0,
       "groundedCount": 0,
-      "totalScore": 1.1339693784713745,
+      "totalScore": 1.4876414418220518,
       "maxScore": 0.38999300897121425,
       "firstRecalledAt": "2026-05-06T16:18:11.746Z",
-      "lastRecalledAt": "2026-05-08T04:33:56.657Z",
+      "lastRecalledAt": "2026-05-11T18:29:48.166Z",
       "queryHashes": [
         "7e8c910cf507",
         "035a0835c982",
-        "bdccec2d80dd"
+        "bdccec2d80dd",
+        "5b7a668a04a5"
       ],
       "recallDays": [
         "2026-05-06",
         "2026-05-07",
-        "2026-05-08"
+        "2026-05-08",
+        "2026-05-11"
       ],
       "conceptTags": [
         "02.05.2026",
@@ -682,6 +684,69 @@
         "all-senders",
         "extract-amount-from-html",
         "fetch-head-batch"
+      ]
+    },
+    "memory:memory/2026-05-10.md:1:6": {
+      "key": "memory:memory/2026-05-10.md:1:6",
+      "path": "memory/2026-05-10.md",
+      "startLine": 1,
+      "endLine": 6,
+      "source": "memory",
+      "snippet": "- У consumption_agent roadmap обновлён: добавлены отдельные задачи по Госуслугам и поиску полной истории чеков Яндекс Драйв. - Код consumption_agent синхронизирован с Paperclip AI через git; при ребейзе был конфликт в telegram_bot.py, его разрешили объединением /find_car и /warranties. - Автоотправка roadmap на Gmail из WSL 10.05.2026 не заработала: SMTP/STARTTLS таймаутится даже при работающем VPN на Windows. - Старый Gmail app password считался скомпрометированным и был отозван/заменён пользователем 10.05.2026; секреты в память не записывать. - После замены Gmail app password отправка почты из WSL заработала через SMTP_SSL:465; roadmap успешно отправлен на yu.v.artamonov@gmail.com.",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4049908697605133,
+      "maxScore": 0.4049908697605133,
+      "firstRecalledAt": "2026-05-11T23:20:51.302Z",
+      "lastRecalledAt": "2026-05-11T23:20:51.302Z",
+      "queryHashes": [
+        "736c9fb7c717"
+      ],
+      "recallDays": [
+        "2026-05-12"
+      ],
+      "conceptTags": [
+        "consumption-agent",
+        "telegram-bot.py",
+        "find-car",
+        "10.05.2026",
+        "smtp/starttls",
+        "отозван/заменён",
+        "smtp-ssl",
+        "yu.v.artamonov"
+      ]
+    },
+    "memory:memory/2026-05-12.md:1:27": {
+      "key": "memory:memory/2026-05-12.md:1:27",
+      "path": "memory/2026-05-12.md",
+      "startLine": 1,
+      "endLine": 27,
+      "source": "memory",
+      "snippet": "# 2026-05-12 ## Consumption Agent — Memory Lane improvements ### /ml_last fixed and enhanced - Исправлена ошибка `AttributeError: 'sqlite3.Row' object has no attribute 'get'` в `/ml_last` — переписано на прямой доступ по ключу `r['media_asset_id']` - Команда `/ml_last` теперь отправляет фото для записей с `media_asset_id` - У каждого фото — кнопка 🗑 Удалить (колбэк `ml_delete_callback`), которая удаляет запись из `memory_lane_items` + файл из `media_assets` ### Vision enrichment → БД - `save_memory_lane()` теперь принимает `vision_info` (name, description, brand из Vision API) - Добавлены колонки `name`, `description`, `brand` в таблицу `memory_lane_items` (через `_ensure_vision_columns`",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.8331250846385956,
+      "maxScore": 0.42205805778503414,
+      "firstRecalledAt": "2026-05-12T12:51:02.515Z",
+      "lastRecalledAt": "2026-05-12T18:16:15.628Z",
+      "queryHashes": [
+        "3ab94adaf455",
+        "5a26374e33a2"
+      ],
+      "recallDays": [
+        "2026-05-12"
+      ],
+      "conceptTags": [
+        "ml-last",
+        "sqlite3.row",
+        "media-asset-id",
+        "ml-delete-callback",
+        "memory-lane-items",
+        "media-assets",
+        "save-memory-lane",
+        "vision-info"
       ]
     }
   }

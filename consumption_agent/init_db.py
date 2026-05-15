@@ -175,6 +175,16 @@ def create_new_schema(conn):
         );
     ''')
 
+    # Индексы для производительности (рекомендация Codex п.4)
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_deleted_at ON items(deleted_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_purchase_id ON items(purchase_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_purchases_deleted_at ON purchases(deleted_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_recog_log_matched_item_id ON recognized_items_log(matched_item_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_recog_log_source_type ON recognized_items_log(source_type)')
+
 
 def ensure_indexes(conn):
     """Create read-path indexes that are safe to apply to existing databases."""

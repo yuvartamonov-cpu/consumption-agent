@@ -13,14 +13,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(ROOT, 'consumption.db')
 
 
-def _configure_connection(conn: sqlite3.Connection, busy_timeout_ms: int) -> sqlite3.Connection:
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
-    return conn
-
-
 def connect(
     db_path: str | PathLike[str] = DB_PATH,
     timeout: float = 10.0,
@@ -31,12 +23,20 @@ def connect(
     """
     Подключение к БД с retry при блокировке.
     Возвращает sqlite3.Connection с row_factory = Row.
+    Включает оптимальные PRAGMA для производительности и надёжности.
     """
     last_err = None
     for i in range(max_retries):
         try:
             conn = sqlite3.connect(str(db_path), timeout=timeout)
-            return _configure_connection(conn, busy_timeout_ms)
+            conn.row_factory = sqlite3.Row
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA foreign_keys=ON')
+            conn.execute(f'PRAGMA busy_timeout={busy_timeout_ms}')
+            conn.execute('PRAGMA synchronous=NORMAL')
+            conn.execute('PRAGMA cache_size=-8000')  # 8 MB cache
+            conn.execute('PRAGMA temp_store=MEMORY')
+            return conn
         except sqlite3.OperationalError as e:
             last_err = e
             if "locked" in str(e) and i < max_retries - 1:

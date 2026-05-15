@@ -11,7 +11,13 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backfill_ozon_items import _fetch_html, _insert_items, _purchases_without_items, run_backfill
+from backfill_ozon_items import (
+    _fetch_html,
+    _insert_items,
+    _purchases_without_items,
+    _resolve_imap_seqnum,
+    run_backfill,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +91,9 @@ def test_empty_mailbox_fetch_returns_no_items():
         conn = sqlite3.connect(db_path)
         _init_schema(conn)
         conn.execute(
-            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-01-01','ozon','uid_999')"
+            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-01-01','ozon','999')"
         )
         conn.commit()
-
-        # Simulate IMAP returning empty fetch data
-        mock_mail = MagicMock()
-        mock_mail.fetch.return_value = (None, [None])
 
         imap_cfg = {'host': 'imap.gmail.com', 'port': 993, 'user': 'test@example.com', 'password': 'x'}
 
@@ -99,6 +101,7 @@ def test_empty_mailbox_fetch_returns_no_items():
             instance = MockIMAP.return_value
             instance.login.return_value = ('OK', [])
             instance.select.return_value = ('OK', [])
+            # Numeric UID → _fetch_html called directly; empty fetch data → '' → 0 items
             instance.fetch.return_value = (None, [None])
             instance.logout.return_value = ('OK', [])
 
@@ -125,10 +128,10 @@ def test_real_fetch_inserts_items_from_ozon_html():
         conn = sqlite3.connect(db_path)
         _init_schema(conn)
         conn.execute(
-            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-06-15','ozon','uid_42')"
+            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-06-15','ozon','42')"
         )
         conn.commit()
-        purchase_id = conn.execute("SELECT id FROM purchases WHERE email_message_id='uid_42'").fetchone()[0]
+        purchase_id = conn.execute("SELECT id FROM purchases WHERE email_message_id='42'").fetchone()[0]
 
         raw_bytes = _make_multipart_html(OZON_HTML)
 
@@ -168,7 +171,7 @@ def test_backfill_is_idempotent():
         conn = sqlite3.connect(db_path)
         _init_schema(conn)
         conn.execute(
-            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-06-15','ozon','uid_77')"
+            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-06-15','ozon','77')"
         )
         conn.commit()
 
@@ -208,7 +211,7 @@ def test_dry_run_does_not_insert():
         conn = sqlite3.connect(db_path)
         _init_schema(conn)
         conn.execute(
-            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-06-15','ozon','uid_55')"
+            "INSERT INTO purchases (purchase_date, source, email_message_id) VALUES ('2025-06-15','ozon','55')"
         )
         conn.commit()
 
@@ -230,3 +233,25 @@ def test_dry_run_does_not_insert():
         conn.close()
     finally:
         os.unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# Test: routing logic in _resolve_imap_seqnum
+# ---------------------------------------------------------------------------
+
+def test_resolve_imap_seqnum_routing():
+    """_resolve_imap_seqnum routes correctly for all three email_message_id formats."""
+    mock_mail = MagicMock()
+    # Numeric → returned as-is without touching IMAP
+    assert _resolve_imap_seqnum(mock_mail, '54012') == '54012'
+    mock_mail.search.assert_not_called()
+
+    # Synthetic ozon_cheque_NNNN_ → extracts number
+    assert _resolve_imap_seqnum(mock_mail, 'ozon_cheque_1371_30.11.2025 09:51') == '1371'
+    mock_mail.search.assert_not_called()
+
+    # Message-ID with @ → calls search
+    mock_mail.search.return_value = ('OK', [b'88'])
+    result = _resolve_imap_seqnum(mock_mail, '69abc.def@mx.google.com')
+    assert result == '88'
+    mock_mail.search.assert_called_once()

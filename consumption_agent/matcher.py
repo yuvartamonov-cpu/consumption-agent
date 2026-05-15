@@ -125,7 +125,7 @@ def is_garbage(text):
     letter_count = sum(1 for c in t if c.isalpha())
     non_alpha_count = sum(1 for c in t if not c.isalpha() and not c.isspace())
     total_printable = letter_count + non_alpha_count
-    if total_printable > 0 and non_alpha_count / total_printable > 0.3:
+    if total_printable > 0 and non_alpha_count / total_printable > 0.5:
         return True
     return False
 
@@ -134,9 +134,25 @@ def is_garbage(text):
 # Exact match
 # ---------------------------------------------------------------------------
 
-def exact_match(rec_name, rec_brand="", rec_sku="", items=None):
+def _build_normalized_index(items):
+    """Построить индекс: normalized_name -> list[item].
+    Вызывается один раз для всего набора items."""
+    idx = {}
+    for item in items:
+        norm = normalize(item["name"])
+        if not norm:
+            continue
+        idx.setdefault(norm, []).append(item)
+    return idx
+
+
+def exact_match(rec_name, rec_brand="", rec_sku="", norm_index=None):
     norm_name = normalize(rec_name)
-    if not norm_name or not items:
+    if not norm_name or not norm_index:
+        return []
+
+    items = norm_index.get(norm_name, [])
+    if not items:
         return []
 
     rec_brand_norm = normalize(rec_brand)
@@ -144,8 +160,6 @@ def exact_match(rec_name, rec_brand="", rec_sku="", items=None):
     candidates = []
 
     for item in items:
-        if norm_name != normalize(item["name"]):
-            continue
         item_brand = normalize(item["brand"] or "")
         item_sku = normalize(item["sku"] or "")
         score = 100
@@ -163,13 +177,18 @@ def exact_match(rec_name, rec_brand="", rec_sku="", items=None):
 # Fuzzy match
 # ---------------------------------------------------------------------------
 
-def fuzzy_match(rec_name, items, threshold):
+def fuzzy_match(rec_name, items, threshold, norm_item_cache=None):
+    """
+    Fuzzy match — сравнивает нормализованное название записи с items.
+    Если передан norm_item_cache (dict: item -> normalized_name), избегает повторной нормализации.
+    """
     norm = normalize(rec_name)
     if not norm or not items:
         return []
     results = []
     for item in items:
-        score = fuzz.token_set_ratio(norm, normalize(item["name"]))
+        item_norm = norm_item_cache.get(id(item)) if norm_item_cache else normalize(item["name"])
+        score = fuzz.token_set_ratio(norm, item_norm)
         if score >= threshold:
             results.append({"item": item, "score": score, "method": "fuzzy"})
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -180,13 +199,13 @@ def fuzzy_match(rec_name, items, threshold):
 # Матчинг одной записи
 # ---------------------------------------------------------------------------
 
-def match_record(rec, items, threshold_high, threshold_medium):
+def match_record(rec, norm_index, items, norm_item_cache, threshold_high, threshold_medium):
     confidence = (rec.get("confidence") or "high").lower()
-    candidates = exact_match(rec["recognized_product"], rec.get("brand", ""), rec.get("sku", ""), items)
+    candidates = exact_match(rec["recognized_product"], rec.get("brand", ""), rec.get("sku", ""), norm_index)
     if candidates:
         return candidates[:3]
     threshold = 80  # Снижаю порог до 80
-    return fuzzy_match(rec["recognized_product"], items, threshold)[:3]
+    return fuzzy_match(rec["recognized_product"], items, threshold, norm_item_cache)[:3]
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +257,10 @@ def run_matcher(db_path, dry_run=False, limit=None,
     if limit:
         records = records[:limit]
 
+    # Строим индексы один раз (рекомендация Codex п.5)
+    norm_index = _build_normalized_index(items)
+    norm_item_cache = {id(item): normalize(item["name"]) for item in items}
+
     stats = {
         "total": len(records),
         "matched": 0,
@@ -256,7 +279,7 @@ def run_matcher(db_path, dry_run=False, limit=None,
         stats["by_confidence"][conf] = stats["by_confidence"].get(conf, 0) + 1
 
         try:
-            candidates = match_record(rec, items, threshold_high, threshold_medium)
+            candidates = match_record(rec, norm_index, items, norm_item_cache, threshold_high, threshold_medium)
             if candidates:
                 best = candidates[0]
                 now_iso = datetime.now(timezone.utc).isoformat()
