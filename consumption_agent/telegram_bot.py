@@ -2994,7 +2994,7 @@ async def ml_search_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         from ml_search import search_item
         result = await search_item(ml_id)
         if result:
-            await query.message.reply_text(result, parse_mode='Markdown', disable_web_page_preview=False)
+            await query.message.reply_text(result, parse_mode='HTML', disable_web_page_preview=False)
             await query.answer('🔍 Лучшее предложение найдено')
         else:
             await query.answer('⚠️ Товар не найден', show_alert=True)

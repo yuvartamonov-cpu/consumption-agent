@@ -133,34 +133,42 @@ async def search_web_best_match(query: str) -> Optional[Dict]:
         return None
 
 
+def escape_html(text: str) -> str:
+    """Экранирует HTML-символы."""
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
 def format_search_result(item: Dict, links: Dict[str, str], best_match: Optional[Dict] = None) -> str:
-    """Форматирует результат поиска для Telegram."""
-    name = item.get('name', 'Без названия')
-    brand = item.get('brand', '')
-    category = item.get('category', 'Без категории')
+    """Форматирует результат поиска для Telegram (HTML)."""
+    name = escape_html(item.get('name', 'Без названия'))
+    brand = escape_html(item.get('brand', ''))
+    category = escape_html(item.get('category', 'Без категории'))
     
     lines = [
-        f"🔍 *Поиск: {name}*",
+        f"🔍 <b>Поиск: {name}</b>",
         f"Бренд: {brand or 'не указан'}",
         f"Категория: {category}",
     ]
     
     if best_match:
         price_str = f"{best_match['price']} ₽" if best_match.get('price') else 'цена не указана'
+        title = escape_html(best_match['title'][:80])
+        store = escape_html(best_match['store'])
         lines.extend([
             "",
-            f"*Лучшее предложение:*",
-            f"[{best_match['store']}] {best_match['title'][:60]}",
+            f"<b>Лучшее предложение:</b>",
+            f"🛒 {store}",
+            f"📦 {title}",
             f"💰 {price_str}",
-            f"[🔗 Перейти]({best_match['url']})",
+            f"<a href='{best_match['url']}'>🔗 Перейти к товару</a>",
         ])
     else:
         lines.extend([
             "",
-            "*Где купить:*",
-            f"[🛒 Ozon]({links['ozon']})",
-            f"[🛒 Яндекс.Маркет]({links['yandex_market']})",
-            f"[🛒 Wildberries]({links['wildberries']})",
+            "<b>Где купить:</b>",
+            f"<a href='{links['ozon']}'>🛒 Ozon</a>",
+            f"<a href='{links['yandex_market']}'>🛒 Яндекс.Маркет</a>",
+            f"<a href='{links['wildberries']}'>🛒 Wildberries</a>",
         ])
     
     return '\n'.join(lines)
