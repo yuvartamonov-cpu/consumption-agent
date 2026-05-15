@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "Telegram bot for personal consumption tracking and inventory management"
 requires-python = ">=3.11"
 dependencies = [
-    "python-telegram-bot>=21.0,<22",
+    "python-telegram-bot[job-queue]>=22.7,<23",
     "rapidfuzz>=3.0",
     "pillow>=10.0",
     "pyzbar>=0.1.9",
@@ -28,6 +28,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+addopts = "-q"
 
 [tool.ruff]
 line-length = 100

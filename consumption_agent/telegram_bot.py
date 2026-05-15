@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Consumption Agent Telegram Bot
 ÐšÐ¾Ð¼Ð°Ð½Ð´Ñ‹:

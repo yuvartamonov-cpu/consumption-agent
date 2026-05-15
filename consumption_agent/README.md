@@ -54,6 +54,20 @@ consumption status
 consumption check-db
 ```
 
+## Dev setup
+
+```powershell
+cd consumption_agent
+python -m pip install -e .[dev]
+.\scripts\dev_check.ps1
+```
+
+For environments without dev dependencies, run the smoke subset:
+
+```powershell
+.\scripts\dev_check.ps1 -SkipTests -SkipRuff -SkipMypy
+```
+
 ## Архитектура
 
 Система состоит из 6 слоёв:
