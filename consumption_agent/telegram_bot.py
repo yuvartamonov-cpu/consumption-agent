@@ -2206,8 +2206,19 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /dayexp — чеки за сегодня с принудительным сканированием почт (фоново)."""
-    msg = await update.message.reply_text('🔍 Сканирую почты и SMS за сегодня...')
+    """Команда /dayexp [N] — чеки за N дней (включая сегодня) с принудительным сканированием.
+    По умолчанию N=1 — только сегодня."""
+    n_days = 1
+    if ctx.args and len(ctx.args) > 0:
+        try:
+            n_days = int(ctx.args[0])
+            if n_days < 1:
+                n_days = 1
+        except ValueError:
+            pass
+
+    day_label = f'последние {n_days} дн.' if n_days > 1 else 'сегодня'
+    msg = await update.message.reply_text(f'🔍 Сканирую почты и SMS за {day_label}...')
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -2230,21 +2241,25 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         rows = conn.execute("""
             SELECT purchase_date, total_amount, store_name, source, notes
             FROM purchases
-            WHERE purchase_date = date('now')
+            WHERE purchase_date >= date('now', ?)
+              AND purchase_date <= date('now')
               AND (deleted_at IS NULL OR deleted_at = '')
-            ORDER BY total_amount DESC
-        """).fetchall()
+            ORDER BY purchase_date DESC, total_amount DESC
+        """, (f'-{n_days - 1} days',)).fetchall()
     finally:
         conn.close()
 
     if not rows:
-        await msg.edit_text(f'📭 За сегодня ({datetime.now().strftime("%d.%m.%Y")}) покупок не найдено.')
+        date_range = f'{datetime.now().strftime("%d.%m.%Y")}' if n_days == 1 else f'за последние {n_days} дн. (по {datetime.now().strftime("%d.%m.%Y")})'
+        await msg.edit_text(f'📭 {date_range} покупок не найдено.')
         return
 
     total = sum(r[1] or 0 for r in rows)
     source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
 
-    lines = [f'📊 *Расходы за {datetime.now().strftime("%d.%m.%Y")}*']
+    today_str = datetime.now().strftime('%d.%m.%Y')
+    title = f'📊 *Расходы за сегодня ({today_str})*' if n_days == 1 else f'📊 *Расходы за последние {n_days} дн. (по {today_str})*'
+    lines = [title]
     lines.append(f'_{len(rows)} покупок, всего {total:,.0f} ₽_\n'.replace(',', ' '))
 
     for r in rows:
@@ -2610,12 +2625,15 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     try:
         all_items = conn.execute('''
-            SELECT id, name, brand, category_id, lifespan_months,
-                   purchase_date, status, replace_after_months, replace_after_days, notes
-            FROM items
-            WHERE deleted_at IS NULL AND is_delivery = 0
-              AND data_origin IN ('manual', 'local', 'telegram_photo', 'vision_photo', 'telegram_tag')
-            ORDER BY category_id, name
+            SELECT i.id, i.name, i.brand, i.category_id, i.lifespan_months,
+                   i.purchase_date, i.status, i.replace_after_months, i.replace_after_days, i.notes,
+                   i.attributes,
+                   COALESCE(c.name, i.category_id) AS category_name
+            FROM items i
+            LEFT JOIN categories c ON c.id = i.category_id
+            WHERE i.deleted_at IS NULL AND i.is_delivery = 0
+              AND i.data_origin IN ('manual', 'local', 'telegram_photo', 'vision_photo', 'telegram_tag')
+            ORDER BY i.category_id, i.name
         ''').fetchall()
     finally:
         conn.close()
@@ -2634,12 +2652,12 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for r in all_items:
             name = (r[1] or '').lower()
             brand = (r[2] or '').lower()
-            cat = (r[3] or '').lower()
+            cat = (r[11] or r[3] or '').lower()  # category_name, fallback category_id
             notes = (r[9] or '').lower()
             attrs = {}
             try:
-                attrs = json.loads(r[10] or '{}')
-            except json.JSONDecodeError:
+                attrs = json.loads(r[10] or '{}')  # attributes
+            except (json.JSONDecodeError, IndexError):
                 pass
             desc = (attrs.get('description') or '').lower()
             tags = ' '.join(attrs.get('style_tags', [])).lower()
@@ -2761,12 +2779,15 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     try:
         all_items = conn.execute('''
-            SELECT id, name, brand, category_id, lifespan_months,
-                   purchase_date, status, replace_after_months, replace_after_days, notes, attributes
-            FROM items
-            WHERE deleted_at IS NULL AND is_delivery = 0
-              AND data_origin IN ('manual', 'local', 'vision_photo', 'telegram_photo', 'telegram_tag')
-            ORDER BY category_id, name
+            SELECT i.id, i.name, i.brand, i.category_id, i.lifespan_months,
+                   i.purchase_date, i.status, i.replace_after_months, i.replace_after_days, i.notes,
+                   i.attributes,
+                   COALESCE(c.name, i.category_id) AS category_name
+            FROM items i
+            LEFT JOIN categories c ON c.id = i.category_id
+            WHERE i.deleted_at IS NULL AND i.is_delivery = 0
+              AND i.data_origin IN ('manual', 'local', 'vision_photo', 'telegram_photo', 'telegram_tag')
+            ORDER BY i.category_id, i.name
         ''').fetchall()
         # Загружаем фото (file_path из media_assets)
         photos = {}
@@ -2795,18 +2816,20 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for r in all_items:
             name = (r[1] or '').lower()
             brand = (r[2] or '').lower()
-            cat = (r[3] or '').lower()
+            cat = (r[11] or r[3] or '').lower()  # category_name, fallback category_id
             notes = (r[9] or '').lower()
             attrs = {}
             try:
-                attrs = json.loads(r[10] or '{}')
+                attrs = json.loads(r[10] or '{}')  # attributes
             except json.JSONDecodeError:
                 pass
             desc = (attrs.get('description') or '').lower()
             tags = ' '.join(attrs.get('style_tags', [])).lower()
+            color = (attrs.get('color') or '').lower()
+            material = (attrs.get('material') or '').lower()
             
             # Ищем во всех полях
-            search_text = f'{name} {brand} {cat} {notes} {desc} {tags}'
+            search_text = f'{name} {brand} {cat} {notes} {desc} {tags} {color} {material}'
             if args in search_text:
                 filtered.append(r)
     else:
