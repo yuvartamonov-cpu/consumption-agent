@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import json
 
+from consumption.db import connect as db_connect
+
 DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 
 # IMAP конфигурации для всех почт
@@ -128,17 +130,8 @@ class CreditAlert:
 
 
 def _db_connect():
-    """Подключение к БД с retry при блокировке."""
-    for attempt in range(3):
-        try:
-            conn = sqlite3.connect(DB_PATH, timeout=10)
-            conn.row_factory = sqlite3.Row
-            return conn
-        except sqlite3.OperationalError as e:
-            if 'locked' in str(e).lower() and attempt < 2:
-                time.sleep(0.5 * (2 ** attempt))
-                continue
-            raise
+    """Connect through the shared SQLite helper."""
+    return db_connect(DB_PATH, timeout=10, max_retries=3, delay=0.5)
 
 
 def init_credit_tables():

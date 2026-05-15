@@ -24,7 +24,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from matcher import match_record
+from consumption.db import connect as db_connect
+from matcher import _build_normalized_index, match_record, normalize
 
 DB_PATH = Path(__file__).parent / "consumption.db"
 
@@ -100,6 +101,8 @@ def _create_purchase_and_items(db, purchase_id: int, parsed: dict, all_items: li
     """Привязать товары из чека к items через matcher."""
     matched_count = 0
     unmatched_items = []
+    norm_index = _build_normalized_index(all_items)
+    norm_item_cache = {id(item): normalize(item["name"]) for item in all_items}
 
     for item in parsed.get('items', []):
         rec = {
@@ -108,7 +111,7 @@ def _create_purchase_and_items(db, purchase_id: int, parsed: dict, all_items: li
             'brand': '',
             'sku': '',
         }
-        candidates = match_record(rec, all_items, threshold_high=85, threshold_medium=90)
+        candidates = match_record(rec, norm_index, all_items, norm_item_cache, 85, 90)
 
         target_item_id = None
         if candidates and candidates[0]['score'] >= 85:
@@ -148,9 +151,7 @@ def _create_purchase_and_items(db, purchase_id: int, parsed: dict, all_items: li
 
 def batch_process():
     """Обработать все чеки из cheques_log с source='ozon_pdf', у которых нет purchase."""
-    db = sqlite3.connect(str(DB_PATH))
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA busy_timeout=5000")
+    db = db_connect(DB_PATH)
 
     cur = db.execute("""
         SELECT cl.id, cl.email_uid, cl.receipt_url, cl.subject

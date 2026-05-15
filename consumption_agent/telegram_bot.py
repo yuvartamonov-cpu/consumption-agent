@@ -21,34 +21,23 @@ from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
 
 def get_db_with_retry(max_retries=3, backoff_base=0.5):
-    """Подключение к БД с retry при блокировке (database is locked)."""
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'consumption.db')
-    for attempt in range(max_retries):
-        try:
-            conn = sqlite3.connect(db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            return conn
-        except sqlite3.OperationalError as e:
-            if 'locked' in str(e).lower() and attempt < max_retries - 1:
-                sleep_time = backoff_base * (2 ** attempt) + random.uniform(0, 0.1)
-                time.sleep(sleep_time)
-                continue
-            raise
-    raise sqlite3.OperationalError("Database is locked after retries")
+    """Connect through the shared DB helper."""
+    if db_connect is None:
+        raise RuntimeError("consumption.db.connect is unavailable")
+    return db_connect(
+        DB_PATH,
+        timeout=10,
+        max_retries=max_retries,
+        delay=backoff_base,
+        check_same_thread=False,
+    )
 
 
 def db_execute_with_retry(conn, query, params=(), max_retries=3, backoff_base=0.5):
-    """Выполнение запроса с retry при блокировке."""
-    for attempt in range(max_retries):
-        try:
-            return conn.execute(query, params)
-        except sqlite3.OperationalError as e:
-            if 'locked' in str(e).lower() and attempt < max_retries - 1:
-                sleep_time = backoff_base * (2 ** attempt) + random.uniform(0, 0.1)
-                time.sleep(sleep_time)
-                continue
-            raise
-    raise sqlite3.OperationalError("Database is locked after retries")
+    """Execute a statement through the shared retry helper."""
+    if db_execute_shared is None:
+        raise RuntimeError("consumption.db.execute_with_retry is unavailable")
+    return db_execute_shared(conn, query, params, max_retries=max_retries, delay=backoff_base)
 
 
 def esc_md(text):
@@ -113,10 +102,15 @@ except ImportError:
     slug_to_cat_id = lambda s: None
 
 try:
-    from consumption.db import DB_PATH as SHARED_DB_PATH, connect as db_connect
+    from consumption.db import (
+        DB_PATH as SHARED_DB_PATH,
+        connect as db_connect,
+        execute_with_retry as db_execute_shared,
+    )
 except ImportError:
     SHARED_DB_PATH = None
     db_connect = None
+    db_execute_shared = None
 
 DB_PATH = SHARED_DB_PATH or os.path.join(SCRIPT_DIR, 'consumption.db')
 RECEIPTS_DIR = os.path.join(SCRIPT_DIR, 'receipts')
@@ -626,16 +620,16 @@ def search_product_info_gemini(brand: str, article: str, barcode: str = None) ->
         if not api_key:
             log.warning('GEMINI_API_KEY not set, skipping Gemini search')
             return {}
-        
+
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
+
         query_parts = [f'Бренд: {brand}']
         if article:
             query_parts.append(f'Артикул: {article}')
         if barcode:
             query_parts.append(f'Штрихкод: {barcode}')
-        
+
         prompt = f"""Найди информацию о товаре одежды по данным бирки:
 {'\n'.join(query_parts)}
 
@@ -652,17 +646,17 @@ def search_product_info_gemini(brand: str, article: str, barcode: str = None) ->
 }}
 
 Если не нашёл информацию, верни пустые значения."""
-        
+
         response = model.generate_content(prompt)
         text = response.text
-        
+
         # Извлекаем JSON из ответа
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
             log.info(f'Gemini search result: {result}')
             return result
-        
+
         return {}
     except Exception as e:
         log.warning(f'Gemini search failed: {e}')
@@ -960,22 +954,16 @@ async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def get_db(max_retries=3, delay=1):
-    """Connect to DB with retry on lock."""
-    if db_connect is not None:
-        return db_connect(DB_PATH, timeout=10, max_retries=max_retries, delay=delay)
-    for i in range(max_retries):
-        try:
-            conn = sqlite3.connect(DB_PATH, timeout=10)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=10000")
-            return conn
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e) and i < max_retries - 1:
-                time.sleep(delay * (2 ** i))  # Экспоненциальная задержка
-                continue
-            raise
+    """Connect through the shared DB helper."""
+    if db_connect is None:
+        raise RuntimeError("consumption.db.connect is unavailable")
+    return db_connect(
+        DB_PATH,
+        timeout=10,
+        max_retries=max_retries,
+        delay=delay,
+        check_same_thread=False,
+    )
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -993,7 +981,7 @@ async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений — для доп. информации после vision_confirm."""
     text = (update.message.text or '').strip()
-    
+
     # Проверяем, ждём ли доп. информацию о товаре
     item_id = ctx.user_data.pop('vision_awaiting_notes', None)
     if item_id:
@@ -1001,7 +989,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not text:
             await update.message.reply_text('ℹ️ Дополнительная информация не добавлена')
             return
-        
+
         # Ограничиваем 50 символами
         notes_text = text[:50]
         conn = get_db()
@@ -1019,7 +1007,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             log.warning(f'text_handler: failed to save notes: {e}')
         finally:
             conn.close()
-    
+
     # Если не ждём доп. информацию — игнорируем (или можно добавить другую логику)
     # Пока просто не отвечаем на обычные текстовые сообщения
 
@@ -1177,7 +1165,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         image_type = classify_image_type(text or '')
 
     tag_probe = await asyncio.to_thread(parse_clothing_tag, text or '', receipt_path)
-    
+
     # Проверяем штрихкод через pyzbar (более надёжный метод)
     pyzbar_barcode = None
     try:
@@ -1190,7 +1178,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             log.info(f'pyzbar found barcode: {pyzbar_barcode}')
     except Exception as e:
         log.debug(f'pyzbar failed: {e}')
-    
+
     # Считаем биркой только если:
     # 1. Есть brand + (article или barcode)
     # 2. ИЛИ есть чёткий штрихкод EAN-13 (через OCR или pyzbar)
@@ -1198,18 +1186,18 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     has_barcode = (tag_probe.get('barcode') and len(str(tag_probe.get('barcode'))) >= 8) or (pyzbar_barcode and len(pyzbar_barcode) >= 8)
     has_article = tag_probe.get('article') and len(str(tag_probe.get('article'))) >= 5
     has_brand = tag_probe.get('brand') and len(str(tag_probe.get('brand'))) >= 2
-    
+
     # Проверяем, есть ли в тексте признаки бирки
     raw_text = (tag_probe.get('raw') or '').upper()
     tag_indicators = ['СОСТАВ', 'СТРАНА', 'РАЗМЕР', 'SIZE', 'MADE IN', 'АРТИКУЛ', 'ARTICLE', 'CARE', 'WASH']
     has_tag_indicators = any(ind in raw_text for ind in tag_indicators)
-    
+
     is_real_tag = (
         (has_brand and (has_article or has_barcode)) or
         (has_barcode and has_tag_indicators) or
         (pyzbar_barcode and len(pyzbar_barcode) >= 10)  # EAN-13 штрихкод = точно бирка
     )
-    
+
     # Если Vision API сказал tech/other, но есть признаки бирки — переопределяем
     if image_type in ('unknown', 'other', 'tech') and is_real_tag and not total_amount:
         image_type = 'tag'
@@ -1393,7 +1381,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         search_query = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('article'), tag.get('color')] if x) or (tag.get('barcode') or 'fashion tag')
-        
+
         # Ищем информацию через Gemini
         gemini_info = await asyncio.to_thread(
             search_product_info_gemini,
@@ -1401,7 +1389,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tag.get('article', ''),
             tag.get('barcode')
         )
-        
+
         google_images_url = f"https://www.google.com/search?tbm=isch&q={quote_plus(search_query)}"
         yandex_images_url = f"https://yandex.ru/images/search?text={quote_plus(search_query)}"
         bing_images_url = f"https://www.bing.com/images/search?q={quote_plus(search_query)}"
@@ -1438,7 +1426,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 response_lines.append(f"💰 Цена: ~{gemini_info['price_rub']} ₽")
             if gemini_info.get('product_url'):
                 response_lines.append(f"🔗 Ссылка: {gemini_info['product_url']}")
-        
+
         response_lines.append(f"\nСсылки на фото:\nGoogle: {google_images_url}\nYandex: {yandex_images_url}\nBing: {bing_images_url}")
         if not tag.get('brand'):
             response_lines.append("⚠️ Бренд не найден в OCR. Нужна часть бирки с логотипом/названием бренда крупным планом.")
@@ -1455,7 +1443,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 log.warning(f"Failed to send Gemini image: {e}")
-        
+
         # Отправляем фото из поиска
         image_urls = await asyncio.to_thread(find_product_image_urls, search_query)
         for engine_url in image_urls.values():
@@ -1619,7 +1607,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         dl_total = delivery or sum(dli.get('price', 0) for dli in delivery_items)
         dl_clean = f"{dl_total:.2f} ₽".rstrip('0').rstrip('.').rstrip('₽').strip() + ' ₽'
         response_parts.append(f"\n🚚 Доставка: {dl_clean}")
-    
+
     if not items and not delivery:
         response_parts.append("Товары: не найдены")
         response_parts.append("Добавьте вручную /add <название> <цена>")
@@ -1694,8 +1682,8 @@ async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if provider_filter:
         rows = conn.execute(
             """
-            SELECT date_start, date_end, car_model, car_plate, 
-                   distance_km, tariff, base_cost, insurance, 
+            SELECT date_start, date_end, car_model, car_plate,
+                   distance_km, tariff, base_cost, insurance,
                    over_minutes_cost, discounts, total, source
             FROM carsharing_trips
             WHERE source = ?
@@ -1707,8 +1695,8 @@ async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         rows = conn.execute(
             """
-            SELECT date_start, date_end, car_model, car_plate, 
-                   distance_km, tariff, base_cost, insurance, 
+            SELECT date_start, date_end, car_model, car_plate,
+                   distance_km, tariff, base_cost, insurance,
                    over_minutes_cost, discounts, total, source
             FROM carsharing_trips
             ORDER BY date_start DESC
@@ -1764,28 +1752,28 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     conn = get_db()
-    
+
     # Загружаем тарифы
     tariffs = conn.execute(
         "SELECT * FROM carsharing_tariffs WHERE zone = 'msk' ORDER BY provider"
     ).fetchall()
-    
+
     # Анализируем историю поездок
     history = conn.execute('''
-        SELECT car_model, tariff, COUNT(*) as trips, 
+        SELECT car_model, tariff, COUNT(*) as trips,
                ROUND(AVG((julianday(date_end)-julianday(date_start))*24),1) as avg_hours,
                ROUND(AVG(distance_km),1) as avg_km,
                ROUND(AVG(total),0) as avg_cost
-        FROM carsharing_trips 
+        FROM carsharing_trips
         WHERE car_model IS NOT NULL AND total > 0
         GROUP BY car_model, tariff
         ORDER BY trips DESC
     ''').fetchall()
-    
+
     # Предпочтения пользователя (из истории)
     pref_models = [h['car_model'] for h in history if h['trips'] >= 3]
     pref_tariffs = list(dict.fromkeys([h['tariff'] for h in history if h['tariff']]))
-    
+
     conn.close()
 
     if not tariffs:
@@ -1805,11 +1793,11 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         cost = calculate_drive_cost(t, hours, km)
         provider = t['provider']
         tariff_name = t['tariff_name'] or ''
-        
+
         # Определяем рекомендацию на основе истории
         is_preferred = False
         reason = ""
-        
+
         # Проверяем предпочтительные модели/тарифы
         if 'Bay 24' in tariff_name and 'Bay 24' in pref_tariffs:
             is_preferred = True
@@ -1820,7 +1808,7 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif t['rate_type'] == 'per_hour_km' and hours <= 2:
             is_preferred = True
             reason = "⭐ Выгодно для коротких поездок"
-        
+
         results.append({
             'provider': provider,
             'name': provider_names.get(provider, provider.upper()),
@@ -1831,14 +1819,14 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             'is_preferred': is_preferred,
             'reason': reason,
         })
-    
+
     # Сортируем: предпочтительные первыми, затем по цене
     results.sort(key=lambda x: (not x['is_preferred'], x['cost']))
 
     lines = [f"🚗 Рекомендации на {hours}ч / {km}км\n"]
     lines.append(f"📊 История: {len(history)} моделей, {sum(h['trips'] for h in history)} поездок")
     lines.append(f"💡 Предпочтения: {', '.join(pref_models[:3]) or 'нет данных'}\n")
-    
+
     for r in results:
         tariff_info = f" ({r['tariff']})" if r['tariff'] else ""
         rate_info = "фикс+км" if r['rate_type'] == 'flat_km' else "почас"
@@ -1870,17 +1858,17 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pdf.add_font('DejaVu', 'B', dp.replace('.ttf', '-Bold.ttf'), uni=True)
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
-        
+
         conn = get_db()
         c = conn.cursor()
-        
+
         # Заголовок
         pdf.set_font('DejaVu', 'B', 16)
         pdf.cell(0, 10, 'Consumption Agent — Отчёт', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
         pdf.cell(0, 6, f'Дата: {date.today().isoformat()}', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
-        
+
         # Статистика
         pdf.set_font('DejaVu', 'B', 12)
         pdf.cell(0, 8, 'Общая статистика', new_x='LMARGIN', new_y='NEXT')
@@ -1895,7 +1883,7 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for k, v in stats:
             pdf.cell(0, 6, f'  {k}: {v}', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
-        
+
         # Топ-10 категорий по сумме
         pdf.set_font('DejaVu', 'B', 12)
         pdf.cell(0, 8, 'Топ-10 категорий по сумме', new_x='LMARGIN', new_y='NEXT')
@@ -1909,7 +1897,7 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for r in cats:
             pdf.cell(0, 6, f'  {r["name"]:25s} {r["cnt"]:4d} шт.  {r["total"]:>8.0f} ₽', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
-        
+
         # График трат по месяцам (прямоугольники)
         pdf.set_font('DejaVu', 'B', 12)
         pdf.cell(0, 8, 'Траты по месяцам', new_x='LMARGIN', new_y='NEXT')
@@ -1938,7 +1926,7 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 pdf.set_xy(x + bar_w, y)
             pdf.ln(6)
         pdf.ln(4)
-        
+
         # Активные алерты
         pdf.set_font('DejaVu', 'B', 12)
         a_cnt = c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]
@@ -1950,13 +1938,13 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             pdf.cell(0, 6, '  Нет активных алертов', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
-        
+
         # Топ-20 товаров по цене (без дублей)
         pdf.set_font('DejaVu', 'B', 12)
         pdf.cell(0, 8, 'Топ-20 товаров по цене', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
         top_items = conn.execute('''
-            SELECT name, purchase_price, category_id FROM items 
+            SELECT name, purchase_price, category_id FROM items
             WHERE deleted_at IS NULL AND purchase_price > 0 AND purchase_price NOTNULL
             GROUP BY ROUND(purchase_price,-2), name HAVING MIN(id)
             ORDER BY purchase_price DESC LIMIT 20
@@ -1966,15 +1954,15 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cat_str = (r["category_id"] or '')[:10]
             pdf.cell(0, 6, f'  {price_str}  {r["name"][:45]:45s} [{cat_str}]', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
-        
+
         # Сохраняем и шлём
         pdf_path = '/tmp/consumption_agent_report.pdf'
         pdf.output(pdf_path)
         conn.close()
-        
+
         await update.message.reply_text('📊 Отчёт готов:', reply_to_message_id=update.message.message_id)
         await update.message.reply_document(open(pdf_path, 'rb'), filename='report.pdf')
-        
+
     except Exception as e:
         log.warning(f'cmd_check error: {e}')
         print(traceback.format_exc())
@@ -2041,11 +2029,11 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Парсинг необработанных чеков Ozon из почты."""
     await update.message.reply_text('🔄 Проверяю необработанные чеки Ozon...')
-    
+
     limit = 10
     if ctx.args and ctx.args[0].isdigit():
         limit = min(int(ctx.args[0]), 50)
-    
+
     try:
         conn = get_db()
         # Находим чеки без привязанных товаров
@@ -2062,23 +2050,23 @@ async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ORDER BY cl.id DESC
             LIMIT ?
         """, (limit,)).fetchall()
-        
+
         if not rows:
             await update.message.reply_text('✅ Все чеки Ozon уже обработаны')
             conn.close()
             return
-        
+
         lines = ['🔍 Найдено необработанных:', '']
         for r in rows:
             date_str = r['cheque_date'][:10] if r['cheque_date'] else '?'
             url = (r['receipt_url'] or '')[:60]
             status = '✅ привязан' if r['purchase_id'] else '❌ без покупки'
             lines.append(f'  • {date_str} — {status}')
-        
+
         lines.append('')
         lines.append('Для обработки нужны свежие куки Ozon.')
         lines.append('Обновите куки в .ozon_cookies.txt или используйте /add_photo')
-        
+
         await update.message.reply_text('\n'.join(lines))
         conn.close()
     except Exception as e:
@@ -2704,7 +2692,7 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tags = ' '.join(attrs.get('style_tags', [])).lower()
             color = (attrs.get('color') or '').lower()
             material = (attrs.get('material') or '').lower()
-            
+
             search_text = f'{name} {brand} {cat} {notes} {desc} {tags} {color} {material}'
             if args in search_text:
                 filtered.append(r)
@@ -2833,7 +2821,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Загружаем фото (file_path из media_assets)
         photos = {}
         for row in conn.execute('''
-            SELECT ip.item_id, ma.file_path 
+            SELECT ip.item_id, ma.file_path
             FROM item_photos ip
             JOIN media_assets ma ON ip.media_asset_id = ma.id
             WHERE ip.item_id IN (SELECT id FROM items WHERE deleted_at IS NULL)
@@ -2868,7 +2856,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tags = ' '.join(attrs.get('style_tags', [])).lower()
             color = (attrs.get('color') or '').lower()
             material = (attrs.get('material') or '').lower()
-            
+
             # Ищем во всех полях
             search_text = f'{name} {brand} {cat} {notes} {desc} {tags} {color} {material}'
             if args in search_text:
@@ -2985,7 +2973,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Убираем строки с цветом, материалом, описанием, ценой (дубли из Vision)
             for prefix in ['Цвет:', 'Материал:', 'Описание:', 'Оценочная цена:']:
                 clean_notes = '\n'.join(
-                    line for line in clean_notes.split('\n') 
+                    line for line in clean_notes.split('\n')
                     if not line.strip().startswith(prefix)
                 ).strip()
             if clean_notes:
@@ -3000,18 +2988,18 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Формируем кнопки
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         buttons = []
-        
+
         # Кнопка фото если есть
         photo_path = photos.get(item_id)
         has_photo = photo_path and os.path.exists(photo_path)
-        
+
         if has_photo:
             buttons.append(InlineKeyboardButton('📷 Фото', callback_data=f'item_photo:{item_id}'))
-        
+
         # Кнопка удаления если замена <30 дней
         if status_line and ('🔴' in status_line or '🟡' in status_line):
             buttons.append(InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}'))
-        
+
         kb = InlineKeyboardMarkup([buttons]) if buttons else None
 
         await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
@@ -3683,7 +3671,7 @@ async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     try:
         row = conn.execute('''
-            SELECT ma.file_path 
+            SELECT ma.file_path
             FROM item_photos ip
             JOIN media_assets ma ON ip.media_asset_id = ma.id
             WHERE ip.item_id = ? LIMIT 1

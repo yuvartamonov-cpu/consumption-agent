@@ -12,7 +12,6 @@ import email
 import imaplib
 import os
 import re
-import sqlite3
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +39,7 @@ from consumption_agent_full_030526 import (
     IMAP_CFG,
     _parse_ozon_items,
 )
+from consumption.db import connect as db_connect
 
 
 def _find_by_message_id_header(mail, message_id):
@@ -149,7 +149,7 @@ def run_backfill(db_path=None, dry_run=False, limit=None, imap_cfg=None):
     db_path = db_path or DB_PATH
     imap_cfg = imap_cfg or IMAP_CFG
 
-    conn = sqlite3.connect(db_path)
+    conn = db_connect(db_path)
     rows = _purchases_without_items(conn)
     if limit:
         rows = rows[:limit]

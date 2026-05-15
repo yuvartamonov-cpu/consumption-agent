@@ -7,6 +7,7 @@ db.py — централизованный доступ к БД consumption.db.
 import os
 import sqlite3
 import time
+from collections.abc import Sequence
 from os import PathLike
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +20,7 @@ def connect(
     max_retries: int = 3,
     delay: float = 1.0,
     busy_timeout_ms: int = 10000,
+    check_same_thread: bool = True,
 ) -> sqlite3.Connection:
     """
     Подключение к БД с retry при блокировке.
@@ -28,7 +30,11 @@ def connect(
     last_err = None
     for i in range(max_retries):
         try:
-            conn = sqlite3.connect(str(db_path), timeout=timeout)
+            conn = sqlite3.connect(
+                str(db_path),
+                timeout=timeout,
+                check_same_thread=check_same_thread,
+            )
             conn.row_factory = sqlite3.Row
             conn.execute('PRAGMA journal_mode=WAL')
             conn.execute('PRAGMA foreign_keys=ON')
@@ -44,6 +50,26 @@ def connect(
                 continue
             raise
     raise last_err  # type: ignore
+
+
+def execute_with_retry(
+    conn: sqlite3.Connection,
+    query: str,
+    params: Sequence[object] = (),
+    max_retries: int = 3,
+    delay: float = 0.2,
+) -> sqlite3.Cursor:
+    """Execute a statement with retry for transient SQLite lock errors."""
+    last_err: sqlite3.OperationalError | None = None
+    for attempt in range(max_retries):
+        try:
+            return conn.execute(query, params)
+        except sqlite3.OperationalError as exc:
+            last_err = exc
+            if "locked" not in str(exc).lower() or attempt >= max_retries - 1:
+                raise
+            time.sleep(delay * (2 ** attempt))
+    raise last_err  # type: ignore[misc]
 
 
 def get_setting(conn: sqlite3.Connection, key: str, default=None):

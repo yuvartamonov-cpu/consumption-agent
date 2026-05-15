@@ -12,11 +12,51 @@
 import sqlite3
 import os
 import sys
+import tempfile
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'consumption.db')
+_TMP_DB = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+DB_PATH = _TMP_DB.name
+_TMP_DB.close()
+
+
+def _init_schema(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            brand TEXT,
+            category_id TEXT,
+            status TEXT,
+            replace_after_months INTEGER,
+            replace_after_days INTEGER,
+            purchase_date TEXT,
+            notes TEXT,
+            attributes TEXT,
+            data_origin TEXT,
+            deleted_at TEXT,
+            is_delivery INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS item_photos (
+            item_id INTEGER,
+            media_asset_id INTEGER,
+            is_primary INTEGER DEFAULT 0,
+            UNIQUE(item_id, media_asset_id)
+        );
+    """)
+    conn.commit()
 
 def get_db():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    _init_schema(conn)
+    return conn
+
+
+def teardown_module(module):
+    try:
+        os.unlink(DB_PATH)
+    except OSError:
+        pass
 
 def test_database_schema():
     """Проверяем наличие необходимых колонок"""
