@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 Consumption Agent Telegram Bot
-ÐšÐ¾Ð¼Ð°Ð½Ð´Ñ‹:
-  /start â€” Ð¿Ñ€Ð¸Ð²ÐµÑ‚ÑÑ‚Ð²Ð¸Ðµ
-  /list  â€” Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ Ð¿Ð¾ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸ÑÐ¼
-  /alerts â€” Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ðµ Ð°Ð»ÐµÑ€Ñ‚Ñ‹
-  /add <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ> [<Ñ†ÐµÐ½Ð°>] [<ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ>] â€” Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ñ‚Ð¾Ð²Ð°Ñ€
-  /check â€” ÑÑ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°
-  /help â€” ÑÐ¿Ñ€Ð°Ð²ÐºÐ°
+Команды:
+  /start — приветствие
+  /list  — инвентарь по категориям
+  /alerts — активные алерты
+  /add <название> [<цена>] [<категория>] — добавить товар
+  /check — статистика
+  /help — справка
 
-Ð—Ð°Ð¿ÑƒÑÐº: CONSUMPTION_BOT_TOKEN=xxx python3 telegram_bot.py
+Запуск: CONSUMPTION_BOT_TOKEN=xxx python3 telegram_bot.py
 """
 
 import logging, os, sys, re, json, subprocess, tempfile, time, html, traceback, random, asyncio
@@ -21,7 +21,7 @@ from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
 
 def get_db_with_retry(max_retries=3, backoff_base=0.5):
-    """ÐŸÐ¾Ð´ÐºÐ»ÑŽÑ‡ÐµÐ½Ð¸Ðµ Ðº Ð‘Ð” Ñ retry Ð¿Ñ€Ð¸ Ð±Ð»Ð¾ÐºÐ¸Ñ€Ð¾Ð²ÐºÐµ (database is locked)."""
+    """Подключение к БД с retry при блокировке (database is locked)."""
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'consumption.db')
     for attempt in range(max_retries):
         try:
@@ -38,7 +38,7 @@ def get_db_with_retry(max_retries=3, backoff_base=0.5):
 
 
 def db_execute_with_retry(conn, query, params=(), max_retries=3, backoff_base=0.5):
-    """Ð’Ñ‹Ð¿Ð¾Ð»Ð½ÐµÐ½Ð¸Ðµ Ð·Ð°Ð¿Ñ€Ð¾ÑÐ° Ñ retry Ð¿Ñ€Ð¸ Ð±Ð»Ð¾ÐºÐ¸Ñ€Ð¾Ð²ÐºÐµ."""
+    """Выполнение запроса с retry при блокировке."""
     for attempt in range(max_retries):
         try:
             return conn.execute(query, params)
@@ -61,7 +61,7 @@ def esc_md(text):
 
 
 def add_months_safe(dt, months):
-    """Ð”Ð¾Ð±Ð°Ð²Ð»ÑÐµÑ‚ Ð¼ÐµÑÑÑ†Ñ‹ Ðº Ð´Ð°Ñ‚Ðµ Ð±ÐµÐ· Ð¿Ð°Ð´ÐµÐ½Ð¸Ñ Ð½Ð° 29/30/31 Ñ‡Ð¸ÑÐ»Ðµ."""
+    """Добавляет месяцы к дате без падения на 29/30/31 числе."""
     months = int(months)
     month = dt.month - 1 + months
     year = dt.year + month // 12
@@ -71,12 +71,12 @@ def add_months_safe(dt, months):
 
 
 def parse_drive_request(text: str):
-    """ÐŸÐ°Ñ€ÑÐ¸Ñ‚ '3Ñ‡ 80ÐºÐ¼' Ð¸Ð»Ð¸ '2 Ñ‡Ð°ÑÐ° 60 ÐºÐ¼'"""
+    """Парсит '3ч 80км' или '2 часа 60 км'"""
     hours = None
     km = None
     t = text.lower()
-    h_match = re.search(r'(\d+)[\s]*(?:Ñ‡|Ñ‡Ð°Ñ|Ñ‡Ð°ÑÐ°|Ñ‡Ð°ÑÐ¾Ð²|h)', t)
-    k_match = re.search(r'(\d+)[\s]*(?:ÐºÐ¼|km)', t)
+    h_match = re.search(r'(\d+)[\s]*(?:ч|час|часа|часов|h)', t)
+    k_match = re.search(r'(\d+)[\s]*(?:км|km)', t)
     if h_match:
         hours = float(h_match.group(1))
     if k_match:
@@ -85,19 +85,19 @@ def parse_drive_request(text: str):
 
 
 def calculate_drive_cost(tariff, hours, km):
-    """Ð Ð°ÑÑ‡Ñ‘Ñ‚ ÑÑ‚Ð¾Ð¸Ð¼Ð¾ÑÑ‚Ð¸ Ð¿Ð¾ÐµÐ·Ð´ÐºÐ¸ Ð¿Ð¾ Ñ‚Ð°Ñ€Ð¸Ñ„Ñƒ Ð¿Ñ€Ð¾Ð²Ð°Ð¹Ð´ÐµÑ€Ð°."""
+    """Расчёт стоимости поездки по тарифу провайдера."""
     km_rate = tariff['km_rate'] or 0
     rate_type = tariff['rate_type']
 
     if rate_type == 'flat_km':
-        # Ð¤Ð¸ÐºÑÐ¸Ñ€Ð¾Ð²Ð°Ð½Ð½Ñ‹Ð¹ Ñ‚Ð°Ñ€Ð¸Ñ„ (ÑÑƒÑ‚ÐºÐ¸/Ñ‡Ð°ÑÑ‹) + ÑÑ‚Ð¾Ð¸Ð¼Ð¾ÑÑ‚ÑŒ Ð·Ð° ÐºÐ¼
+        # Фиксированный тариф (сутки/часы) + стоимость за км
         base = (tariff['hourly_rate'] or 0) + km * km_rate
     else:
-        # ÐŸÐ¾Ð¼Ð¸Ð½ÑƒÑ‚Ð½Ñ‹Ð¹/Ð¿Ð¾Ñ‡Ð°ÑÐ¾Ð²Ð¾Ð¹ Ñ‚Ð°Ñ€Ð¸Ñ„ + ÑÑ‚Ð¾Ð¸Ð¼Ð¾ÑÑ‚ÑŒ Ð·Ð° ÐºÐ¼
+        # Поминутный/почасовой тариф + стоимость за км
         h_rate = tariff['hourly_rate'] or 0
         base = h_rate * hours + km * km_rate
 
-    return max(round(base, -1), 500)  # Ð¾ÐºÑ€ÑƒÐ³Ð»ÑÐµÐ¼ Ð´Ð¾ 10â‚½, Ð¼Ð¸Ð½Ð¸Ð¼ÑƒÐ¼ 500â‚½
+    return max(round(base, -1), 500)  # округляем до 10₽, минимум 500₽
 
 from telegram import Update, PhotoSize, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
@@ -105,7 +105,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-# ÐÐ¾Ð²Ñ‹Ð¹ Ð¼Ð¾Ð´ÑƒÐ»ÑŒ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð·Ð°Ñ†Ð¸Ð¸ (Ð¨Ð°Ð³ 5 Ñ€ÐµÑ„Ð°ÐºÑ‚Ð¾Ñ€Ð¸Ð½Ð³Ð°)
+# Новый модуль категоризации (Шаг 5 рефакторинга)
 try:
     from consumption.categorize import categorize as auto_categorize, slug_to_cat_id
 except ImportError:
@@ -122,8 +122,8 @@ DB_PATH = SHARED_DB_PATH or os.path.join(SCRIPT_DIR, 'consumption.db')
 RECEIPTS_DIR = os.path.join(SCRIPT_DIR, 'receipts')
 Path(RECEIPTS_DIR).mkdir(exist_ok=True)
 TOKEN = os.environ.get('CONSUMPTION_BOT_TOKEN', '')
-# OWNER_CHAT_ID â€” ID Ð²Ð»Ð°Ð´ÐµÐ»ÑŒÑ†Ð° Ð±Ð¾Ñ‚Ð°. ÐžÐ±ÑÐ·Ð°Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ð¹ Ð¿Ð°Ñ€Ð°Ð¼ÐµÑ‚Ñ€ Ð¾ÐºÑ€ÑƒÐ¶ÐµÐ½Ð¸Ñ.
-# Default Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð´Ð»Ñ Ð»Ð¾ÐºÐ°Ð»ÑŒÐ½Ð¾Ð¹ Ñ€Ð°Ð·Ñ€Ð°Ð±Ð¾Ñ‚ÐºÐ¸. Ð’ Ð¿Ñ€Ð¾Ð´Ð°ÐºÑˆÐµÐ½Ðµ Ð·Ð°Ð´Ð°Ñ‘Ñ‚ÑÑ Ñ‡ÐµÑ€ÐµÐ· .env.
+# OWNER_CHAT_ID — ID владельца бота. Обязательный параметр окружения.
+# Default только для локальной разработки. В продакшене задаётся через .env.
 _owner_default = os.environ.get('OWNER_CHAT_ID_DEFAULT', '1477860192')
 OWNER_CHAT_ID = int(os.environ.get('OWNER_CHAT_ID', _owner_default))
 
@@ -132,7 +132,8 @@ def _parse_allowed_chat_ids(value: str | None) -> set[int]:
     ids: set[int] = set()
     if not value:
         return ids
-    for part in value.split(','):
+    # Support both comma and semicolon as separators
+    for part in re.split(r'[,;]', value):
         part = part.strip()
         if not part:
             continue
@@ -244,10 +245,16 @@ TAG_COLOR_WORDS = {
 TAG_MODEL_WORDS = {'CAMICIE', 'CAMICIA', 'SHIRT', 'POLO', 'TSHIRT', 'T-SHIRT', 'JEANS', 'PANTS'}
 
 
+def _write_text_file(path: str, content: str) -> None:
+    """Write text content to a file (utility for tests and exports)."""
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+
 def _clean_ocr_lines(text: str) -> str:
     lines = []
     for raw_line in (text or '').splitlines():
-        line = re.sub(r'[^\w\s.,%â‚½â‚¬$Â£/#:-]', ' ', raw_line, flags=re.UNICODE)
+        line = re.sub(r'[^\w\s.,%₽€$£/#:-]', ' ', raw_line, flags=re.UNICODE)
         line = re.sub(r'\s+', ' ', line).strip()
         if line:
             lines.append(line)
@@ -255,7 +262,7 @@ def _clean_ocr_lines(text: str) -> str:
 
 
 def _ocr_crop(image_path: str, box_ratio: tuple[float, float, float, float], lang: str = 'eng', psm: str = '6') -> str:
-    """OCR helper Ð´Ð»Ñ Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ñ‹Ñ… Ð·Ð¾Ð½ Ð±Ð¸Ñ€ÐºÐ¸."""
+    """OCR helper для отдельных зон бирки."""
     try:
         from PIL import Image, ImageEnhance, ImageOps
         img = Image.open(image_path)
@@ -283,12 +290,12 @@ def _score_ocr_text(text: str) -> int:
     lower = text.lower()
     digits = len(re.findall(r'\d', text))
     latin_words = len(re.findall(r'\b[A-Za-z]{3,}\b', text))
-    cyr_words = len(re.findall(r'\b[Ð-Ð¯Ð°-ÑÐÑ‘]{3,}\b', text))
-    markers = len(re.findall(r'[â‚½â‚¬$Â£]|\b(?:EUR|USD|RUB|SIZE|TAGLIA|Ð¤Ð|Ð¤ÐŸ|Ð˜Ð¢ÐžÐ“Ðž)\b', text, flags=re.I))
+    cyr_words = len(re.findall(r'\b[А-Яа-яЁё]{3,}\b', text))
+    markers = len(re.findall(r'[₽€$£]|\b(?:EUR|USD|RUB|SIZE|TAGLIA|ФН|ФП|ИТОГО)\b', text, flags=re.I))
     score = digits + latin_words * 3 + cyr_words * 2 + markers * 8
 
-    # ÐžÑ‡ÐµÐ½ÑŒ ÑÐ¸Ð»ÑŒÐ½Ñ‹Ðµ ÑÐ¸Ð³Ð½Ð°Ð»Ñ‹ Ð½Ð°ÑÑ‚Ð¾ÑÑ‰ÐµÐ³Ð¾ Ñ‡ÐµÐºÐ°/Ð±Ð¸Ñ€ÐºÐ¸. Ð­Ñ‚Ð¾ Ð·Ð°Ñ‰Ð¸Ñ‰Ð°ÐµÑ‚ Ñ‡ÐµÐºÐ¸ Ð¾Ñ‚ Ð²Ñ‹Ð±Ð¾Ñ€Ð° ÑˆÑƒÐ¼Ð½Ð¾Ð³Ð¾ OCR-Ð²Ð°Ñ€Ð¸Ð°Ð½Ñ‚Ð°.
-    for kw in ['ÐºÐ°ÑÑÐ¾Ð²Ñ‹Ð¹ Ñ‡ÐµÐº', 'Ñ„Ð¸ÑÐºÐ°Ð»ÑŒÐ½Ñ‹Ð¹', 'Ñ„Ð½', 'Ñ„Ð¿', 'Ð¸Ñ‚Ð¾Ð³', 'Ð±ÐµÐ·Ð½Ð°Ð»Ð¸Ñ‡Ð½Ñ‹Ð¼Ð¸']:
+    # Очень сильные сигналы настоящего чека/бирки. Это защищает чеки от выбора шумного OCR-варианта.
+    for kw in ['кассовый чек', 'фискальный', 'фн', 'фп', 'итог', 'безналичными']:
         if kw in lower:
             score += 120
     for kw in ['etro', 'camicie', 'multicol', 'taglia', 'size']:
@@ -353,19 +360,19 @@ def ocr_image(image_path: str) -> str:
 
 
 def classify_image_type(ocr_text: str) -> str:
-    """ÐžÐ¿Ñ€ÐµÐ´ÐµÐ»ÑÐµÑ‚ Ñ‚Ð¸Ð¿ Ñ„Ð¾Ñ‚Ð¾: 'receipt', 'tag' Ð¸Ð»Ð¸ 'unknown'"""
+    """Определяет тип фото: 'receipt', 'tag' или 'unknown'"""
     text = (ocr_text or '').lower()
     receipt_score = 0
     tag_score = 0
 
-    if any(kw in text for kw in ['ÐºÐ°ÑÑÐ¾Ð²Ñ‹Ð¹ Ñ‡ÐµÐº', 'Ñ„Ð¸ÑÐºÐ°Ð»ÑŒÐ½Ñ‹Ð¹', 'Ñ„Ð½', 'Ñ„Ð¿', 'Ð¸Ñ‚Ð¾Ð³Ð¾', 'ÑÐ´Ð°Ñ‡Ð°', 'Ð½Ð°Ð»Ð¸Ñ‡Ð½Ñ‹Ð¼Ð¸', 'Ð±ÐµÐ·Ð½Ð°Ð»Ð¸Ñ‡']):
+    if any(kw in text for kw in ['кассовый чек', 'фискальный', 'фн', 'фп', 'итого', 'сдача', 'наличными', 'безналич']):
         receipt_score += 4
-    if 'â‚½' in text or 'Ñ€ÑƒÐ±' in text:
+    if '₽' in text or 'руб' in text:
         receipt_score += 2
-    if len(re.findall(r'\d+[.,]\d{2}\s*â‚½?', text)) >= 2:
+    if len(re.findall(r'\d+[.,]\d{2}\s*₽?', text)) >= 2:
         receipt_score += 2
 
-    if any(kw.lower() in text for kw in ['â‚¬', '$', 'eur', 'usd', 'gbp', 'hkd', 'multicol', 'taglia', 'size', 'article', 'camicie', 'camicia']):
+    if any(kw.lower() in text for kw in ['€', '$', 'eur', 'usd', 'gbp', 'hkd', 'multicol', 'taglia', 'size', 'article', 'camicie', 'camicia']):
         tag_score += 3
     if any(brand.lower() in text for brand in TAG_BRANDS):
         tag_score += 4
@@ -398,18 +405,18 @@ def _extract_barcode(image_path: str) -> str | None:
 
 
 def _extract_tag_size_from_image(image_path: str) -> str | None:
-    """ÐŸÑ‹Ñ‚Ð°ÐµÑ‚ÑÑ Ð´Ð¾ÑÑ‚Ð°Ñ‚ÑŒ Ñ€Ð°Ð·Ð¼ÐµÑ€ Ð¸Ð· Ð¿Ñ€Ð°Ð²Ð¾Ð¹ Ñ‡Ð°ÑÑ‚Ð¸ Ð±Ð¸Ñ€ÐºÐ¸ (Ñ‡Ð°ÑÑ‚Ð¾ Ñ‡Ð¸ÑÐ»Ð¾ Ð² Ñ€Ð°Ð¼ÐºÐµ)."""
+    """Пытается достать размер из правой части бирки (часто число в рамке)."""
     try:
         from PIL import Image, ImageOps, ImageEnhance
         img = Image.open(image_path)
         w, h = img.size
-        # ÐŸÑ€Ð°Ð²Ð°Ñ Ñ†ÐµÐ½Ñ‚Ñ€Ð°Ð»ÑŒÐ½Ð°Ñ Ð·Ð¾Ð½Ð° â€” Ñ‚Ð¸Ð¿Ð¸Ñ‡Ð½Ð¾Ðµ Ð¼ÐµÑÑ‚Ð¾ Ñ€Ð°Ð·Ð¼ÐµÑ€Ð° Ð½Ð° fashion-Ð±Ð¸Ñ€ÐºÐ°Ñ….
+        # Правая центральная зона — типичное место размера на fashion-бирках.
         boxes = [
-            # Ð£Ð·ÐºÐ¸Ð¹ crop Ð¿Ð¾ Ñ€Ð°Ð¼ÐºÐµ Ñ€Ð°Ð·Ð¼ÐµÑ€Ð° ÑÐ¿Ñ€Ð°Ð²Ð°.
+            # Узкий crop по рамке размера справа.
             (int(w * 0.63), int(h * 0.42), int(w * 0.81), int(h * 0.58)),
             (int(w * 0.62), int(h * 0.38), int(w * 0.82), int(h * 0.60)),
             (int(w * 0.60), int(h * 0.35), int(w * 0.84), int(h * 0.62)),
-            # Ð‘Ð¾Ð»ÐµÐµ ÑˆÐ¸Ñ€Ð¾ÐºÐ¸Ðµ fallback-Ð·Ð¾Ð½Ñ‹.
+            # Более широкие fallback-зоны.
             (int(w * 0.60), int(h * 0.30), int(w * 0.90), int(h * 0.58)),
             (int(w * 0.55), int(h * 0.25), int(w * 0.92), int(h * 0.65)),
         ]
@@ -435,8 +442,8 @@ def _extract_tag_size_from_image(image_path: str) -> str | None:
 
 
 def _parse_receipt_lines(text: str, known_total: float | None = None) -> list[dict]:
-    """ÐŸÐ°Ñ€ÑÐ¸Ñ‚ ÑÑ‚Ñ€Ð¾ÐºÐ¸ Ñ‡ÐµÐºÐ° Ozon / Ð»ÑŽÐ±Ð¾Ð¹ Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚.
-    Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÑ‚ ÑÐ¿Ð¸ÑÐ¾Ðº Ñ‚Ð¾Ð²Ð°Ñ€Ð¾Ð²: [{name, price, qty, total}, ...].
+    """Парсит строки чека Ozon / любой формат.
+    Возвращает список товаров: [{name, price, qty, total}, ...].
     """
     items = []
     lines = (text or '').split('\n')
@@ -448,15 +455,15 @@ def _parse_receipt_lines(text: str, known_total: float | None = None) -> list[di
         if not line:
             continue
 
-        # Ð¤Ð¾Ñ€Ð¼Ð°Ñ‚ Ozon: Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ Ð½Ð° 1-2 ÑÑ‚Ñ€Ð¾ÐºÐ°Ñ…, Ð·Ð°Ñ‚ÐµÐ¼ "1 x Ð¦Ð•ÐÐ" Ð½Ð° ÑÐ»ÐµÐ´ÑƒÑŽÑ‰ÐµÐ¹
-        # Ð˜Ñ‰ÐµÐ¼ ÑÑ‚Ñ€Ð¾ÐºÑƒ Ð²Ð¸Ð´Ð° "1 x 123,45" Ð¸Ð»Ð¸ "1Ã—123,45"
-        qty_price_match = re.search(r'^(\d+)\s*[xÃ—]\s*([\d]+[.,]\d{2})$', line)
+        # Формат Ozon: название на 1-2 строках, затем "1 x ЦЕНА" на следующей
+        # Ищем строку вида "1 x 123,45" или "1×123,45"
+        qty_price_match = re.search(r'^(\d+)\s*[x×]\s*([\d]+[.,]\d{2})$', line)
         if qty_price_match:
             qty = int(qty_price_match.group(1))
             price = float(qty_price_match.group(2).replace(',', '.'))
             total = qty * price
-            # ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ â€” Ð¿Ñ€ÐµÐ´Ñ‹Ð´ÑƒÑ‰Ð°Ñ Ð½ÐµÐ¿ÑƒÑÑ‚Ð°Ñ ÑÑ‚Ñ€Ð¾ÐºÐ° (Ð¼Ð¾Ð¶ÐµÑ‚ Ð±Ñ‹Ñ‚ÑŒ 1-2 ÑÑ‚Ñ€Ð¾ÐºÐ¸)
-            # Ð˜Ñ‰ÐµÐ¼ ÑÑ‚Ñ€Ð¾ÐºÐ¸ Ñ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸ÐµÐ¼ (Ð½Ðµ Ñ†Ð¸Ñ„Ñ€Ð¾Ð²Ñ‹Ðµ, Ð±ÐµÐ· 'Ð˜Ð¢ÐžÐ“', 'Ð²Ñ‚.Ñ‡', 'ÐÐ”Ð¡')
+            # Название — предыдущая непустая строка (может быть 1-2 строки)
+            # Ищем строки с названием (не цифровые, без 'ИТОГ', 'вт.ч', 'НДС')
             name_parts = []
             for j in range(i - 2, max(i - 5, -1), -1):
                 if j < 0:
@@ -466,44 +473,44 @@ def _parse_receipt_lines(text: str, known_total: float | None = None) -> list[di
                     continue
                 if re.search(r'^[\d,.#]+$', prev):
                     continue
-                if re.search(r'Ð˜Ð¢ÐžÐ“|Ð²Ñ‚\.Ñ‡|ÐÐ”Ð¡|HOC|Ñ€Ð°ÑÑ‡ÐµÑ‚|Ð—Ð°Ñ‡ÐµÑ‚|Ð¤Ð:|PH ÐšÐšÐ¢|Ð¤Ð”:|Ð¤ÐŸÐ”|Ð¡Ð°Ð¹Ñ‚|Ð˜ÐÐ|ÐšÐ¾Ð´ Ð¼Ð°Ñ€ÐºÐ¸Ñ€Ð¾Ð²ÐºÐ¸|Ð ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚|ÐšÑƒÑ€ÑŒÐµÑ€|Ð”Ð¾ÑÑ‚Ð°Ð²Ðº|ÐŸÐ¾Ð»Ð½Ñ‹Ð¹', prev):
+                if re.search(r'ИТОГ|вт\.ч|НДС|HOC|расчет|Зачет|ФН:|PH ККТ|ФД:|ФПД|Сайт|ИНН|Код маркировки|Результат|Курьер|Доставк|Полный', prev):
                     continue
                 if len(prev) < 3:
                     continue
-                # Ð¤Ð¸Ð»ÑŒÑ‚Ñ€ Ð¼ÑƒÑÐ¾Ñ€Ð½Ñ‹Ñ… ÑÑ‚Ñ€Ð¾Ðº OCR
-                # Ð¤Ð¸Ð»ÑŒÑ‚Ñ€ Ð¼ÑƒÑÐ¾Ñ€Ð½Ñ‹Ñ… ÑÑ‚Ñ€Ð¾Ðº OCR (Ñ‡ÐµÐºÐ¸ Ozon Ñ ÑˆÑƒÐ¼Ð°Ð¼Ð¸)
+                # Фильтр мусорных строк OCR
+                # Фильтр мусорных строк OCR (чеки Ozon с шумами)
                 if len(prev) > 5:
-                    # ÐŸÐ¾Ð²Ñ‚Ð¾Ñ€ÑÑŽÑ‰Ð¸ÐµÑÑ ÑÐ¸Ð¼Ð²Ð¾Ð»Ñ‹
+                    # Повторяющиеся символы
                     repeated_single = max(prev.count(c) for c in set(prev))
                     if repeated_single > len(prev) * 0.5:
                         continue
-                    # Ð¡Ñ‚Ñ€Ð¾ÐºÐ° ÑÐ¾ÑÑ‚Ð¾Ð¸Ñ‚ Ð² Ð¾ÑÐ½Ð¾Ð²Ð½Ð¾Ð¼ Ð¸Ð· ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² ÑˆÑƒÐ¼Ð°
-                    nonsense = sum(prev.count(c) for c in 'eEÐ¸cSChHaAÐºÐšÐ’uUÐ°a')
+                    # Строка состоит в основном из символов шума
+                    nonsense = sum(prev.count(c) for c in 'eEиcSChHaAкКВuUаa')
                     if nonsense > len(prev) * 0.6:
                         continue
-                    # Ð£Ð½Ð¸ÐºÐ°Ð»ÑŒÐ½Ñ‹Ñ… ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð¼Ð°Ð»Ð¾ â€” ÑÑ‚Ð¾ ÑˆÑƒÐ¼
+                    # Уникальных символов мало — это шум
                     if len(prev) > 10 and len(set(prev)) < 6:
                         continue
-                    # Ð¡Ñ‚Ñ€Ð¾ÐºÐ° Ð½Ð°Ñ‡Ð¸Ð½Ð°ÐµÑ‚ÑÑ Ñ Ð¼ÑƒÑÐ¾Ñ€Ð° OCR (Ð·Ð°Ð³Ð»Ð°Ð²Ð½Ñ‹Ðµ A C I e Ð¸ Ñ‚.Ð´.)
+                    # Строка начинается с мусора OCR (заглавные A C I e и т.д.)
                     if re.match(r'^[A-Za-z]{2,5}\s+[A-Za-z]', prev) and len(prev) > 15:
                         continue
-                    # Ð’ ÑÑ‚Ñ€Ð¾ÐºÐµ Ð±Ð¾Ð»ÑŒÑˆÐµ 3 Ð»Ð°Ñ‚Ð¸Ð½ÑÐºÐ¸Ñ… Ð·Ð°Ð³Ð»Ð°Ð²Ð½Ñ‹Ñ… Ð¿Ð¾Ð´Ñ€ÑÐ´ â€” Ð¼ÑƒÑÐ¾Ñ€ OCR
+                    # В строке больше 3 латинских заглавных подряд — мусор OCR
                     if re.search(r'[A-Z]{3,}', prev):
                         continue
                 name_parts.insert(0, prev)
-                # Ð•ÑÐ»Ð¸ ÑÑ‚Ñ€Ð¾ÐºÐ° Ð´Ð¾ÑÑ‚Ð°Ñ‚Ð¾Ñ‡Ð½Ð¾ Ð´Ð»Ð¸Ð½Ð½Ð°Ñ â€” ÑÑ‚Ð¾ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ, Ð½Ðµ Ð¸Ñ‰ÐµÐ¼ Ð´Ð°Ð»ÑŒÑˆÐµ
-                if len(prev) > 15 and prev.count('Ð´ÐµÑ‚Ð°Ð»') + prev.count('Ð¸Ð³Ñ€ÑƒÑˆ') + prev.count('Ð½Ð°Ð±Ð¾Ñ€') + prev.count('ÑÐ¾Ð²Ð¼ÐµÑÑ‚Ð¸Ð¼') > 0:
-                    # Ð”Ð»Ñ Ozon: Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ Ð¼Ð¾Ð¶ÐµÑ‚ Ð±Ñ‹Ñ‚ÑŒ Ð½Ð° 2 ÑÑ‚Ñ€Ð¾ÐºÐ°Ñ…, Ð±ÐµÑ€Ñ‘Ð¼ Ð¾Ð±Ðµ
+                # Если строка достаточно длинная — это название, не ищем дальше
+                if len(prev) > 15 and prev.count('детал') + prev.count('игруш') + prev.count('набор') + prev.count('совместим') > 0:
+                    # Для Ozon: название может быть на 2 строках, берём обе
                     pass
                 elif len(prev) > 35 or prev.count(' ') > 3:
                     break
 
-            name = ' '.join(name_parts) if name_parts else f'tÐ¾Ð²Ð°Ñ€ {len(items) + 1}'
+            name = ' '.join(name_parts) if name_parts else f'tовар {len(items) + 1}'
             items.append({'name': name, 'price': price, 'qty': qty, 'total': total})
             continue
 
-        # Ð¡Ñ‚Ð°Ð½Ð´Ð°Ñ€Ñ‚Ð½Ñ‹Ð¹ Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚: "ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ Ñ‚Ð¾Ð²Ð°Ñ€Ð°" 123.45 â‚½
-        m = re.search(r'(.{3,60}?)\s+(\d+[.,]\d{2})\s*â‚½', line)
+        # Стандартный формат: "Название товара" 123.45 ₽
+        m = re.search(r'(.{3,60}?)\s+(\d+[.,]\d{2})\s*₽', line)
         if m:
             name, price_str = m.groups()
             price_val = float(price_str.replace(',', '.'))
@@ -545,17 +552,17 @@ def _fetch_html(url: str) -> str:
 def _clean_image_url(url: str) -> str:
     url = html.unescape(url or '')
     url = url.replace('\\/', '/')
-    # Ð§Ð°ÑÑ‚Ð¾ regex Ð·Ð°Ñ…Ð²Ð°Ñ‚Ñ‹Ð²Ð°ÐµÑ‚ Ñ…Ð²Ð¾ÑÑ‚Ñ‹ JSON/HTML Ð¿Ð¾ÑÐ»Ðµ &quot;
+    # Часто regex захватывает хвосты JSON/HTML после &quot;
     url = url.split('&quot;')[0].split('"')[0].split("'")[0].strip()
     return url
 
 
 def find_product_image_urls(query: str) -> dict:
-    """Best-effort: Ð¿Ð¾ 1-3 ÐºÐ°Ñ€Ñ‚Ð¸Ð½ÐºÐ°Ð¼ Ð¸Ð· Bing, Yandex, Pinterest."""
+    """Best-effort: по 1-3 картинкам из Bing, Yandex, Pinterest."""
     result = {}
     q = quote_plus(query)
 
-    # --- Bing: ÑÐ¾Ð±Ð¸Ñ€Ð°ÐµÐ¼ Ð½ÐµÑÐºÐ¾Ð»ÑŒÐºÐ¾ murl, Ð±ÐµÑ€Ñ‘Ð¼ Ð¿ÐµÑ€Ð²Ñ‹Ðµ 2 Ð½ÐµÐ¿Ð¾Ñ…Ð¾Ð¶Ð¸Ðµ ---
+    # --- Bing: собираем несколько murl, берём первые 2 непохожие ---
     try:
         data = _fetch_html(f'https://www.bing.com/images/search?q={q}')
         murls = re.findall(r'&quot;murl&quot;:&quot;(.*?)&quot;', data) or re.findall(r'"murl"\s*:\s*"(.*?)"', data)
@@ -574,10 +581,10 @@ def find_product_image_urls(query: str) -> dict:
     except Exception as e:
         log.warning(f"Bing image search failed: {e}")
 
-    # --- Yandex: img_href (Ð¾Ñ€Ð¸Ð³Ð¸Ð½Ð°Ð») Ð¸Ð»Ð¸ avatars thumbnail ---
+    # --- Yandex: img_href (оригинал) или avatars thumbnail ---
     try:
         data = _fetch_html(f'https://yandex.ru/images/search?text={q}')
-        # Ð¡Ð½Ð°Ñ‡Ð°Ð»Ð° Ð¸Ñ‰ÐµÐ¼ Ð¾Ñ€Ð¸Ð³Ð¸Ð½Ð°Ð»Ñ‹
+        # Сначала ищем оригиналы
         img_hrefs = re.findall(r'"img_href":"(https?:\\/\\/[^"\\]+(?:\\.[^"\\]+)*)"', data)
         if img_hrefs:
             result['Yandex'] = _clean_image_url(img_hrefs[0])
@@ -588,10 +595,10 @@ def find_product_image_urls(query: str) -> dict:
     except Exception as e:
         log.warning(f"Yandex image search failed: {e}")
 
-    # --- Pinterest: Ñ‡Ð°ÑÑ‚Ð¾ ÐµÑÑ‚ÑŒ Ð¿Ñ€ÑÐ¼Ñ‹Ðµ URL Ð² og:image ---
+    # --- Pinterest: часто есть прямые URL в og:image ---
     try:
         data = _fetch_html(f'https://www.pinterest.com/search/pins/?q={q}')
-        # Pinterest Ð¾Ñ‚Ð´Ð°Ñ‘Ñ‚ JSON Ð² <script> Ñ pin-images
+        # Pinterest отдаёт JSON в <script> с pin-images
         pin_imgs = re.findall(r'https://i\.pinimg\.com/originals/[a-z0-9/]+\.(?:jpg|png|webp)', data)
         if pin_imgs:
             seen = set()
@@ -604,7 +611,7 @@ def find_product_image_urls(query: str) -> dict:
     except Exception as e:
         log.warning(f"Pinterest search failed: {e}")
 
-    # Google Ð¾Ñ‚ÐºÐ°Ð·Ð°Ð»ÑÑ Ð¾Ñ‚ Ð¿Ñ€ÑÐ¼Ñ‹Ñ… URL. Ð’Ð¼ÐµÑÑ‚Ð¾ Ð½ÐµÐ³Ð¾ Ð¿Ð¸ÑˆÐµÐ¼ ÑÑÑ‹Ð»ÐºÑƒ Ð½Ð° Ð¿Ð¾Ð¸ÑÐº.
+    # Google отказался от прямых URL. Вместо него пишем ссылку на поиск.
     if not result:
         result['Google'] = f'https://www.google.com/search?tbm=isch&q={q}'
 
@@ -612,7 +619,7 @@ def find_product_image_urls(query: str) -> dict:
 
 
 def search_product_info_gemini(brand: str, article: str, barcode: str = None) -> dict:
-    """Ð˜Ñ‰ÐµÑ‚ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ðµ Ñ‡ÐµÑ€ÐµÐ· Gemini API Ð¿Ð¾ Ð´Ð°Ð½Ð½Ñ‹Ð¼ Ð±Ð¸Ñ€ÐºÐ¸."""
+    """Ищет информацию о товаре через Gemini API по данным бирки."""
     try:
         import google.generativeai as genai
         api_key = os.environ.get('GEMINI_API_KEY')
@@ -623,33 +630,33 @@ def search_product_info_gemini(brand: str, article: str, barcode: str = None) ->
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        query_parts = [f'Ð‘Ñ€ÐµÐ½Ð´: {brand}']
+        query_parts = [f'Бренд: {brand}']
         if article:
-            query_parts.append(f'ÐÑ€Ñ‚Ð¸ÐºÑƒÐ»: {article}')
+            query_parts.append(f'Артикул: {article}')
         if barcode:
-            query_parts.append(f'Ð¨Ñ‚Ñ€Ð¸Ñ…ÐºÐ¾Ð´: {barcode}')
+            query_parts.append(f'Штрихкод: {barcode}')
         
-        prompt = f"""ÐÐ°Ð¹Ð´Ð¸ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ðµ Ð¾Ð´ÐµÐ¶Ð´Ñ‹ Ð¿Ð¾ Ð´Ð°Ð½Ð½Ñ‹Ð¼ Ð±Ð¸Ñ€ÐºÐ¸:
+        prompt = f"""Найди информацию о товаре одежды по данным бирки:
 {'\n'.join(query_parts)}
 
-Ð’ÐµÑ€Ð½Ð¸ Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚ Ð² Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚Ðµ JSON:
+Верни результат в формате JSON:
 {{
-  "name": "Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ Ñ‚Ð¾Ð²Ð°Ñ€Ð°",
-  "category": "ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ (Ð¾Ð´ÐµÐ¶Ð´Ð°/Ð¾Ð±ÑƒÐ²ÑŒ/Ð°ÐºÑÐµÑÑÑƒÐ°Ñ€Ñ‹)",
-  "description": "Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸Ðµ",
-  "color": "Ñ†Ð²ÐµÑ‚",
-  "material": "Ð¼Ð°Ñ‚ÐµÑ€Ð¸Ð°Ð»",
-  "price_rub": "Ñ†ÐµÐ½Ð° Ð² Ñ€ÑƒÐ±Ð»ÑÑ… (Ñ‡Ð¸ÑÐ»Ð¾ Ð¸Ð»Ð¸ null)",
-  "image_url": "URL Ñ„Ð¾Ñ‚Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ð° Ð¸Ð»Ð¸ null",
-  "product_url": "URL ÑÑ‚Ñ€Ð°Ð½Ð¸Ñ†Ñ‹ Ñ‚Ð¾Ð²Ð°Ñ€Ð° Ð¸Ð»Ð¸ null"
+  "name": "название товара",
+  "category": "категория (одежда/обувь/аксессуары)",
+  "description": "описание",
+  "color": "цвет",
+  "material": "материал",
+  "price_rub": "цена в рублях (число или null)",
+  "image_url": "URL фото товара или null",
+  "product_url": "URL страницы товара или null"
 }}
 
-Ð•ÑÐ»Ð¸ Ð½Ðµ Ð½Ð°ÑˆÑ‘Ð» Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ, Ð²ÐµÑ€Ð½Ð¸ Ð¿ÑƒÑÑ‚Ñ‹Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ñ."""
+Если не нашёл информацию, верни пустые значения."""
         
         response = model.generate_content(prompt)
         text = response.text
         
-        # Ð˜Ð·Ð²Ð»ÐµÐºÐ°ÐµÐ¼ JSON Ð¸Ð· Ð¾Ñ‚Ð²ÐµÑ‚Ð°
+        # Извлекаем JSON из ответа
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
@@ -663,10 +670,10 @@ def search_product_info_gemini(brand: str, article: str, barcode: str = None) ->
 
 
 def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
-    """Ð˜Ð·Ð²Ð»ÐµÐºÐ°ÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ðµ Ñ Ð±Ð¸Ñ€ÐºÐ¸ Ð¾Ð´ÐµÐ¶Ð´Ñ‹."""
+    """Извлекает данные с бирки одежды."""
     text = ocr_text or ''
     if image_path:
-        # Ð”Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ OCR-Ð·Ð¾Ð½Ñ‹: Ð²ÑÑ Ð½Ð°ÐºÐ»ÐµÐ¹ÐºÐ°, Ð°Ñ€Ñ‚Ð¸ÐºÑƒÐ», Ñ†ÐµÐ½Ð°. ÐžÑÐ¾Ð±ÐµÐ½Ð½Ð¾ Ð¿Ð¾Ð¼Ð¾Ð³Ð°ÐµÑ‚ Massimo Dutti.
+        # Дополнительные OCR-зоны: вся наклейка, артикул, цена. Особенно помогает Massimo Dutti.
         extra_parts = [
             _ocr_crop(image_path, (0.04, 0.05, 0.92, 0.85), 'eng', '6'),
             _ocr_crop(image_path, (0.04, 0.18, 0.92, 0.40), 'eng', '11'),
@@ -695,7 +702,7 @@ def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
     else:
         image_size = None
 
-    # Ð¡Ð¿ÐµÑ†-ÐºÐµÐ¹Ñ: ÑÑ‚Ð¸Ð»Ð¸Ð·Ð¾Ð²Ð°Ð½Ð½Ñ‹Ð¹ Ð»Ð¾Ð³Ð¾Ñ‚Ð¸Ð¿ Massimo Dutti OCR Ñ‡Ð°ÑÑ‚Ð¾ Ñ‡Ð¸Ñ‚Ð°ÐµÑ‚ ÐºÐ°Ðº MOSSI/MAR... DUTT.
+    # Спец-кейс: стилизованный логотип Massimo Dutti OCR часто читает как MOSSI/MAR... DUTT.
     if re.search(r'(MASS|MOSSI|MOSS\w*|MAR\w*)\s*(IMO|I|WIO|WIO)?\s+DUTT\w*', upper_text):
         result['brand'] = 'MASSIMO DUTTI'
 
@@ -706,8 +713,8 @@ def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
             result['brand'] = brand
             break
 
-    # ÐÐµ ÑƒÐ³Ð°Ð´Ñ‹Ð²Ð°ÐµÐ¼ Ð±Ñ€ÐµÐ½Ð´ Ð¿Ð¾ Ð¿ÐµÑ€Ð²Ð¾Ð¼Ñƒ Ð»Ð°Ñ‚Ð¸Ð½ÑÐºÐ¾Ð¼Ñƒ ÑÐ»Ð¾Ð²Ñƒ: OCR Ñ‡Ð°ÑÑ‚Ð¾ Ð´Ð°Ñ‘Ñ‚ Ð¼ÑƒÑÐ¾Ñ€ Ð²Ñ€Ð¾Ð´Ðµ CNI/MU.
-    # Ð‘Ñ€ÐµÐ½Ð´ ÑÑ‚Ð°Ð²Ð¸Ð¼ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¸Ð· Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐµÐ½Ð½Ð¾Ð³Ð¾ ÑÐ»Ð¾Ð²Ð°Ñ€Ñ TAG_BRANDS.
+    # Не угадываем бренд по первому латинскому слову: OCR часто даёт мусор вроде CNI/MU.
+    # Бренд ставим только из проверенного словаря TAG_BRANDS.
 
     art = re.search(r'\b(\d{4,6})[ /-](\d{6,10})\b', upper_text)
     if art:
@@ -717,7 +724,7 @@ def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
         if art3:
             result['article'] = f"{art3.group(1)}/{art3.group(2)}/{art3.group(3)}"
     if not result['article']:
-        # fallback Ð½Ð° 8-14 Ñ†Ð¸Ñ„Ñ€, Ð½Ð¾ Ð½Ðµ ÐµÑÐ»Ð¸ ÑÑ‚Ð¾ Ñ†ÐµÐ½Ð°
+        # fallback на 8-14 цифр, но не если это цена
         candidates = re.findall(r'\b\d{8,14}\b', upper_text)
         if candidates:
             result['article'] = result['barcode'] or candidates[0]
@@ -733,7 +740,7 @@ def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
 
     if not result['size']:
         size_patterns = [
-            r'(?:SIZE|TAGLIA|Ð ÐÐ—ÐœÐ•Ð )[:\s]*(XXXL|XXL|XL|XS|S|M|L|3[8-9]|4[0-9]|5[0-4])\b',
+            r'(?:SIZE|TAGLIA|РАЗМЕР)[:\s]*(XXXL|XXL|XL|XS|S|M|L|3[8-9]|4[0-9]|5[0-4])\b',
             r'\b(3[8-9]|4[0-9]|5[0-4])\b',
             r'\b(XXXL|XXL|XL|XS|S|M|L)\b'
         ]
@@ -754,8 +761,8 @@ def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
             break
 
     price_patterns = [
-        r'([â‚¬$Â£])\s*(\d+[.,]\d{2})',
-        r'(\d+[.,]\d{2})\s*(EUR|USD|GBP|HKD|â‚¬|\$|Â£)\b',
+        r'([€$£])\s*(\d+[.,]\d{2})',
+        r'(\d+[.,]\d{2})\s*(EUR|USD|GBP|HKD|€|\$|£)\b',
         r'\b(\d{2,5}[.,]\d{2})\b'
     ]
     price_candidates = []
@@ -773,22 +780,22 @@ def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
             currency = result['currency']
             if curr:
                 curr = curr.upper()
-                if curr in {'â‚¬', 'EUR'}:
+                if curr in {'€', 'EUR'}:
                     currency = 'EUR'
                 elif curr in {'$', 'USD'}:
                     currency = 'USD'
-                elif curr in {'Â£', 'GBP'}:
+                elif curr in {'£', 'GBP'}:
                     currency = 'GBP'
                 elif curr == 'HKD':
                     currency = 'HKD'
             elif 'GBP' in upper_text:
                 currency = 'GBP'
-            elif 'â‚¬' in upper_text or ' EUR' in upper_text:
+            elif '€' in upper_text or ' EUR' in upper_text:
                 currency = 'EUR'
             price_candidates.append((amount, currency))
 
     if price_candidates:
-        # ÐÐ° Ð¿Ð»Ð¾Ñ…Ð¾Ð¼ OCR Ð¿ÐµÑ€Ð²Ð°Ñ Ñ†Ð¸Ñ„Ñ€Ð° Ñ‡Ð°ÑÑ‚Ð¾ Ñ‚ÐµÑ€ÑÐµÑ‚ÑÑ (64.90 -> 4.90), Ð¿Ð¾ÑÑ‚Ð¾Ð¼Ñƒ Ð±ÐµÑ€Ñ‘Ð¼ Ð¼Ð°ÐºÑÐ¸Ð¼Ð°Ð»ÑŒÐ½ÑƒÑŽ Ñ€Ð°Ð·ÑƒÐ¼Ð½ÑƒÑŽ Ñ†ÐµÐ½Ñƒ.
+        # На плохом OCR первая цифра часто теряется (64.90 -> 4.90), поэтому берём максимальную разумную цену.
         amount, currency = max(price_candidates, key=lambda x: x[0])
         result['price'] = amount
         result['currency'] = currency
@@ -811,7 +818,7 @@ logging.getLogger('telegram').setLevel(logging.INFO)
 def generate_alerts() -> int:
     """Generate daily alerts: warranty + expiry + low_stock + replace."""
     total = 0
-    # 1. Ð“Ð°Ñ€Ð°Ð½Ñ‚Ð¸Ð¸ Ð¸ ÑÑ€Ð¾ÐºÐ¸ Ð³Ð¾Ð´Ð½Ð¾ÑÑ‚Ð¸ (warranty_check)
+    # 1. Гарантии и сроки годности (warranty_check)
     try:
         from warranty_check import run_daily_alert_checks
         conn = get_db()
@@ -820,7 +827,7 @@ def generate_alerts() -> int:
     except Exception as e:
         log.warning(f"generate_alerts (warranty) failed: {e}")
 
-    # 2. ÐÐ°Ð¿Ð¾Ð¼Ð¸Ð½Ð°Ð½Ð¸Ñ Ð¾ Ð·Ð°Ð¼ÐµÐ½Ðµ Ð²ÐµÑ‰ÐµÐ¹
+    # 2. Напоминания о замене вещей
     try:
         total += generate_replace_alerts()
     except Exception as e:
@@ -834,9 +841,9 @@ def generate_alerts() -> int:
 def generate_replace_alerts() -> int:
     """Generate replacement reminders for items with replace_after_months.
 
-    ÐÐ»ÐµÑ€Ñ‚ ÑÐ¾Ð·Ð´Ð°Ñ‘Ñ‚ÑÑ Ð·Ð° 30 Ð´Ð½ÐµÐ¹ Ð´Ð¾ Ð´Ð°Ñ‚Ñ‹ Ð·Ð°Ð¼ÐµÐ½Ñ‹.
-    ÐŸÐ¾Ð²Ñ‚Ð¾Ñ€Ð½Ð¾ Ð½Ðµ ÑÐ¾Ð·Ð´Ð°Ñ‘Ñ‚ÑÑ, ÐµÑÐ»Ð¸ ÑƒÐ¶Ðµ ÐµÑÑ‚ÑŒ pending/sent Ð°Ð»ÐµÑ€Ñ‚ Ð·Ð° ÑÑ‚Ð¾Ñ‚ item
-    Ð·Ð° Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ 7 Ð´Ð½ÐµÐ¹.
+    Алерт создаётся за 30 дней до даты замены.
+    Повторно не создаётся, если уже есть pending/sent алерт за этот item
+    за последние 7 дней.
     """
     from calendar import monthrange
 
@@ -868,11 +875,11 @@ def generate_replace_alerts() -> int:
             replace_date = add_months_safe(pd, row['replace_after_months'])
             days_left = (replace_date - today).days
 
-            # ÐÐ»ÐµÑ€Ñ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐµÑÐ»Ð¸ Ð·Ð°Ð¼ÐµÐ½Ð° Ñ‡ÐµÑ€ÐµÐ· â‰¤30 Ð´Ð½ÐµÐ¹ Ð¸Ð»Ð¸ ÑƒÐ¶Ðµ Ð¿Ñ€Ð¾ÑÑ€Ð¾Ñ‡ÐµÐ½Ð°
+            # Алерт только если замена через ≤30 дней или уже просрочена
             if days_left > 30:
                 continue
 
-            # ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼, Ð½ÐµÑ‚ Ð»Ð¸ Ð½ÐµÐ´Ð°Ð²Ð½ÐµÐ³Ð¾ Ð°Ð»ÐµÑ€Ñ‚Ð° (pending/sent Ð·Ð° 7 Ð´Ð½ÐµÐ¹)
+            # Проверяем, нет ли недавнего алерта (pending/sent за 7 дней)
             recent = conn.execute('''
                 SELECT 1 FROM alerts
                 WHERE item_id = ? AND alert_type = 'replace_reminder'
@@ -884,13 +891,13 @@ def generate_replace_alerts() -> int:
                 continue
 
             if days_left <= 0:
-                title = f'ðŸ”´ ÐŸÐ¾Ñ€Ð° Ð¼ÐµÐ½ÑÑ‚ÑŒ: {name}'
-                msg = f'Ð¡Ñ€Ð¾Ðº Ð·Ð°Ð¼ÐµÐ½Ñ‹ Ð¸ÑÑ‚Ñ‘Ðº {-days_left} Ð´Ð½. Ð½Ð°Ð·Ð°Ð´ ({replace_date})'
+                title = f'🔴 Пора менять: {name}'
+                msg = f'Срок замены истёк {-days_left} дн. назад ({replace_date})'
             else:
-                title = f'ðŸ”„ Ð¡ÐºÐ¾Ñ€Ð¾ Ð·Ð°Ð¼ÐµÐ½Ð°: {name}'
-                msg = f'ÐžÑÑ‚Ð°Ð»Ð¾ÑÑŒ {days_left} Ð´Ð½. Ð´Ð¾ Ð·Ð°Ð¼ÐµÐ½Ñ‹ ({replace_date})'
+                title = f'🔄 Скоро замена: {name}'
+                msg = f'Осталось {days_left} дн. до замены ({replace_date})'
             if brand:
-                msg += f'\nÐ‘Ñ€ÐµÐ½Ð´: {brand}'
+                msg += f'\nБренд: {brand}'
 
             conn.execute('''
                 INSERT INTO alerts (item_id, alert_type, title, message, scheduled_at, status)
@@ -931,11 +938,11 @@ async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
         for row in rows:
             text = row['message'] or f"{row['title']} ({row['alert_type']})"
 
-            # Ð”Ð»Ñ replace_reminder Ð´Ð¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ ÐºÐ½Ð¾Ð¿ÐºÑƒ "âœ… Ð—Ð°Ð¼ÐµÐ½ÐµÐ½Ð¾"
+            # Для replace_reminder добавляем кнопку "✅ Заменено"
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             if row['alert_type'] == 'replace_reminder':
                 kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton('âœ… Ð—Ð°Ð¼ÐµÐ½ÐµÐ½Ð¾', callback_data=f'item_replaced:{row["id"]}')
+                    InlineKeyboardButton('✅ Заменено', callback_data=f'item_replaced:{row["id"]}')
                 ]])
                 await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text, reply_markup=kb)
             else:
@@ -966,60 +973,60 @@ def get_db(max_retries=3, delay=1):
             return conn
         except sqlite3.OperationalError as e:
             if "locked" in str(e) and i < max_retries - 1:
-                time.sleep(delay * (2 ** i))  # Ð­ÐºÑÐ¿Ð¾Ð½ÐµÐ½Ñ†Ð¸Ð°Ð»ÑŒÐ½Ð°Ñ Ð·Ð°Ð´ÐµÑ€Ð¶ÐºÐ°
+                time.sleep(delay * (2 ** i))  # Экспоненциальная задержка
                 continue
             raise
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        'ðŸ›’ ÐŸÑ€Ð¸Ð²ÐµÑ‚, ÑÑ‚Ð¾ Consumption Agent.\n'
-        'Ð”Ð»Ñ ÑÐ¿Ð¸ÑÐºÐ° ÐºÐ¾Ð¼Ð°Ð½Ð´: /help'
+        '🛒 Привет, это Consumption Agent.\n'
+        'Для списка команд: /help'
     )
 
 async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        'ðŸ“¸ ÐžÑ‚Ð¿Ñ€Ð°Ð²ÑŒÑ‚Ðµ Ñ„Ð¾Ñ‚Ð¾ Ñ‡ÐµÐºÐ° (Ð¾Ð´Ð½Ð¾ Ñ„Ð¾Ñ‚Ð¾ Ð·Ð° Ñ€Ð°Ð·).\n'
-        'Ð¯ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°ÑŽ Ñ‚ÐµÐºÑÑ‚ Ð¸ Ð´Ð¾Ð±Ð°Ð²Ð»ÑŽ Ñ‚Ð¾Ð²Ð°Ñ€Ñ‹ Ð² Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ.'
+        '📸 Отправьте фото чека (одно фото за раз).\n'
+        'Я распознаю текст и добавлю товары в инвентарь.'
     )
 
 
 async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº Ñ‚ÐµÐºÑÑ‚Ð¾Ð²Ñ‹Ñ… ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ð¹ â€” Ð´Ð»Ñ Ð´Ð¾Ð¿. Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸Ð¸ Ð¿Ð¾ÑÐ»Ðµ vision_confirm."""
+    """Обработчик текстовых сообщений — для доп. информации после vision_confirm."""
     text = (update.message.text or '').strip()
     
-    # ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼, Ð¶Ð´Ñ‘Ð¼ Ð»Ð¸ Ð´Ð¾Ð¿. Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ðµ
+    # Проверяем, ждём ли доп. информацию о товаре
     item_id = ctx.user_data.pop('vision_awaiting_notes', None)
     if item_id:
-        # Ð•ÑÐ»Ð¸ Ñ‚ÐµÐºÑÑ‚ Ð¿ÑƒÑÑ‚Ð¾Ð¹ â€” Ð½Ðµ ÑÐ¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð½Ð¸Ñ‡ÐµÐ³Ð¾
+        # Если текст пустой — не сохраняем ничего
         if not text:
-            await update.message.reply_text('â„¹ï¸ Ð”Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð°Ñ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸Ñ Ð½Ðµ Ð´Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð°')
+            await update.message.reply_text('ℹ️ Дополнительная информация не добавлена')
             return
         
-        # ÐžÐ³Ñ€Ð°Ð½Ð¸Ñ‡Ð¸Ð²Ð°ÐµÐ¼ 50 ÑÐ¸Ð¼Ð²Ð¾Ð»Ð°Ð¼Ð¸
+        # Ограничиваем 50 символами
         notes_text = text[:50]
         conn = get_db()
         try:
-            # Ð”Ð¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ðº ÑÑƒÑ‰ÐµÑÑ‚Ð²ÑƒÑŽÑ‰Ð¸Ð¼ notes
+            # Добавляем к существующим notes
             row = conn.execute('SELECT notes FROM items WHERE id = ?', (item_id,)).fetchone()
             if row:
                 existing_notes = row[0] or ''
-                new_notes = existing_notes + '\nÐ”Ð¾Ð¿. Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸Ñ: ' + notes_text if existing_notes else 'Ð”Ð¾Ð¿. Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸Ñ: ' + notes_text
+                new_notes = existing_notes + '\nДоп. информация: ' + notes_text if existing_notes else 'Доп. информация: ' + notes_text
                 conn.execute('UPDATE items SET notes = ? WHERE id = ?', (new_notes, item_id))
                 conn.commit()
-                await update.message.reply_text(f'âœ… Ð”Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð°Ñ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸Ñ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð°: {notes_text}')
+                await update.message.reply_text(f'✅ Дополнительная информация сохранена: {notes_text}')
                 return
         except Exception as e:
             log.warning(f'text_handler: failed to save notes: {e}')
         finally:
             conn.close()
     
-    # Ð•ÑÐ»Ð¸ Ð½Ðµ Ð¶Ð´Ñ‘Ð¼ Ð´Ð¾Ð¿. Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ â€” Ð¸Ð³Ð½Ð¾Ñ€Ð¸Ñ€ÑƒÐµÐ¼ (Ð¸Ð»Ð¸ Ð¼Ð¾Ð¶Ð½Ð¾ Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ð´Ñ€ÑƒÐ³ÑƒÑŽ Ð»Ð¾Ð³Ð¸ÐºÑƒ)
-    # ÐŸÐ¾ÐºÐ° Ð¿Ñ€Ð¾ÑÑ‚Ð¾ Ð½Ðµ Ð¾Ñ‚Ð²ÐµÑ‡Ð°ÐµÐ¼ Ð½Ð° Ð¾Ð±Ñ‹Ñ‡Ð½Ñ‹Ðµ Ñ‚ÐµÐºÑÑ‚Ð¾Ð²Ñ‹Ðµ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ñ
+    # Если не ждём доп. информацию — игнорируем (или можно добавить другую логику)
+    # Пока просто не отвечаем на обычные текстовые сообщения
 
 
 async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text('âŒ Ð­Ñ‚Ð¾ Ð½Ðµ Ñ„Ð¾Ñ‚Ð¾. ÐŸÐ¾Ð¶Ð°Ð»ÑƒÐ¹ÑÑ‚Ð°, Ð¾Ñ‚Ð¿Ñ€Ð°Ð²ÑŒÑ‚Ðµ Ð¸Ð·Ð¾Ð±Ñ€Ð°Ð¶ÐµÐ½Ð¸Ðµ.')
+        await update.message.reply_text('❌ Это не фото. Пожалуйста, отправьте изображение.')
         return
 
     # Get the highest resolution photo
@@ -1027,16 +1034,16 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     caption = update.message.caption or ''
     log.info(f'photo_handler: message_id={update.message.message_id}, caption={caption!r}')
 
-    # === Ð ÐµÐ´Ð¸Ñ€ÐµÐºÑ‚: /add_item + Ñ„Ð¾Ñ‚Ð¾ ===
-    # Ð•ÑÐ»Ð¸ caption Ð½Ð°Ñ‡Ð¸Ð½Ð°ÐµÑ‚ÑÑ Ñ /add_item â€” Ð¿ÐµÑ€ÐµÐ½Ð°Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ Ð² cmd_add_item
+    # === Редирект: /add_item + фото ===
+    # Если caption начинается с /add_item — перенаправляем в cmd_add_item
     if caption.strip().startswith('/add_item'):
         log.info(f'photo_handler: redirecting to cmd_add_item, args={caption.strip().split()[1:]}')
         ctx.args = caption.strip().split()[1:]
         await cmd_add_item(update, ctx)
         return
 
-    # Ð•ÑÐ»Ð¸ caption Ð²Ñ‹Ð³Ð»ÑÐ´Ð¸Ñ‚ ÐºÐ°Ðº Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸Ðµ Ð²ÐµÑ‰Ð¸ (ÐµÑÑ‚ÑŒ Ð±Ñ€ÐµÐ½Ð´ Ð¸Ð»Ð¸ ÑÑ€Ð¾Ðº Ð·Ð°Ð¼ÐµÐ½Ñ‹)
-    # â€” Ñ‚Ð¾Ð¶Ðµ Ð¿ÐµÑ€ÐµÐ½Ð°Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ Ð² cmd_add_item
+    # Если caption выглядит как описание вещи (есть бренд или срок замены)
+    # — тоже перенаправляем в cmd_add_item
     if caption.strip():
         from brand_parser import parse_brand_and_name
         bp = parse_brand_and_name(caption)
@@ -1046,9 +1053,9 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await cmd_add_item(update, ctx)
             return
 
-    # Phase B: Memory Lane fast path â€” ÐµÑÐ»Ð¸ Ð² caption ÐµÑÑ‚ÑŒ Ñ‚Ñ€Ð¸Ð³Ð³ÐµÑ€-ÑÐ»Ð¾Ð²Ð° Ð¸Ð»Ð¸
-    # Ñ…ÑÑˆÑ‚ÐµÐ³Ð¸, ÑÐ¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð² memory_lane_items + media_assets Ð¸ Ð·Ð°Ð²ÐµÑ€ÑˆÐ°ÐµÐ¼,
-    # Ð½Ðµ Ð¿Ð¾Ð¿Ð°Ð´Ð°Ñ Ð² OCR/QR-Ð¿Ð°Ð¹Ð¿Ð»Ð°Ð¹Ð½ Ñ‡ÐµÐºÐ¾Ð².
+    # Phase B: Memory Lane fast path — если в caption есть триггер-слова или
+    # хэштеги, сохраняем в memory_lane_items + media_assets и завершаем,
+    # не попадая в OCR/QR-пайплайн чеков.
     try:
         import memory_lane as _ml
     except ImportError:
@@ -1066,16 +1073,16 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 asset_id = _ml.save_media(conn, buf, mime='image/jpeg')
                 parsed = _ml.parse_caption(caption, conn)
 
-                # ÐžÐ±Ð¾Ð³Ð°Ñ‰Ð°ÐµÐ¼ Ñ‡ÐµÑ€ÐµÐ· Vision API â€” Ñ‚ÐµÐ¼Ð°, Ñ‚ÐµÐ³Ð¸, Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸Ðµ
+                # Обогащаем через Vision API — тема, теги, описание
                 vision_info = {}
                 try:
                     from vision_item import enrich_memory_lane
                     vision_info = enrich_memory_lane(tmp_path, caption)
                     if vision_info and 'error' not in vision_info:
-                        # Ð¢ÐµÐ¼Ð° Ð¸Ð· Vision ÐµÑÐ»Ð¸ caption Ð½Ðµ Ð´Ð°Ð»Ð°
+                        # Тема из Vision если caption не дала
                         if not parsed.get('topic') and vision_info.get('topic'):
                             parsed['topic'] = vision_info['topic']
-                        # Ð”Ð¾Ð¿Ð¾Ð»Ð½ÑÐµÐ¼ style_tags
+                        # Дополняем style_tags
                         v_tags = vision_info.get('style_tags', [])
                         existing = set(parsed.get('style_tags', []))
                         for t in v_tags:
@@ -1090,27 +1097,27 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
             os.remove(tmp_path)
 
-            liked = ', '.join(parsed.get('liked', [])) or 'â€”'
-            tags = ', '.join(parsed.get('style_tags', [])) or 'â€”'
-            topic = parsed.get('topic') or 'â€”'
+            liked = ', '.join(parsed.get('liked', [])) or '—'
+            tags = ', '.join(parsed.get('style_tags', [])) or '—'
+            topic = parsed.get('topic') or '—'
             desc = vision_info.get('description', '')
-            # ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ: Ð¸Ð· caption (brand_parser) Ð¸Ð»Ð¸ Vision
+            # Название: из caption (brand_parser) или Vision
             name = parsed.get('item_name') or vision_info.get('name', '')
-            # Ð‘Ñ€ÐµÐ½Ð´: Ð¸Ð· caption (brand_parser) Ð¿Ñ€Ð¸Ð¾Ñ€Ð¸Ñ‚ÐµÑ‚Ð½ÐµÐµ Vision
+            # Бренд: из caption (brand_parser) приоритетнее Vision
             brand = parsed.get('brand') or vision_info.get('brand')
 
-            parts = [f'ðŸ§  Memory Lane #{item_id}']
+            parts = [f'🧠 Memory Lane #{item_id}']
             if name:
-                parts.append(f'ðŸ“Œ {name}')
+                parts.append(f'📌 {name}')
             if brand:
-                parts.append(f'ðŸ·ï¸ Ð‘Ñ€ÐµÐ½Ð´: {brand}')
-            parts.append(f'Ð ÐµÐ°ÐºÑ†Ð¸Ñ: {liked}')
-            parts.append(f'Ð¡Ñ‚Ð¸Ð»ÑŒ: {tags}')
-            parts.append(f'Ð¢ÐµÐ¼Ð°: {topic}')
+                parts.append(f'🏷️ Бренд: {brand}')
+            parts.append(f'Реакция: {liked}')
+            parts.append(f'Стиль: {tags}')
+            parts.append(f'Тема: {topic}')
             if desc:
-                parts.append(f'ðŸ“ {desc}')
+                parts.append(f'📝 {desc}')
             if vision_info.get('estimated_price_rub'):
-                parts.append(f'ðŸ’° ÐžÑ†ÐµÐ½ÐºÐ°: ~{vision_info["estimated_price_rub"]} â‚½')
+                parts.append(f'💰 Оценка: ~{vision_info["estimated_price_rub"]} ₽')
 
             await update.message.reply_text('\n'.join(parts))
             return
@@ -1123,8 +1130,8 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await file.download_to_drive(receipt_path)
     log.info(f'Saved receipt: {receipt_path}')
 
-    # === Ð‘Ñ‹ÑÑ‚Ñ€Ð°Ñ ÐºÐ»Ð°ÑÑÐ¸Ñ„Ð¸ÐºÐ°Ñ†Ð¸Ñ Ñ‚Ð¸Ð¿Ð° Ñ„Ð¾Ñ‚Ð¾ (Vision API, ~1-2 Ñ‚Ð¾ÐºÐµÐ½Ð°) ===
-    # ÐžÐ¿Ñ€ÐµÐ´ÐµÐ»ÑÐµÐ¼ Ñ‚Ð¸Ð¿ Ð”Ðž OCR/QR, Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ð½Ðµ Ñ‚Ñ€Ð°Ñ‚Ð¸Ñ‚ÑŒ Ð²Ñ€ÐµÐ¼Ñ Ð½Ð° Ñ‡ÐµÐºÐ¸ Ð´Ð»Ñ Ñ„Ð¾Ñ‚Ð¾ Ð¿Ñ€ÐµÐ´Ð¼ÐµÑ‚Ð¾Ð²
+    # === Быстрая классификация типа фото (Vision API, ~1-2 токена) ===
+    # Определяем тип ДО OCR/QR, чтобы не тратить время на чеки для фото предметов
     image_type = 'other'
     try:
         import asyncio
@@ -1141,13 +1148,13 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.warning(f"Vision classify failed (fast path): {e}")
 
-    # QR/OCR Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð´Ð»Ñ Ñ‡ÐµÐºÐ¾Ð² Ð¸ Ð±Ð¸Ñ€Ð¾Ðº â€” Ð´Ð»Ñ Ð¿Ñ€ÐµÐ´Ð¼ÐµÑ‚Ð¾Ð² Ð½Ðµ Ð½ÑƒÐ¶ÐµÐ½
+    # QR/OCR только для чеков и бирок — для предметов не нужен
     qr_data = None
     total_amount = None
     purchase_date = None
     text = ''
     if image_type in ('receipt', 'tag'):
-        # Decode QR code (Ozon format) â€” Ð² Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ð¾Ð¼ Ð¿Ð¾Ñ‚Ð¾ÐºÐµ
+        # Decode QR code (Ozon format) — в отдельном потоке
         log.info(f'photo_handler: decoding QR in thread for {receipt_path}')
         qr_data = await asyncio.to_thread(decode_qr, receipt_path)
         if qr_data:
@@ -1158,20 +1165,20 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if date_str and len(date_str) >= 8:
                 purchase_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
-        # Run OCR only for receipts/tags â€” Ð² Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ð¾Ð¼ Ð¿Ð¾Ñ‚Ð¾ÐºÐµ
+        # Run OCR only for receipts/tags — в отдельном потоке
         log.info(f'photo_handler: running OCR in thread for {receipt_path}')
         text = await asyncio.to_thread(ocr_image, receipt_path)
         # Save raw OCR for debugging
         with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
             f.write(text or 'NO_OCR_TEXT')
 
-    # Ð•ÑÐ»Ð¸ fast path Ð½Ðµ ÑÑ€Ð°Ð±Ð¾Ñ‚Ð°Ð» (image_type Ð²ÑÑ‘ ÐµÑ‰Ñ‘ 'other'), Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÐ¼ OCR-ÐºÐ»Ð°ÑÑÐ¸Ñ„Ð¸ÐºÐ°Ñ†Ð¸ÑŽ ÐºÐ°Ðº fallback
+    # Если fast path не сработал (image_type всё ещё 'other'), используем OCR-классификацию как fallback
     if image_type == 'other':
         image_type = classify_image_type(text or '')
 
     tag_probe = await asyncio.to_thread(parse_clothing_tag, text or '', receipt_path)
     
-    # ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼ ÑˆÑ‚Ñ€Ð¸Ñ…ÐºÐ¾Ð´ Ñ‡ÐµÑ€ÐµÐ· pyzbar (Ð±Ð¾Ð»ÐµÐµ Ð½Ð°Ð´Ñ‘Ð¶Ð½Ñ‹Ð¹ Ð¼ÐµÑ‚Ð¾Ð´)
+    # Проверяем штрихкод через pyzbar (более надёжный метод)
     pyzbar_barcode = None
     try:
         from pyzbar.pyzbar import decode
@@ -1184,35 +1191,35 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.debug(f'pyzbar failed: {e}')
     
-    # Ð¡Ñ‡Ð¸Ñ‚Ð°ÐµÐ¼ Ð±Ð¸Ñ€ÐºÐ¾Ð¹ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐµÑÐ»Ð¸:
-    # 1. Ð•ÑÑ‚ÑŒ brand + (article Ð¸Ð»Ð¸ barcode)
-    # 2. Ð˜Ð›Ð˜ ÐµÑÑ‚ÑŒ Ñ‡Ñ‘Ñ‚ÐºÐ¸Ð¹ ÑˆÑ‚Ñ€Ð¸Ñ…ÐºÐ¾Ð´ EAN-13 (Ñ‡ÐµÑ€ÐµÐ· OCR Ð¸Ð»Ð¸ pyzbar)
-    # 3. Ð˜ Ñ‚ÐµÐºÑÑ‚ ÑÐ¾Ð´ÐµÑ€Ð¶Ð¸Ñ‚ Ð¿Ñ€Ð¸Ð·Ð½Ð°ÐºÐ¸ Ð±Ð¸Ñ€ÐºÐ¸ (Ñ€Ð°Ð·Ð¼ÐµÑ€, ÑÐ¾ÑÑ‚Ð°Ð², ÑÑ‚Ñ€Ð°Ð½Ð°)
+    # Считаем биркой только если:
+    # 1. Есть brand + (article или barcode)
+    # 2. ИЛИ есть чёткий штрихкод EAN-13 (через OCR или pyzbar)
+    # 3. И текст содержит признаки бирки (размер, состав, страна)
     has_barcode = (tag_probe.get('barcode') and len(str(tag_probe.get('barcode'))) >= 8) or (pyzbar_barcode and len(pyzbar_barcode) >= 8)
     has_article = tag_probe.get('article') and len(str(tag_probe.get('article'))) >= 5
     has_brand = tag_probe.get('brand') and len(str(tag_probe.get('brand'))) >= 2
     
-    # ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼, ÐµÑÑ‚ÑŒ Ð»Ð¸ Ð² Ñ‚ÐµÐºÑÑ‚Ðµ Ð¿Ñ€Ð¸Ð·Ð½Ð°ÐºÐ¸ Ð±Ð¸Ñ€ÐºÐ¸
+    # Проверяем, есть ли в тексте признаки бирки
     raw_text = (tag_probe.get('raw') or '').upper()
-    tag_indicators = ['Ð¡ÐžÐ¡Ð¢ÐÐ’', 'Ð¡Ð¢Ð ÐÐÐ', 'Ð ÐÐ—ÐœÐ•Ð ', 'SIZE', 'MADE IN', 'ÐÐ Ð¢Ð˜ÐšÐ£Ð›', 'ARTICLE', 'CARE', 'WASH']
+    tag_indicators = ['СОСТАВ', 'СТРАНА', 'РАЗМЕР', 'SIZE', 'MADE IN', 'АРТИКУЛ', 'ARTICLE', 'CARE', 'WASH']
     has_tag_indicators = any(ind in raw_text for ind in tag_indicators)
     
     is_real_tag = (
         (has_brand and (has_article or has_barcode)) or
         (has_barcode and has_tag_indicators) or
-        (pyzbar_barcode and len(pyzbar_barcode) >= 10)  # EAN-13 ÑˆÑ‚Ñ€Ð¸Ñ…ÐºÐ¾Ð´ = Ñ‚Ð¾Ñ‡Ð½Ð¾ Ð±Ð¸Ñ€ÐºÐ°
+        (pyzbar_barcode and len(pyzbar_barcode) >= 10)  # EAN-13 штрихкод = точно бирка
     )
     
-    # Ð•ÑÐ»Ð¸ Vision API ÑÐºÐ°Ð·Ð°Ð» tech/other, Ð½Ð¾ ÐµÑÑ‚ÑŒ Ð¿Ñ€Ð¸Ð·Ð½Ð°ÐºÐ¸ Ð±Ð¸Ñ€ÐºÐ¸ â€” Ð¿ÐµÑ€ÐµÐ¾Ð¿Ñ€ÐµÐ´ÐµÐ»ÑÐµÐ¼
+    # Если Vision API сказал tech/other, но есть признаки бирки — переопределяем
     if image_type in ('unknown', 'other', 'tech') and is_real_tag and not total_amount:
         image_type = 'tag'
-        log.info(f"Ð¢Ð¸Ð¿ Ð¸Ð·Ð¾Ð±Ñ€Ð°Ð¶ÐµÐ½Ð¸Ñ: tag (brand={tag_probe.get('brand')}, article={tag_probe.get('article')}, barcode={pyzbar_barcode or tag_probe.get('barcode')})")
+        log.info(f"Тип изображения: tag (brand={tag_probe.get('brand')}, article={tag_probe.get('article')}, barcode={pyzbar_barcode or tag_probe.get('barcode')})")
     else:
-        log.info(f"Ð¢Ð¸Ð¿ Ð¸Ð·Ð¾Ð±Ñ€Ð°Ð¶ÐµÐ½Ð¸Ñ: {image_type} (is_real_tag={is_real_tag}, has_brand={has_brand}, has_article={has_article}, has_barcode={has_barcode}, pyzbar={pyzbar_barcode})")
+        log.info(f"Тип изображения: {image_type} (is_real_tag={is_real_tag}, has_brand={has_brand}, has_article={has_article}, has_barcode={has_barcode}, pyzbar={pyzbar_barcode})")
 
     items = []
 
-    # === Ð•ÑÐ»Ð¸ ÑÑ‚Ð¾ Ð¿Ñ€ÐµÐ´Ð¼ÐµÑ‚/Ð¾Ð´ÐµÐ¶Ð´Ð°/ÐµÐ´Ð°/Ð¸Ð½Ñ‚ÐµÑ€ÑŒÐµÑ€ (Ð½Ðµ Ñ‡ÐµÐº Ð¸ Ð½Ðµ Ð±Ð¸Ñ€ÐºÐ°) â€” Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ñ‘Ð¼ ÐºÐ°Ðº Ð²ÐµÑ‰ÑŒ ===
+    # === Если это предмет/одежда/еда/интерьер (не чек и не бирка) — распознаём как вещь ===
     if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other', 'unknown') and not qr_data:
         log.info(f'photo_handler: recognizing item, image_type={image_type}, path={receipt_path}')
         try:
@@ -1225,31 +1232,31 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             log.info(f'photo_handler: recognize_item took {elapsed:.1f}s')
             log.info(f'photo_handler: recognize_item result={item_info}')
             if item_info and item_info.get('error') == 'timeout':
-                # Ð¢Ð°Ð¹Ð¼Ð°ÑƒÑ‚ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð²Ð°Ð½Ð¸Ñ â€” ÑÐ¾Ð¾Ð±Ñ‰Ð°ÐµÐ¼ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŽ, Ð½Ðµ ÑÐ¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð² Ð‘Ð”
+                # Таймаут распознавания — сообщаем пользователю, не сохраняем в БД
                 await update.message.reply_text(
-                    'âŒ ÐžÐ±ÑŠÐµÐºÑ‚ Ð½Ðµ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½\n\n'
-                    'ÐŸÐ¾Ð¿Ñ€Ð¾Ð±ÑƒÐ¹Ñ‚Ðµ:\n'
-                    'â€¢ ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð¸Ñ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾ Ñ Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸ÐµÐ¼ (Ð½Ð°Ð¿Ñ€Ð¸Ð¼ÐµÑ€: "Ð¿Ð¸Ð´Ð¶Ð°Ðº Corneliani")\n'
-                    'â€¢ Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÑŒ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ /add_item <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ>'
+                    '❌ Объект не распознан\n\n'
+                    'Попробуйте:\n'
+                    '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                    '• Использовать команду /add_item <название>'
                 )
                 return
             if item_info and 'error' not in item_info and item_info.get('name'):
-                item_name = item_info.get('name', 'ÐŸÑ€ÐµÐ´Ð¼ÐµÑ‚')
+                item_name = item_info.get('name', 'Предмет')
                 item_brand = item_info.get('brand')
-                item_cat = item_info.get('category', 'Ð´Ñ€ÑƒÐ³Ð¾Ðµ')
+                item_cat = item_info.get('category', 'другое')
                 item_desc = item_info.get('description', '')
                 item_color = item_info.get('color')
                 item_price = item_info.get('estimated_price_rub')
                 style_tags = item_info.get('style_tags', [])
 
-                # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð² Ð‘Ð” ÑÑ€Ð°Ð·Ñƒ (Ð¿Ñ€Ð¸ Ð¾Ñ‚ÐºÐ»Ð¾Ð½ÐµÐ½Ð¸Ð¸ ÑƒÐ´Ð°Ð»Ð¸Ð¼)
+                # Сохраняем в БД сразу (при отклонении удалим)
                 conn = get_db()
                 cat_map = {
-                    'Ð¾Ð´ÐµÐ¶Ð´Ð°': 'cat_clo_everyday', 'Ð¾Ð±ÑƒÐ²ÑŒ': 'cat_clo_everyday',
-                    'Ñ‚ÐµÑ…Ð½Ð¸ÐºÐ°': 'cat_electronics', 'Ð¼ÐµÐ±ÐµÐ»ÑŒ': 'cat_furniture',
-                    'ÐµÐ´Ð°': 'cat_food', 'Ð¸Ð½Ñ‚ÐµÑ€ÑŒÐµÑ€': 'cat_furniture',
-                    'ÐºÐ¾ÑÐ¼ÐµÑ‚Ð¸ÐºÐ°': 'cat_cosmetics', 'Ð°ÐºÑÐµÑÑÑƒÐ°Ñ€Ñ‹': 'cat_accessories',
-                    'Ð±Ñ‹Ñ‚Ð¾Ð²Ð°Ñ Ñ‚ÐµÑ…Ð½Ð¸ÐºÐ°': 'cat_appliances',
+                    'одежда': 'cat_clo_everyday', 'обувь': 'cat_clo_everyday',
+                    'техника': 'cat_electronics', 'мебель': 'cat_furniture',
+                    'еда': 'cat_food', 'интерьер': 'cat_furniture',
+                    'косметика': 'cat_cosmetics', 'аксессуары': 'cat_accessories',
+                    'бытовая техника': 'cat_appliances',
                 }
                 slug = cat_map.get(item_cat.lower(), 'other')
                 cat_row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (slug,)).fetchone()
@@ -1257,15 +1264,15 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     cat_row = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
                 cat_id = cat_row[0] if cat_row else None
 
-                notes_parts = ['Ð”Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¾ Ñ‡ÐµÑ€ÐµÐ· Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð²Ð°Ð½Ð¸Ðµ Ñ„Ð¾Ñ‚Ð¾']
+                notes_parts = ['Добавлено через распознавание фото']
                 if item_color:
-                    notes_parts.append(f'Ð¦Ð²ÐµÑ‚: {item_color}')
+                    notes_parts.append(f'Цвет: {item_color}')
                 if item_info.get('material'):
-                    notes_parts.append(f'ÐœÐ°Ñ‚ÐµÑ€Ð¸Ð°Ð»: {item_info["material"]}')
+                    notes_parts.append(f'Материал: {item_info["material"]}')
                 if item_desc:
-                    notes_parts.append(f'ÐžÐ¿Ð¸ÑÐ°Ð½Ð¸Ðµ: {item_desc}')
+                    notes_parts.append(f'Описание: {item_desc}')
                 if item_price:
-                    notes_parts.append(f'ÐžÑ†ÐµÐ½Ð¾Ñ‡Ð½Ð°Ñ Ñ†ÐµÐ½Ð°: ~{item_price} â‚½')
+                    notes_parts.append(f'Оценочная цена: ~{item_price} ₽')
                 notes = '\n'.join(notes_parts)
 
                 attrs = json.dumps({
@@ -1284,7 +1291,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
                 new_item_id = cur.lastrowid
 
-                # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ Ð¸ ÑÐ²ÑÐ·Ñ‹Ð²Ð°ÐµÐ¼ Ñ item
+                # Сохраняем фото и связываем с item
                 asset_id = None
                 try:
                     with open(receipt_path, 'rb') as fh:
@@ -1303,25 +1310,25 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 conn.commit()
                 conn.close()
 
-                # ÐŸÐ¾ÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÐ¼ Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚ Ñ ÐºÐ½Ð¾Ð¿ÐºÐ°Ð¼Ð¸ ÐŸÐ¾Ð´Ñ‚Ð²ÐµÑ€Ð´Ð¸Ñ‚ÑŒ/ÐžÑ‚ÐºÐ»Ð¾Ð½Ð¸Ñ‚ÑŒ
+                # Показываем результат с кнопками Подтвердить/Отклонить
                 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                parts = ['ðŸ“· ÐŸÑ€ÐµÐ´Ð¼ÐµÑ‚ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½']
-                parts.append(f'ðŸ“Œ {item_name}')
+                parts = ['📷 Предмет распознан']
+                parts.append(f'📌 {item_name}')
                 if item_brand:
-                    parts.append(f'ðŸ·ï¸ Ð‘Ñ€ÐµÐ½Ð´: {item_brand}')
-                parts.append(f'ðŸ“‚ ÐšÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ: {item_cat}')
+                    parts.append(f'🏷️ Бренд: {item_brand}')
+                parts.append(f'📂 Категория: {item_cat}')
                 if item_color:
-                    parts.append(f'ðŸŽ¨ Ð¦Ð²ÐµÑ‚: {item_color}')
+                    parts.append(f'🎨 Цвет: {item_color}')
                 if item_desc:
-                    parts.append(f'ðŸ“ {item_desc}')
+                    parts.append(f'📝 {item_desc}')
                 if style_tags:
-                    parts.append(f'ðŸ·ï¸ Ð¢ÐµÐ³Ð¸: {", ".join(style_tags)}')
+                    parts.append(f'🏷️ Теги: {", ".join(style_tags)}')
                 if item_price:
-                    parts.append(f'ðŸ’° ÐžÑ†ÐµÐ½ÐºÐ°: ~{item_price} â‚½')
+                    parts.append(f'💰 Оценка: ~{item_price} ₽')
                 parts.append(f'\nID: {new_item_id}')
-                parts.append('Ð¡Ð¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚ÑŒ Ð² Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ?')
+                parts.append('Сохранить в инвентарь?')
 
-                # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð´Ð°Ð½Ð½Ñ‹Ðµ Ð´Ð»Ñ ÐºÐ¾Ð»Ð±ÑÐºÐ°
+                # Сохраняем данные для колбэка
                 ctx.user_data['vision_pending'] = {
                     'item_id': new_item_id,
                     'asset_id': asset_id,
@@ -1329,33 +1336,33 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 }
 
                 kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton('âœ… ÐŸÐ¾Ð´Ñ‚Ð²ÐµÑ€Ð´Ð¸Ñ‚ÑŒ', callback_data='vision_confirm'),
-                    InlineKeyboardButton('âŒ ÐžÑ‚ÐºÐ»Ð¾Ð½Ð¸Ñ‚ÑŒ', callback_data='vision_reject')
+                    InlineKeyboardButton('✅ Подтвердить', callback_data='vision_confirm'),
+                    InlineKeyboardButton('❌ Отклонить', callback_data='vision_reject')
                 ]])
                 await update.message.reply_text('\n'.join(parts), reply_markup=kb)
                 return
             else:
-                # Ð ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚ ÐµÑÑ‚ÑŒ, Ð½Ð¾ name Ð½Ðµ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½ â€” ÑÐ¾Ð¾Ð±Ñ‰Ð°ÐµÐ¼ Ð¸ Ð½Ðµ Ð¸Ð´Ñ‘Ð¼ Ð² Ñ‡ÐµÐº
+                # Результат есть, но name не распознан — сообщаем и не идём в чек
                 await update.message.reply_text(
-                    'âŒ ÐžÐ±ÑŠÐµÐºÑ‚ Ð½Ðµ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½\n\n'
-                    'ÐŸÐ¾Ð¿Ñ€Ð¾Ð±ÑƒÐ¹Ñ‚Ðµ:\n'
-                    'â€¢ ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð¸Ñ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾ Ñ Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸ÐµÐ¼ (Ð½Ð°Ð¿Ñ€Ð¸Ð¼ÐµÑ€: "Ð¿Ð¸Ð´Ð¶Ð°Ðº Corneliani")\n'
-                    'â€¢ Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÑŒ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ /add_item <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ>'
+                    '❌ Объект не распознан\n\n'
+                    'Попробуйте:\n'
+                    '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                    '• Использовать команду /add_item <название>'
                 )
                 return
 
         except Exception as e:
             log.warning(f'Vision item recognition failed: {e}')
             await update.message.reply_text(
-                'âŒ Ð¢Ð¾Ð²Ð°Ñ€ Ð½Ðµ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½ Ð¿Ð¾ Ñ„Ð¾Ñ‚Ð¾\n\n'
-                'ÐŸÐ¾Ð¿Ñ€Ð¾Ð±ÑƒÐ¹Ñ‚Ðµ:\n'
-                'â€¢ ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð¸Ñ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾ Ñ Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸ÐµÐ¼ (Ð½Ð°Ð¿Ñ€Ð¸Ð¼ÐµÑ€: "Ð¿Ð¸Ð´Ð¶Ð°Ðº Corneliani")\n'
-                'â€¢ Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÑŒ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ /add_item <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ>'
+                '❌ Товар не распознан по фото\n\n'
+                'Попробуйте:\n'
+                '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                '• Использовать команду /add_item <название>'
             )
             return
 
     if image_type == 'tag':
-        # === ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚ÐºÐ° Ð±Ð¸Ñ€ÐºÐ¸ ===
+        # === Обработка бирки ===
         log.info(f'photo_handler: processing tag, brand={tag_probe.get("brand")}, article={tag_probe.get("article")}')
         tag = tag_probe
         fx_date = purchase_date or date.today().isoformat()
@@ -1387,7 +1394,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         search_query = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('article'), tag.get('color')] if x) or (tag.get('barcode') or 'fashion tag')
         
-        # Ð˜Ñ‰ÐµÐ¼ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ Ñ‡ÐµÑ€ÐµÐ· Gemini
+        # Ищем информацию через Gemini
         gemini_info = await asyncio.to_thread(
             search_product_info_gemini,
             tag.get('brand', ''),
@@ -1398,58 +1405,58 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         google_images_url = f"https://www.google.com/search?tbm=isch&q={quote_plus(search_query)}"
         yandex_images_url = f"https://yandex.ru/images/search?text={quote_plus(search_query)}"
         bing_images_url = f"https://www.bing.com/images/search?q={quote_plus(search_query)}"
-        response_lines = ['ðŸ§¥ Ð‘Ð¸Ñ€ÐºÐ° Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½Ð°']
-        response_lines.append(f"Ð‘Ñ€ÐµÐ½Ð´: {tag['brand'] if tag.get('brand') else 'Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½'}")
+        response_lines = ['🧥 Бирка распознана']
+        response_lines.append(f"Бренд: {tag['brand'] if tag.get('brand') else 'не найден'}")
         if tag.get('model'):
-            response_lines.append(f"ÐœÐ¾Ð´ÐµÐ»ÑŒ: {tag['model']}")
+            response_lines.append(f"Модель: {tag['model']}")
         if tag.get('article'):
-            response_lines.append(f"ÐÑ€Ñ‚Ð¸ÐºÑƒÐ»: {tag['article']}")
+            response_lines.append(f"Артикул: {tag['article']}")
         if tag.get('barcode'):
-            response_lines.append(f"Ð¨Ñ‚Ñ€Ð¸Ñ…ÐºÐ¾Ð´: {tag['barcode']}")
+            response_lines.append(f"Штрихкод: {tag['barcode']}")
         if tag.get('size'):
-            response_lines.append(f"Ð Ð°Ð·Ð¼ÐµÑ€: {tag['size']}")
+            response_lines.append(f"Размер: {tag['size']}")
         if tag.get('color'):
-            response_lines.append(f"Ð¦Ð²ÐµÑ‚: {tag['color']}")
+            response_lines.append(f"Цвет: {tag['color']}")
         if tag.get('price'):
             if tag.get('currency') == 'RUB':
-                response_lines.append(f"Ð¦ÐµÐ½Ð°: {tag['price']} â‚½")
+                response_lines.append(f"Цена: {tag['price']} ₽")
             else:
-                response_lines.append(f"Ð¦ÐµÐ½Ð°: {tag['price']} {tag['currency']} (â‰ˆ {price_rub:.0f} â‚½)")
-        response_lines.append("ÐŸÑ€Ð¾Ð±ÑƒÑŽ Ð¿Ñ€Ð¸ÑÐ»Ð°Ñ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾.")
-        # Ð”Ð¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ Ð¾Ñ‚ Gemini
+                response_lines.append(f"Цена: {tag['price']} {tag['currency']} (≈ {price_rub:.0f} ₽)")
+        response_lines.append("Пробую прислать фото.")
+        # Добавляем информацию от Gemini
         if gemini_info:
-            response_lines.append('\nðŸ” ÐÐ°Ð¹Ð´ÐµÐ½Ð¾ Ñ‡ÐµÑ€ÐµÐ· Gemini:')
+            response_lines.append('\n🔍 Найдено через Gemini:')
             if gemini_info.get('name'):
-                response_lines.append(f"ðŸ“Œ ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ: {gemini_info['name']}")
+                response_lines.append(f"📌 Название: {gemini_info['name']}")
             if gemini_info.get('category'):
-                response_lines.append(f"ðŸ“‚ ÐšÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ: {gemini_info['category']}")
+                response_lines.append(f"📂 Категория: {gemini_info['category']}")
             if gemini_info.get('color'):
-                response_lines.append(f"ðŸŽ¨ Ð¦Ð²ÐµÑ‚: {gemini_info['color']}")
+                response_lines.append(f"🎨 Цвет: {gemini_info['color']}")
             if gemini_info.get('material'):
-                response_lines.append(f"ðŸ§µ ÐœÐ°Ñ‚ÐµÑ€Ð¸Ð°Ð»: {gemini_info['material']}")
+                response_lines.append(f"🧵 Материал: {gemini_info['material']}")
             if gemini_info.get('price_rub'):
-                response_lines.append(f"ðŸ’° Ð¦ÐµÐ½Ð°: ~{gemini_info['price_rub']} â‚½")
+                response_lines.append(f"💰 Цена: ~{gemini_info['price_rub']} ₽")
             if gemini_info.get('product_url'):
-                response_lines.append(f"ðŸ”— Ð¡ÑÑ‹Ð»ÐºÐ°: {gemini_info['product_url']}")
+                response_lines.append(f"🔗 Ссылка: {gemini_info['product_url']}")
         
-        response_lines.append(f"\nÐ¡ÑÑ‹Ð»ÐºÐ¸ Ð½Ð° Ñ„Ð¾Ñ‚Ð¾:\nGoogle: {google_images_url}\nYandex: {yandex_images_url}\nBing: {bing_images_url}")
+        response_lines.append(f"\nСсылки на фото:\nGoogle: {google_images_url}\nYandex: {yandex_images_url}\nBing: {bing_images_url}")
         if not tag.get('brand'):
-            response_lines.append("âš ï¸ Ð‘Ñ€ÐµÐ½Ð´ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½ Ð² OCR. ÐÑƒÐ¶Ð½Ð° Ñ‡Ð°ÑÑ‚ÑŒ Ð±Ð¸Ñ€ÐºÐ¸ Ñ Ð»Ð¾Ð³Ð¾Ñ‚Ð¸Ð¿Ð¾Ð¼/Ð½Ð°Ð·Ð²Ð°Ð½Ð¸ÐµÐ¼ Ð±Ñ€ÐµÐ½Ð´Ð° ÐºÑ€ÑƒÐ¿Ð½Ñ‹Ð¼ Ð¿Ð»Ð°Ð½Ð¾Ð¼.")
+            response_lines.append("⚠️ Бренд не найден в OCR. Нужна часть бирки с логотипом/названием бренда крупным планом.")
         if not tag.get('brand') and not tag.get('article'):
             response_lines.append(f"OCR: {(text or '')[:180].replace(chr(10), ' ')}")
         await update.message.reply_text('\n'.join(response_lines))
 
-        # ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ Ð¾Ñ‚ Gemini ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ
+        # Отправляем фото от Gemini если есть
         if gemini_info and gemini_info.get('image_url'):
             try:
                 await update.message.reply_photo(
                     photo=gemini_info['image_url'],
-                    caption=f"ðŸ” Gemini: {gemini_info.get('name', search_query)}"
+                    caption=f"🔍 Gemini: {gemini_info.get('name', search_query)}"
                 )
             except Exception as e:
                 log.warning(f"Failed to send Gemini image: {e}")
         
-        # ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ Ð¸Ð· Ð¿Ð¾Ð¸ÑÐºÐ°
+        # Отправляем фото из поиска
         image_urls = await asyncio.to_thread(find_product_image_urls, search_query)
         for engine_url in image_urls.values():
             if not engine_url or engine_url.startswith('https://www.google.com/search'):
@@ -1461,7 +1468,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 log.warning(f"Failed to send image {engine_url}: {e}")
         return
 
-    # === Ð•ÑÐ»Ð¸ ÐÐ• Ð±Ð¸Ñ€ÐºÐ° â€” Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÐ¼ Vision API (GPT-4o-mini) ===
+    # === Если НЕ бирка — используем Vision API (GPT-4o-mini) ===
     ocr_result = None
     vision_result = None
     try:
@@ -1480,7 +1487,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.warning(f"Vision API unavailable: {e}")
 
-    # Fallback: ÑÑ‚Ð°Ñ€Ñ‹Ð¹ OCR-Ð¿Ð°Ð¹Ð¿Ð»Ð°Ð¹Ð½ (ÐµÑÐ»Ð¸ Vision Ð½Ðµ ÑÑ€Ð°Ð±Ð¾Ñ‚Ð°Ð»)
+    # Fallback: старый OCR-пайплайн (если Vision не сработал)
     if not items:
         try:
             from scripts import receipt_ocr
@@ -1496,38 +1503,38 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             items = _parse_receipt_lines(text or '', total_amount)
 
     if not total_amount:
-        m = re.search(r'Ð˜Ð¢ÐžÐ“[Ðž]?[^\d]*([\d]+[.,]\d{2})', text or '')
+        m = re.search(r'ИТОГ[О]?[^\d]*([\d]+[.,]\d{2})', text or '')
         if m:
             total_amount = float(m.group(1).replace(',', '.'))
 
     conn = get_db()
     purchase_id = None
 
-    # Ð£Ð±ÐµÐ´Ð¸Ð¼ÑÑ, Ñ‡Ñ‚Ð¾ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ° is_delivery ÑÑƒÑ‰ÐµÑÑ‚Ð²ÑƒÐµÑ‚
+    # Убедимся, что колонка is_delivery существует
     try:
         conn.execute("ALTER TABLE items ADD COLUMN is_delivery INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
-        pass  # ÑƒÐ¶Ðµ ÑÑƒÑ‰ÐµÑÑ‚Ð²ÑƒÐµÑ‚
+        pass  # уже существует
 
-    # ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼, ÐµÑÑ‚ÑŒ Ð»Ð¸ Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ° Ð¾Ñ‚ Vision API Ð¸Ð»Ð¸ OCR
+    # Проверяем, есть ли доставка от Vision API или OCR
     delivery = 0
-    delivery_name = 'Ð”Ð¾ÑÑ‚Ð°Ð²ÐºÐ°'
+    delivery_name = 'Доставка'
     if vision_result and 'error' not in vision_result:
         vd = vision_result.get('delivery', {})
         delivery = vd.get('price', 0) or 0
-        delivery_name = vd.get('name', 'Ð”Ð¾ÑÑ‚Ð°Ð²ÐºÐ°')
+        delivery_name = vd.get('name', 'Доставка')
     elif ocr_result and hasattr(ocr_result, 'delivery_cost'):
         delivery = ocr_result.delivery_cost or 0
-        delivery_name = getattr(ocr_result, 'delivery_item_name', 'Ð”Ð¾ÑÑ‚Ð°Ð²ÐºÐ°')
+        delivery_name = getattr(ocr_result, 'delivery_item_name', 'Доставка')
 
-    # ÐžÑ‚Ð´ÐµÐ»ÑÐµÐ¼ Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÑƒ Ð¾Ñ‚ Ñ‚Ð¾Ð²Ð°Ñ€Ð¾Ð²: ÑƒÐ±Ð¸Ñ€Ð°ÐµÐ¼ Ð¸Ð· items, ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ
+    # Отделяем доставку от товаров: убираем из items, если есть
     real_items = []
     delivery_items = []
     if items:
         for item in items:
             name_lower = item['name'].lower()
-            # ÐšÐ»ÑŽÑ‡ÐµÐ²Ñ‹Ðµ ÑÐ»Ð¾Ð²Ð° Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ¸
-            dl_keywords = ['Ð´Ð¾ÑÑ‚Ð°Ð²Ðº', 'ÐºÑƒÑ€ÑŒÐµÑ€', 'shipping', 'delivery', 'Ð¿Ð¾Ñ‡Ñ‚', 'postage', 'Ñ‚Ñ€Ð°Ð½ÑÐ¿Ð¾Ñ€Ñ‚']
+            # Ключевые слова доставки
+            dl_keywords = ['доставк', 'курьер', 'shipping', 'delivery', 'почт', 'postage', 'транспорт']
             if any(kw in name_lower for kw in dl_keywords) or (delivery and abs(item.get('price', 0) - delivery) < 1):
                 delivery_items.append(item)
             else:
@@ -1548,9 +1555,9 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for item in items:
             category_id = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()[0]
             for keyword, cat_slug in {
-                'ÐºÐ¾Ñ€Ð¼': 'cat_pets_food', 'ÑÐ¾Ð±Ð°ÐºÐ°': 'cat_pets', 'ÐºÐ¾ÑˆÐºÐ°': 'cat_pets',
-                'Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ°': 'cat_services_log', 'ÑƒÑÐ»ÑƒÐ³Ð°': 'cat_services_log',
-                'ÐµÐ´Ð°': 'cat_food', 'Ð¿Ñ€Ð¾Ð´ÑƒÐºÑ‚Ñ‹': 'cat_food'
+                'корм': 'cat_pets_food', 'собака': 'cat_pets', 'кошка': 'cat_pets',
+                'доставка': 'cat_services_log', 'услуга': 'cat_services_log',
+                'еда': 'cat_food', 'продукты': 'cat_food'
             }.items():
                 if keyword in item['name'].lower():
                     cat_row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (cat_slug,)).fetchone()
@@ -1563,7 +1570,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 (item['name'], item['price'], purchase_date, category_id, purchase_id)
             )
 
-    # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÑƒ Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ð¾, ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ
+    # Сохраняем доставку отдельно, если есть
     if delivery:
         service_cat = conn.execute("SELECT id FROM categories WHERE slug='service' LIMIT 1").fetchone()
         service_cat_id = service_cat[0] if service_cat else None
@@ -1573,7 +1580,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             (delivery_name, delivery, purchase_date, service_cat_id, purchase_id)
         )
     elif delivery_items:
-        # Ð•ÑÐ»Ð¸ Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ° Ð±Ñ‹Ð»Ð° Ð² items, Ð½Ð¾ Ð½Ðµ Ð²Ñ‹Ð´ÐµÐ»Ð¸Ð»Ð°ÑÑŒ Ñ‡ÐµÑ€ÐµÐ· delivery_cost
+        # Если доставка была в items, но не выделилась через delivery_cost
         for dli in delivery_items:
             service_cat = conn.execute("SELECT id FROM categories WHERE slug='service' LIMIT 1").fetchone()
             service_cat_id = service_cat[0] if service_cat else None
@@ -1583,39 +1590,39 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 (dli['name'], dli['price'], purchase_date, service_cat_id, purchase_id)
             )
 
-    # Ð¤Ð¾Ñ€Ð¼Ð¸Ñ€ÑƒÐµÐ¼ ÑÑ‚Ñ€ÑƒÐºÑ‚ÑƒÑ€Ð¸Ñ€Ð¾Ð²Ð°Ð½Ð½Ñ‹Ð¹ Ð²Ñ‹Ð²Ð¾Ð´
-    response_parts = ['ðŸ§¾ Ð§ÐµÐº Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½']
+    # Формируем структурированный вывод
+    response_parts = ['🧾 Чек распознан']
 
-    # ÐœÐ°Ð³Ð°Ð·Ð¸Ð½ Ð¸Ð· Vision API
+    # Магазин из Vision API
     store_name = (vision_result or {}).get('store')
-    if store_name and store_name != 'ÐÐµÐ¸Ð·Ð²ÐµÑÑ‚Ð½Ñ‹Ð¹':
-        response_parts.append(f"ðŸª {store_name}")
+    if store_name and store_name != 'Неизвестный':
+        response_parts.append(f"🏪 {store_name}")
 
     if purchase_date:
-        response_parts.append(f"Ð”Ð°Ñ‚Ð°: {purchase_date}")
+        response_parts.append(f"Дата: {purchase_date}")
 
     if total_amount:
         total_amount_clean = f"{total_amount:.2f}".rstrip('0').rstrip('.')
-        response_parts.append(f"Ð¡ÑƒÐ¼Ð¼Ð°: {total_amount_clean} â‚½")
+        response_parts.append(f"Сумма: {total_amount_clean} ₽")
     else:
-        response_parts.append("Ð¡ÑƒÐ¼Ð¼Ð°: Ð½Ðµ Ð¾Ð¿Ñ€ÐµÐ´ÐµÐ»ÐµÐ½Ð°")
+        response_parts.append("Сумма: не определена")
 
     if items:
-        response_parts.append(f"ðŸ“¦ Ð¢Ð¾Ð²Ð°Ñ€Ñ‹ ({len(items)}):" )
+        response_parts.append(f"📦 Товары ({len(items)}):" )
         for item in items:
-            price_str = f"{item['price']:.2f} â‚½".rstrip('0').rstrip('.').rstrip('â‚½').strip() + ' â‚½'
-            qty_str = f" Ã— {item['qty']}" if item.get('qty', 1) > 1 else ''
-            response_parts.append(f"  â€¢ {item['name']} â€” {price_str}{qty_str}")
+            price_str = f"{item['price']:.2f} ₽".rstrip('0').rstrip('.').rstrip('₽').strip() + ' ₽'
+            qty_str = f" × {item['qty']}" if item.get('qty', 1) > 1 else ''
+            response_parts.append(f"  • {item['name']} — {price_str}{qty_str}")
 
-    # Ð”Ð¾ÑÑ‚Ð°Ð²ÐºÐ° Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ñ‹Ð¼ Ð±Ð»Ð¾ÐºÐ¾Ð¼
+    # Доставка отдельным блоком
     if delivery or delivery_items:
         dl_total = delivery or sum(dli.get('price', 0) for dli in delivery_items)
-        dl_clean = f"{dl_total:.2f} â‚½".rstrip('0').rstrip('.').rstrip('â‚½').strip() + ' â‚½'
-        response_parts.append(f"\nðŸšš Ð”Ð¾ÑÑ‚Ð°Ð²ÐºÐ°: {dl_clean}")
+        dl_clean = f"{dl_total:.2f} ₽".rstrip('0').rstrip('.').rstrip('₽').strip() + ' ₽'
+        response_parts.append(f"\n🚚 Доставка: {dl_clean}")
     
     if not items and not delivery:
-        response_parts.append("Ð¢Ð¾Ð²Ð°Ñ€Ñ‹: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ñ‹")
-        response_parts.append("Ð”Ð¾Ð±Ð°Ð²ÑŒÑ‚Ðµ Ð²Ñ€ÑƒÑ‡Ð½ÑƒÑŽ /add <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ> <Ñ†ÐµÐ½Ð°>")
+        response_parts.append("Товары: не найдены")
+        response_parts.append("Добавьте вручную /add <название> <цена>")
 
     response_text = '\n'.join(response_parts)
 
@@ -1627,39 +1634,39 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        log.info("cmd_list: ÐÐ°Ñ‡Ð°Ð»Ð¾ Ð²Ñ‹Ð¿Ð¾Ð»Ð½ÐµÐ½Ð¸Ñ")
+        log.info("cmd_list: Начало выполнения")
         conn = get_db()
-        log.info("cmd_list: Ð‘Ð” Ð¿Ð¾Ð´ÐºÐ»ÑŽÑ‡ÐµÐ½Ð°")
+        log.info("cmd_list: БД подключена")
         total = conn.execute("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL").fetchone()[0]
-        log.info(f"cmd_list: Ð’ÑÐµÐ³Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ð¾Ð² = {total}")
+        log.info(f"cmd_list: Всего товаров = {total}")
         rows = conn.execute("""
             SELECT c.name, COUNT(i.id) as cnt, COALESCE(SUM(i.purchase_price), 0) as total_p
             FROM items i JOIN categories c ON i.category_id = c.id
             WHERE i.deleted_at IS NULL
             GROUP BY c.name ORDER BY cnt DESC
         """).fetchall()
-        log.info(f"cmd_list: ÐŸÐ¾Ð»ÑƒÑ‡ÐµÐ½Ð¾ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¹ = {len(rows)}")
+        log.info(f"cmd_list: Получено категорий = {len(rows)}")
         conn.close()
-        lines = [f'ðŸ“¦ Ð˜Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ: {total} Ñ‚Ð¾Ð²Ð°Ñ€Ð¾Ð²\n']
+        lines = [f'📦 Инвентарь: {total} товаров\n']
         for r in rows:
-            lines.append(f'â€¢ {r["name"]}: {r["cnt"]} ÑˆÑ‚. ({r["total_p"]:.0f} â‚½)')
-        lines.append(f'\nÐ’ÑÐµÐ³Ð¾ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¹: {len(rows)}')
+            lines.append(f'• {r["name"]}: {r["cnt"]} шт. ({r["total_p"]:.0f} ₽)')
+        lines.append(f'\nВсего категорий: {len(rows)}')
         await update.message.reply_text('\n'.join(lines))
     except Exception as e:
-        log.error(f"ÐžÑˆÐ¸Ð±ÐºÐ° Ð² cmd_list: {e}")
-        await update.message.reply_text(f'âŒ ÐžÑˆÐ¸Ð±ÐºÐ°: {e}')
+        log.error(f"Ошибка в cmd_list: {e}")
+        await update.message.reply_text(f'❌ Ошибка: {e}')
 
 async def cmd_alerts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     rows = conn.execute("SELECT alert_type,title,message FROM alerts WHERE status='pending' ORDER BY created_at").fetchall()
     conn.close()
     if not rows:
-        await update.message.reply_text('âœ… ÐÐµÑ‚ Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ñ… Ð°Ð»ÐµÑ€Ñ‚Ð¾Ð²')
+        await update.message.reply_text('✅ Нет активных алертов')
         return
-    icons = {'warranty_expiring':'âš ï¸','warranty_expired':'âŒ','expiry_approaching':'â³','expired':'ðŸš«','low_stock':'ðŸ“‰','price_drop':'ðŸ’°'}
-    lines = ['ðŸ”” ÐÐºÑ‚Ð¸Ð²Ð½Ñ‹Ðµ Ð°Ð»ÐµÑ€Ñ‚Ñ‹:\n']
+    icons = {'warranty_expiring':'⚠️','warranty_expired':'❌','expiry_approaching':'⏳','expired':'🚫','low_stock':'📉','price_drop':'💰'}
+    lines = ['🔔 Активные алерты:\n']
     for r in rows:
-        icon = icons.get(r['alert_type'], 'ðŸ””')
+        icon = icons.get(r['alert_type'], '🔔')
         lines.append(f'{icon} {r["title"]}')
         if r['message']:
             lines.append(f'   {r["message"]}')
@@ -1677,7 +1684,7 @@ def _extract_drive_field(patterns: list[str], text: str | None) -> str | None:
 
 
 async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /last_drives â€” Ð¿Ð¾ÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÑ‚ Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ Ð¿Ð¾ÐµÐ·Ð´ÐºÐ¸ Ð²ÑÐµÑ… Ð¿Ñ€Ð¾Ð²Ð°Ð¹Ð´ÐµÑ€Ð¾Ð² ÐºÐ°Ñ€ÑˆÐµÑ€Ð¸Ð½Ð³Ð°."""
+    """Команда /last_drives — показывает последние поездки всех провайдеров каршеринга."""
     conn = get_db()
     limit = 10
     if ctx.args and ctx.args[0].isdigit():
@@ -1713,57 +1720,57 @@ async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not rows:
         await update.message.reply_text(
-            "ðŸš— ÐŸÐ¾ÐµÐ·Ð´ÐºÐ¸ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ñ‹.\n"
-            "ÐšÐ¾Ð¼Ð°Ð½Ð´Ð°: /last_drives [ÐºÐ¾Ð»Ð¸Ñ‡ÐµÑÑ‚Ð²Ð¾] [Ð¿Ñ€Ð¾Ð²Ð°Ð¹Ð´ÐµÑ€]\n"
-            "ÐŸÑ€Ð¾Ð²Ð°Ð¹Ð´ÐµÑ€Ñ‹: yandex_drive, citydrive, belka, delimobil"
+            "🚗 Поездки не найдены.\n"
+            "Команда: /last_drives [количество] [провайдер]\n"
+            "Провайдеры: yandex_drive, citydrive, belka, delimobil"
         )
         return
 
     provider_names = {
-        'yandex_drive': 'Ð¯Ð½Ð´ÐµÐºÑ Ð”Ñ€Ð°Ð¹Ð²',
-        'citydrive': 'Ð¡Ð¸Ñ‚Ð¸Ð´Ñ€Ð°Ð¹Ð²',
+        'yandex_drive': 'Яндекс Драйв',
+        'citydrive': 'Ситидрайв',
         'belka': 'BelkaCar',
     }
 
-    lines = [f"ðŸš— ÐŸÐ¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ Ð¿Ð¾ÐµÐ·Ð´ÐºÐ¸ ({len(rows)}):", ""]
+    lines = [f"🚗 Последние поездки ({len(rows)}):", ""]
     for idx, row in enumerate(rows, start=1):
         dt = (row["date_start"] or "")[:10]
         provider_name = provider_names.get(row['source'], row['source'])
-        car = row["car_model"] or "â€”"
-        km = f'{row["distance_km"]:.0f} ÐºÐ¼' if row["distance_km"] else "â€”"
-        total = f'{row["total"]:.0f} â‚½' if row["total"] else "â€”"
+        car = row["car_model"] or "—"
+        km = f'{row["distance_km"]:.0f} км' if row["distance_km"] else "—"
+        total = f'{row["total"]:.0f} ₽' if row["total"] else "—"
         plate = f'({row["car_plate"]})' if row["car_plate"] else ""
 
         lines.append(f"{idx}. {dt} | {provider_name}")
-        lines.append(f"   {car} {plate} â€¢ {km} â€¢ {total}")
+        lines.append(f"   {car} {plate} • {km} • {total}")
         lines.append("")
 
     await update.message.reply_text("\n".join(lines).rstrip())
 
 
 async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /find_car â€” Ñ€ÐµÐºÐ¾Ð¼ÐµÐ½Ð´Ð°Ñ†Ð¸Ð¸ Ð¿Ð¾ Ñ‚Ð°Ñ€Ð¸Ñ„Ð°Ð¼ ÐºÐ°Ñ€ÑˆÐµÑ€Ð¸Ð½Ð³Ð° Ñ ÑƒÑ‡Ñ‘Ñ‚Ð¾Ð¼ Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ð¸."""
+    """Команда /find_car — рекомендации по тарифам каршеринга с учётом истории."""
     args = " ".join(ctx.args) if ctx.args else ""
     hours, km = parse_drive_request(args)
 
     if hours is None or km is None:
         await update.message.reply_text(
-            "ðŸš— Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½Ð¸Ðµ:\n"
-            "/find_car 3Ñ‡ 80ÐºÐ¼\n"
-            "/find_car 2 Ñ‡Ð°ÑÐ° 60 ÐºÐ¼\n"
-            "/find_car ÑÑƒÑ‚ÐºÐ¸ 120ÐºÐ¼\n\n"
-            "Ð£ÐºÐ°Ð¶Ð¸ Ð²Ñ€ÐµÐ¼Ñ Ð¸ Ñ€Ð°ÑÑÑ‚Ð¾ÑÐ½Ð¸Ðµ."
+            "🚗 Использование:\n"
+            "/find_car 3ч 80км\n"
+            "/find_car 2 часа 60 км\n"
+            "/find_car сутки 120км\n\n"
+            "Укажи время и расстояние."
         )
         return
 
     conn = get_db()
     
-    # Ð—Ð°Ð³Ñ€ÑƒÐ¶Ð°ÐµÐ¼ Ñ‚Ð°Ñ€Ð¸Ñ„Ñ‹
+    # Загружаем тарифы
     tariffs = conn.execute(
         "SELECT * FROM carsharing_tariffs WHERE zone = 'msk' ORDER BY provider"
     ).fetchall()
     
-    # ÐÐ½Ð°Ð»Ð¸Ð·Ð¸Ñ€ÑƒÐµÐ¼ Ð¸ÑÑ‚Ð¾Ñ€Ð¸ÑŽ Ð¿Ð¾ÐµÐ·Ð´Ð¾Ðº
+    # Анализируем историю поездок
     history = conn.execute('''
         SELECT car_model, tariff, COUNT(*) as trips, 
                ROUND(AVG((julianday(date_end)-julianday(date_start))*24),1) as avg_hours,
@@ -1775,44 +1782,44 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ORDER BY trips DESC
     ''').fetchall()
     
-    # ÐŸÑ€ÐµÐ´Ð¿Ð¾Ñ‡Ñ‚ÐµÐ½Ð¸Ñ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»Ñ (Ð¸Ð· Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ð¸)
+    # Предпочтения пользователя (из истории)
     pref_models = [h['car_model'] for h in history if h['trips'] >= 3]
     pref_tariffs = list(dict.fromkeys([h['tariff'] for h in history if h['tariff']]))
     
     conn.close()
 
     if not tariffs:
-        await update.message.reply_text("Ð¢Ð°Ñ€Ð¸Ñ„Ñ‹ Ð½Ðµ Ð·Ð°Ð³Ñ€ÑƒÐ¶ÐµÐ½Ñ‹. Ð”Ð¾Ð±Ð°Ð²ÑŒ Ð¸Ñ… Ð² Ð‘Ð”.")
+        await update.message.reply_text("Тарифы не загружены. Добавь их в БД.")
         return
 
     provider_names = {
-        'yandex': 'Ð¯Ð½Ð´ÐµÐºÑ Ð”Ñ€Ð°Ð¹Ð²',
-        'citydrive': 'Ð¡Ð¸Ñ‚Ð¸Ð´Ñ€Ð°Ð¹Ð²',
+        'yandex': 'Яндекс Драйв',
+        'citydrive': 'Ситидрайв',
         'belka': 'BelkaCar',
-        'delimobil': 'Ð”ÐµÐ»Ð¸Ð¼Ð¾Ð±Ð¸Ð»ÑŒ',
+        'delimobil': 'Делимобиль',
     }
 
-    # Ð Ð°ÑÑ‡Ñ‘Ñ‚ ÑÑ‚Ð¾Ð¸Ð¼Ð¾ÑÑ‚Ð¸ Ð´Ð»Ñ Ð²ÑÐµÑ… Ñ‚Ð°Ñ€Ð¸Ñ„Ð¾Ð²
+    # Расчёт стоимости для всех тарифов
     results = []
     for t in tariffs:
         cost = calculate_drive_cost(t, hours, km)
         provider = t['provider']
         tariff_name = t['tariff_name'] or ''
         
-        # ÐžÐ¿Ñ€ÐµÐ´ÐµÐ»ÑÐµÐ¼ Ñ€ÐµÐºÐ¾Ð¼ÐµÐ½Ð´Ð°Ñ†Ð¸ÑŽ Ð½Ð° Ð¾ÑÐ½Ð¾Ð²Ðµ Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ð¸
+        # Определяем рекомендацию на основе истории
         is_preferred = False
         reason = ""
         
-        # ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÐ¼ Ð¿Ñ€ÐµÐ´Ð¿Ð¾Ñ‡Ñ‚Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ Ð¼Ð¾Ð´ÐµÐ»Ð¸/Ñ‚Ð°Ñ€Ð¸Ñ„Ñ‹
+        # Проверяем предпочтительные модели/тарифы
         if 'Bay 24' in tariff_name and 'Bay 24' in pref_tariffs:
             is_preferred = True
-            reason = "â­ Ð’Ð°Ñˆ Ð»ÑŽÐ±Ð¸Ð¼Ñ‹Ð¹ Ñ‚Ð°Ñ€Ð¸Ñ„ (14 Ð¿Ð¾ÐµÐ·Ð´Ð¾Ðº Ð½Ð° FAW Bestune T77)"
+            reason = "⭐ Ваш любимый тариф (14 поездок на FAW Bestune T77)"
         elif provider == 'yandex' and hours >= 3:
             is_preferred = True
-            reason = "â­ Ð’Ñ‹Ð³Ð¾Ð´Ð½Ð¾ Ð´Ð»Ñ Ð´Ð»Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ñ… Ð¿Ð¾ÐµÐ·Ð´Ð¾Ðº"
+            reason = "⭐ Выгодно для длительных поездок"
         elif t['rate_type'] == 'per_hour_km' and hours <= 2:
             is_preferred = True
-            reason = "â­ Ð’Ñ‹Ð³Ð¾Ð´Ð½Ð¾ Ð´Ð»Ñ ÐºÐ¾Ñ€Ð¾Ñ‚ÐºÐ¸Ñ… Ð¿Ð¾ÐµÐ·Ð´Ð¾Ðº"
+            reason = "⭐ Выгодно для коротких поездок"
         
         results.append({
             'provider': provider,
@@ -1820,39 +1827,39 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             'tariff': tariff_name,
             'cost': cost,
             'rate_type': t['rate_type'],
-            'insurance': 'âœ“' if t['insurance_included'] else 'âœ—',
+            'insurance': '✓' if t['insurance_included'] else '✗',
             'is_preferred': is_preferred,
             'reason': reason,
         })
     
-    # Ð¡Ð¾Ñ€Ñ‚Ð¸Ñ€ÑƒÐµÐ¼: Ð¿Ñ€ÐµÐ´Ð¿Ð¾Ñ‡Ñ‚Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ Ð¿ÐµÑ€Ð²Ñ‹Ð¼Ð¸, Ð·Ð°Ñ‚ÐµÐ¼ Ð¿Ð¾ Ñ†ÐµÐ½Ðµ
+    # Сортируем: предпочтительные первыми, затем по цене
     results.sort(key=lambda x: (not x['is_preferred'], x['cost']))
 
-    lines = [f"ðŸš— Ð ÐµÐºÐ¾Ð¼ÐµÐ½Ð´Ð°Ñ†Ð¸Ð¸ Ð½Ð° {hours}Ñ‡ / {km}ÐºÐ¼\n"]
-    lines.append(f"ðŸ“Š Ð˜ÑÑ‚Ð¾Ñ€Ð¸Ñ: {len(history)} Ð¼Ð¾Ð´ÐµÐ»ÐµÐ¹, {sum(h['trips'] for h in history)} Ð¿Ð¾ÐµÐ·Ð´Ð¾Ðº")
-    lines.append(f"ðŸ’¡ ÐŸÑ€ÐµÐ´Ð¿Ð¾Ñ‡Ñ‚ÐµÐ½Ð¸Ñ: {', '.join(pref_models[:3]) or 'Ð½ÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ…'}\n")
+    lines = [f"🚗 Рекомендации на {hours}ч / {km}км\n"]
+    lines.append(f"📊 История: {len(history)} моделей, {sum(h['trips'] for h in history)} поездок")
+    lines.append(f"💡 Предпочтения: {', '.join(pref_models[:3]) or 'нет данных'}\n")
     
     for r in results:
         tariff_info = f" ({r['tariff']})" if r['tariff'] else ""
-        rate_info = "Ñ„Ð¸ÐºÑ+ÐºÐ¼" if r['rate_type'] == 'flat_km' else "Ð¿Ð¾Ñ‡Ð°Ñ"
-        pref_mark = "â­ " if r['is_preferred'] else ""
-        lines.append(f"{pref_mark}â€¢ {r['name']}{tariff_info}: ~{r['cost']:.0f} â‚½ ({rate_info}) ÑÑ‚Ñ€Ð°Ñ…Ð¾Ð²ÐºÐ°{r['insurance']}")
+        rate_info = "фикс+км" if r['rate_type'] == 'flat_km' else "почас"
+        pref_mark = "⭐ " if r['is_preferred'] else ""
+        lines.append(f"{pref_mark}• {r['name']}{tariff_info}: ~{r['cost']:.0f} ₽ ({rate_info}) страховка{r['insurance']}")
         if r['reason']:
-            lines.append(f"   â”” {r['reason']}")
+            lines.append(f"   └ {r['reason']}")
 
-    # Ð”Ð¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ñ‚ÐµÑÑ‚Ð¾Ð²Ñ‹Ðµ ÑÑ†ÐµÐ½Ð°Ñ€Ð¸Ð¸ ÐµÑÐ»Ð¸ Ð·Ð°Ð¿Ñ€Ð¾ÑˆÐµÐ½Ð¾
+    # Добавляем тестовые сценарии если запрошено
     if hours == 3 and km == 80:
-        lines.append("\nðŸ“‹ Ð¢ÐµÑÑ‚Ð¾Ð²Ñ‹Ð¹ ÑÑ†ÐµÐ½Ð°Ñ€Ð¸Ð¹ 3Ñ‡/80ÐºÐ¼:")
-        lines.append("   FAW Bestune T77 + Bay 24: ~2197 â‚½ (ÑÑ€ÐµÐ´Ð½ÑÑ Ð¿Ð¾ Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ð¸)")
+        lines.append("\n📋 Тестовый сценарий 3ч/80км:")
+        lines.append("   FAW Bestune T77 + Bay 24: ~2197 ₽ (средняя по истории)")
     elif hours >= 12:
-        lines.append("\nðŸ“‹ Ð”Ð»Ñ ÑÑƒÑ‚Ð¾Ñ‡Ð½Ð¾Ð¹ Ð°Ñ€ÐµÐ½Ð´Ñ‹ Ñ€ÐµÐºÐ¾Ð¼ÐµÐ½Ð´ÑƒÐµÑ‚ÑÑ Bay 24 Ð¸Ð»Ð¸ Ñ‚Ð°Ñ€Ð¸Ñ„ 'Ð¡ÑƒÑ‚ÐºÐ¸'")
+        lines.append("\n📋 Для суточной аренды рекомендуется Bay 24 или тариф 'Сутки'")
 
-    lines.append("\n(Ñ€ÐµÐ°Ð»ÑŒÐ½Ð°Ñ ÑÑ‚Ð¾Ð¸Ð¼Ð¾ÑÑ‚ÑŒ Ð¼Ð¾Ð¶ÐµÑ‚ Ð¾Ñ‚Ð»Ð¸Ñ‡Ð°Ñ‚ÑŒÑÑ)")
+    lines.append("\n(реальная стоимость может отличаться)")
     await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /check â€” Ñ€Ð°ÑÑˆÐ¸Ñ€ÐµÐ½Ð½Ñ‹Ð¹ PDF-Ð¾Ñ‚Ñ‡Ñ‘Ñ‚."""
+    """Команда /check — расширенный PDF-отчёт."""
     try:
         from fpdf import FPDF
         pdf = FPDF()
@@ -1867,31 +1874,31 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn = get_db()
         c = conn.cursor()
         
-        # Ð—Ð°Ð³Ð¾Ð»Ð¾Ð²Ð¾Ðº
+        # Заголовок
         pdf.set_font('DejaVu', 'B', 16)
-        pdf.cell(0, 10, 'Consumption Agent â€” ÐžÑ‚Ñ‡Ñ‘Ñ‚', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 10, 'Consumption Agent — Отчёт', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
-        pdf.cell(0, 6, f'Ð”Ð°Ñ‚Ð°: {date.today().isoformat()}', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 6, f'Дата: {date.today().isoformat()}', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
         
-        # Ð¡Ñ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°
+        # Статистика
         pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'ÐžÐ±Ñ‰Ð°Ñ ÑÑ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 8, 'Общая статистика', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
         stats = [
-            ('Ð¢Ð¾Ð²Ð°Ñ€Ð¾Ð²', c.execute("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL").fetchone()[0]),
-            ('ÐŸÐ¾ÐºÑƒÐ¿Ð¾Ðº', c.execute("SELECT COUNT(*) FROM purchases WHERE deleted_at IS NULL").fetchone()[0]),
-            ('ÐšÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¹', c.execute("SELECT COUNT(*) FROM categories").fetchone()[0]),
-            ('Ð¡ Ð³Ð°Ñ€Ð°Ð½Ñ‚Ð¸ÐµÐ¹', c.execute("SELECT COUNT(*) FROM items WHERE warranty_months>0 AND deleted_at IS NULL").fetchone()[0]),
-            ('ÐÐ»ÐµÑ€Ñ‚Ð¾Ð²', c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]),
+            ('Товаров', c.execute("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL").fetchone()[0]),
+            ('Покупок', c.execute("SELECT COUNT(*) FROM purchases WHERE deleted_at IS NULL").fetchone()[0]),
+            ('Категорий', c.execute("SELECT COUNT(*) FROM categories").fetchone()[0]),
+            ('С гарантией', c.execute("SELECT COUNT(*) FROM items WHERE warranty_months>0 AND deleted_at IS NULL").fetchone()[0]),
+            ('Алертов', c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]),
         ]
         for k, v in stats:
             pdf.cell(0, 6, f'  {k}: {v}', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
         
-        # Ð¢Ð¾Ð¿-10 ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¹ Ð¿Ð¾ ÑÑƒÐ¼Ð¼Ðµ
+        # Топ-10 категорий по сумме
         pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Ð¢Ð¾Ð¿-10 ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¹ Ð¿Ð¾ ÑÑƒÐ¼Ð¼Ðµ', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 8, 'Топ-10 категорий по сумме', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
         cats = conn.execute('''
             SELECT c.name, COUNT(i.id) as cnt, COALESCE(ROUND(SUM(i.purchase_price),0),0) as total
@@ -1900,12 +1907,12 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             GROUP BY c.id ORDER BY total DESC LIMIT 10
         ''').fetchall()
         for r in cats:
-            pdf.cell(0, 6, f'  {r["name"]:25s} {r["cnt"]:4d} ÑˆÑ‚.  {r["total"]:>8.0f} â‚½', new_x='LMARGIN', new_y='NEXT')
+            pdf.cell(0, 6, f'  {r["name"]:25s} {r["cnt"]:4d} шт.  {r["total"]:>8.0f} ₽', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
         
-        # Ð“Ñ€Ð°Ñ„Ð¸Ðº Ñ‚Ñ€Ð°Ñ‚ Ð¿Ð¾ Ð¼ÐµÑÑÑ†Ð°Ð¼ (Ð¿Ñ€ÑÐ¼Ð¾ÑƒÐ³Ð¾Ð»ÑŒÐ½Ð¸ÐºÐ¸)
+        # График трат по месяцам (прямоугольники)
         pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Ð¢Ñ€Ð°Ñ‚Ñ‹ Ð¿Ð¾ Ð¼ÐµÑÑÑ†Ð°Ð¼', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 8, 'Траты по месяцам', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
         months = conn.execute('''
             SELECT substr(purchase_date,1,7) as m, ROUND(SUM(purchase_price),0) as total
@@ -1932,21 +1939,21 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pdf.ln(6)
         pdf.ln(4)
         
-        # ÐÐºÑ‚Ð¸Ð²Ð½Ñ‹Ðµ Ð°Ð»ÐµÑ€Ñ‚Ñ‹
+        # Активные алерты
         pdf.set_font('DejaVu', 'B', 12)
         a_cnt = c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]
-        pdf.cell(0, 8, f'ÐÐºÑ‚Ð¸Ð²Ð½Ñ‹Ðµ Ð°Ð»ÐµÑ€Ñ‚Ñ‹ ({a_cnt})', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 8, f'Активные алерты ({a_cnt})', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
         if a_cnt:
             for r in conn.execute("SELECT alert_type, title, message FROM alerts WHERE status='pending' ORDER BY alert_type LIMIT 10").fetchall():
                 pdf.cell(0, 6, f'  [{r["alert_type"][:15]:15s}] {r["title"][:50]}', new_x='LMARGIN', new_y='NEXT')
         else:
-            pdf.cell(0, 6, '  ÐÐµÑ‚ Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ñ… Ð°Ð»ÐµÑ€Ñ‚Ð¾Ð²', new_x='LMARGIN', new_y='NEXT')
+            pdf.cell(0, 6, '  Нет активных алертов', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
         
-        # Ð¢Ð¾Ð¿-20 Ñ‚Ð¾Ð²Ð°Ñ€Ð¾Ð² Ð¿Ð¾ Ñ†ÐµÐ½Ðµ (Ð±ÐµÐ· Ð´ÑƒÐ±Ð»ÐµÐ¹)
+        # Топ-20 товаров по цене (без дублей)
         pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Ð¢Ð¾Ð¿-20 Ñ‚Ð¾Ð²Ð°Ñ€Ð¾Ð² Ð¿Ð¾ Ñ†ÐµÐ½Ðµ', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 8, 'Топ-20 товаров по цене', new_x='LMARGIN', new_y='NEXT')
         pdf.set_font('DejaVu', '', 10)
         top_items = conn.execute('''
             SELECT name, purchase_price, category_id FROM items 
@@ -1955,44 +1962,44 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ORDER BY purchase_price DESC LIMIT 20
         ''').fetchall()
         for r in top_items:
-            price_str = f'{r["purchase_price"]:>8.0f} â‚½' if r["purchase_price"] else ''
+            price_str = f'{r["purchase_price"]:>8.0f} ₽' if r["purchase_price"] else ''
             cat_str = (r["category_id"] or '')[:10]
             pdf.cell(0, 6, f'  {price_str}  {r["name"][:45]:45s} [{cat_str}]', new_x='LMARGIN', new_y='NEXT')
         pdf.ln(4)
         
-        # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð¸ ÑˆÐ»Ñ‘Ð¼
+        # Сохраняем и шлём
         pdf_path = '/tmp/consumption_agent_report.pdf'
         pdf.output(pdf_path)
         conn.close()
         
-        await update.message.reply_text('ðŸ“Š ÐžÑ‚Ñ‡Ñ‘Ñ‚ Ð³Ð¾Ñ‚Ð¾Ð²:', reply_to_message_id=update.message.message_id)
+        await update.message.reply_text('📊 Отчёт готов:', reply_to_message_id=update.message.message_id)
         await update.message.reply_document(open(pdf_path, 'rb'), filename='report.pdf')
         
     except Exception as e:
         log.warning(f'cmd_check error: {e}')
         print(traceback.format_exc())
-        await update.message.reply_text(f'âŒ ÐžÑˆÐ¸Ð±ÐºÐ° Ð³ÐµÐ½ÐµÑ€Ð°Ñ†Ð¸Ð¸ Ð¾Ñ‚Ñ‡Ñ‘Ñ‚Ð°: {e}')
+        await update.message.reply_text(f'❌ Ошибка генерации отчёта: {e}')
 
 async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = ' '.join(ctx.args)
     if not text:
-        await update.message.reply_text('âŒ ÐŸÑ€Ð¸Ð¼ÐµÑ€: /add ÐÐ¾ÑÐºÐ¸ 350 Ð¾Ð´ÐµÐ¶Ð´Ð°')
+        await update.message.reply_text('❌ Пример: /add Носки 350 одежда')
         return
     # Parse: name, optional price, optional category
     parts = text.rsplit(None, 2)  # try splitting from right
     name = text
     price = None
     category = None
-    # Try category extraction (Ð¸Ð· consumption.categorize â€” Ð¨Ð°Ð³ 5)
-    cats = {'ÐµÐ´Ð°':'cat_food','Ð¿Ñ€Ð¾Ð´ÑƒÐºÑ‚Ñ‹':'cat_food','Ð¾Ð´ÐµÐ¶Ð´Ð°':'cat_clo_everyday','Ð¾Ð±ÑƒÐ²ÑŒ':'cat_clo_shoes',
-            'Ñ‚ÐµÑ…Ð½Ð¸ÐºÐ°':'cat_tech','ÐºÐ½Ð¸Ð³Ð¸':'cat_culture_books','ÑÐ¿Ð¾Ñ€Ñ‚':'cat_sport','ÐºÐ¾ÑÐ¼ÐµÑ‚Ð¸ÐºÐ°':'cat_cosmetics',
-            'Ð·Ð´Ð¾Ñ€Ð¾Ð²ÑŒÐµ':'cat_health_med','Ð´Ð¾Ð¼':'cat_home','Ð°Ð²Ñ‚Ð¾':'cat_auto','Ð¶Ð¸Ð²Ð¾Ñ‚Ð½Ñ‹Ðµ':'cat_pets',
-            'Ð¼ÐµÐ±ÐµÐ»ÑŒ':'cat_home_furn','Ð°ÐºÑÐµÑÑ':'cat_clo_access','Ñ…Ð¾Ð±Ð±Ð¸':'cat_hobbies',
-            'Ð¸Ð½Ñ‚Ð¸Ð¼':'cat_sexual','Ð¿Ð¾Ð´Ð¿Ð¸ÑÐºÐ°':'cat_subscriptions'}
+    # Try category extraction (из consumption.categorize — Шаг 5)
+    cats = {'еда':'cat_food','продукты':'cat_food','одежда':'cat_clo_everyday','обувь':'cat_clo_shoes',
+            'техника':'cat_tech','книги':'cat_culture_books','спорт':'cat_sport','косметика':'cat_cosmetics',
+            'здоровье':'cat_health_med','дом':'cat_home','авто':'cat_auto','животные':'cat_pets',
+            'мебель':'cat_home_furn','аксесс':'cat_clo_access','хобби':'cat_hobbies',
+            'интим':'cat_sexual','подписка':'cat_subscriptions'}
     for kw, cid in cats.items():
         if kw in text.lower():
             # Extract price before category
-            m = re.search(r'(\d[\d\s]*\d)\s*(?:â‚½|Ñ€ÑƒÐ±|Ñ€)?', text)
+            m = re.search(r'(\d[\d\s]*\d)\s*(?:₽|руб|р)?', text)
             if m:
                 price = float(m.group(1).replace(' ', ''))
                 name = text[:m.start()].strip().rstrip(',').strip()
@@ -2004,19 +2011,19 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             category = cid
             break
     if not category:
-        m = re.search(r'(\d[\d\s]*\d)\s*(?:â‚½|Ñ€ÑƒÐ±|Ñ€)?', text)
+        m = re.search(r'(\d[\d\s]*\d)\s*(?:₽|руб|р)?', text)
         if m:
             price = float(m.group(1).replace(' ', ''))
             name = text[:m.start()].strip().rstrip(',').strip()
     if not name or len(name) < 2:
-        await update.message.reply_text('âŒ Ð¡Ð»Ð¸ÑˆÐºÐ¾Ð¼ ÐºÐ¾Ñ€Ð¾Ñ‚ÐºÐ¾Ðµ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ')
+        await update.message.reply_text('❌ Слишком короткое название')
         return
     conn = get_db()
     cat_id = None
     if category:
         row = conn.execute("SELECT id FROM categories WHERE id=? OR slug=? LIMIT 1", (category, category)).fetchone()
         if row: cat_id = row[0]
-    # ÐÐ²Ñ‚Ð¾ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð·Ð°Ñ†Ð¸Ñ Ð¸Ð· consumption.categorize ÐµÑÐ»Ð¸ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŒ Ð½Ðµ ÑƒÐºÐ°Ð·Ð°Ð»
+    # Автокатегоризация из consumption.categorize если пользователь не указал
     if cat_id is None:
         auto_cat = auto_categorize(name)
         if auto_cat:
@@ -2029,11 +2036,11 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                        (name.strip(), price, date.today().isoformat(), cat_id))
     conn.commit()
     conn.close()
-    await update.message.reply_text(f'âœ… Ð”Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¾: {name.strip()}{f" ({price:.0f} â‚½)" if price else ""}')
+    await update.message.reply_text(f'✅ Добавлено: {name.strip()}{f" ({price:.0f} ₽)" if price else ""}')
 
 async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐŸÐ°Ñ€ÑÐ¸Ð½Ð³ Ð½ÐµÐ¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚Ð°Ð½Ð½Ñ‹Ñ… Ñ‡ÐµÐºÐ¾Ð² Ozon Ð¸Ð· Ð¿Ð¾Ñ‡Ñ‚Ñ‹."""
-    await update.message.reply_text('ðŸ”„ ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÑŽ Ð½ÐµÐ¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚Ð°Ð½Ð½Ñ‹Ðµ Ñ‡ÐµÐºÐ¸ Ozon...')
+    """Парсинг необработанных чеков Ozon из почты."""
+    await update.message.reply_text('🔄 Проверяю необработанные чеки Ozon...')
     
     limit = 10
     if ctx.args and ctx.args[0].isdigit():
@@ -2041,7 +2048,7 @@ async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     
     try:
         conn = get_db()
-        # ÐÐ°Ñ…Ð¾Ð´Ð¸Ð¼ Ñ‡ÐµÐºÐ¸ Ð±ÐµÐ· Ð¿Ñ€Ð¸Ð²ÑÐ·Ð°Ð½Ð½Ñ‹Ñ… Ñ‚Ð¾Ð²Ð°Ñ€Ð¾Ð²
+        # Находим чеки без привязанных товаров
         rows = conn.execute("""
             SELECT cl.id, cl.cheque_date, cl.subject, cl.receipt_url, p.id as purchase_id
             FROM cheques_log cl
@@ -2057,32 +2064,32 @@ async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         """, (limit,)).fetchall()
         
         if not rows:
-            await update.message.reply_text('âœ… Ð’ÑÐµ Ñ‡ÐµÐºÐ¸ Ozon ÑƒÐ¶Ðµ Ð¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚Ð°Ð½Ñ‹')
+            await update.message.reply_text('✅ Все чеки Ozon уже обработаны')
             conn.close()
             return
         
-        lines = ['ðŸ” ÐÐ°Ð¹Ð´ÐµÐ½Ð¾ Ð½ÐµÐ¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚Ð°Ð½Ð½Ñ‹Ñ…:', '']
+        lines = ['🔍 Найдено необработанных:', '']
         for r in rows:
             date_str = r['cheque_date'][:10] if r['cheque_date'] else '?'
             url = (r['receipt_url'] or '')[:60]
-            status = 'âœ… Ð¿Ñ€Ð¸Ð²ÑÐ·Ð°Ð½' if r['purchase_id'] else 'âŒ Ð±ÐµÐ· Ð¿Ð¾ÐºÑƒÐ¿ÐºÐ¸'
-            lines.append(f'  â€¢ {date_str} â€” {status}')
+            status = '✅ привязан' if r['purchase_id'] else '❌ без покупки'
+            lines.append(f'  • {date_str} — {status}')
         
         lines.append('')
-        lines.append('Ð”Ð»Ñ Ð¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚ÐºÐ¸ Ð½ÑƒÐ¶Ð½Ñ‹ ÑÐ²ÐµÐ¶Ð¸Ðµ ÐºÑƒÐºÐ¸ Ozon.')
-        lines.append('ÐžÐ±Ð½Ð¾Ð²Ð¸Ñ‚Ðµ ÐºÑƒÐºÐ¸ Ð² .ozon_cookies.txt Ð¸Ð»Ð¸ Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐ¹Ñ‚Ðµ /add_photo')
+        lines.append('Для обработки нужны свежие куки Ozon.')
+        lines.append('Обновите куки в .ozon_cookies.txt или используйте /add_photo')
         
         await update.message.reply_text('\n'.join(lines))
         conn.close()
     except Exception as e:
         log.warning(f'cmd_parse error: {e}')
-        await update.message.reply_text(f'âŒ ÐžÑˆÐ¸Ð±ÐºÐ°: {e}')
+        await update.message.reply_text(f'❌ Ошибка: {e}')
 
 
 async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /debts â€” Ð¿Ñ€Ð¸Ð½ÑƒÐ´Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð°Ñ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ° ÐºÑ€ÐµÐ´Ð¸Ñ‚Ð¾Ð² Ð¸ Ð·Ð°Ð¹Ð¼Ð¾Ð².
-    Ð¡ÐºÐ°Ð½Ð¸Ñ€ÑƒÐµÑ‚ Ð¿Ð¾Ñ‡Ñ‚Ñ‹ + SMS, Ð¿Ð¾ÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÑ‚ Ð±Ð»Ð¸Ð¶Ð°Ð¹ÑˆÐ¸Ðµ Ð¿Ð»Ð°Ñ‚ÐµÐ¶Ð¸."""
-    await update.message.reply_text('ðŸ” ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÑŽ Ð¿Ð¾Ñ‡Ñ‚Ñ‹ Ð¸ SMS Ð½Ð° Ð¿Ñ€ÐµÐ´Ð¼ÐµÑ‚ ÐºÑ€ÐµÐ´Ð¸Ñ‚Ð½Ñ‹Ñ… ÑƒÐ²ÐµÐ´Ð¾Ð¼Ð»ÐµÐ½Ð¸Ð¹...')
+    """Команда /debts — принудительная проверка кредитов и займов.
+    Сканирует почты + SMS, показывает ближайшие платежи."""
+    await update.message.reply_text('🔍 Проверяю почты и SMS на предмет кредитных уведомлений...')
 
     try:
         import subprocess
@@ -2111,45 +2118,45 @@ async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not rows:
-        await update.message.reply_text('âœ… ÐÐµÑ‚ Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ñ… ÐºÑ€ÐµÐ´Ð¸Ñ‚Ð½Ñ‹Ñ… Ð¿Ð»Ð°Ñ‚ÐµÐ¶ÐµÐ¹ Ð½Ð° Ð±Ð»Ð¸Ð¶Ð°Ð¹ÑˆÐ¸Ðµ 30 Ð´Ð½ÐµÐ¹.')
+        await update.message.reply_text('✅ Нет активных кредитных платежей на ближайшие 30 дней.')
         return
 
-    lines = ['ðŸ’³ *ÐšÑ€ÐµÐ´Ð¸Ñ‚Ñ‹ Ðº Ð¾Ð¿Ð»Ð°Ñ‚Ðµ (30 Ð´Ð½ÐµÐ¹):*']
+    lines = ['💳 *Кредиты к оплате (30 дней):*']
     total = 0.0
     urgent_count = 0
     for r in rows:
         rid, sender, amount, pay_date, days = r
         if days < 0:
-            prefix = 'ðŸ”´ ÐŸÐ ÐžÐ¡Ð ÐžÐ§Ð•Ð'
+            prefix = '🔴 ПРОСРОЧЕН'
             urgent_count += 1
         elif days <= 3:
-            prefix = 'ðŸŸ¡ Ð¡Ð ÐžÐ§ÐÐž'
+            prefix = '🟡 СРОЧНО'
             urgent_count += 1
         elif days <= 7:
-            prefix = 'ðŸŸ¢ ÐÐ° ÑÑ‚Ð¾Ð¹ Ð½ÐµÐ´ÐµÐ»Ðµ'
+            prefix = '🟢 На этой неделе'
         else:
-            prefix = 'âšª'
+            prefix = '⚪'
 
-        amount_str = f'{amount:.2f} â‚½' if amount else 'â€”'
-        date_str = pay_date or 'â€”'
-        days_str = f'(Ñ‡ÐµÑ€ÐµÐ· {days} Ð´Ð½.)' if days >= 0 else f'(Ð¿Ñ€Ð¾ÑÑ€Ð¾Ñ‡ÐµÐ½Ð¾ {-days} Ð´Ð½.)'
-        lines.append(f'\n{prefix} *{esc_md(sender)}* â€” {amount_str}')
-        lines.append(f'   ðŸ“… {date_str} {days_str}')
+        amount_str = f'{amount:.2f} ₽' if amount else '—'
+        date_str = pay_date or '—'
+        days_str = f'(через {days} дн.)' if days >= 0 else f'(просрочено {-days} дн.)'
+        lines.append(f'\n{prefix} *{esc_md(sender)}* — {amount_str}')
+        lines.append(f'   📅 {date_str} {days_str}')
 
         if amount:
             total += amount
 
-    lines.append(f'\nðŸ’° *Ð˜Ñ‚Ð¾Ð³Ð¾: {total:.2f} â‚½*')
+    lines.append(f'\n💰 *Итого: {total:.2f} ₽*')
     if urgent_count:
-        lines.append(f'âš ï¸ {urgent_count} Ð¿Ð»Ð°Ñ‚ÐµÐ¶(Ð°/ÐµÐ¹) Ñ‚Ñ€ÐµÐ±ÑƒÑŽÑ‚ Ð²Ð½Ð¸Ð¼Ð°Ð½Ð¸Ñ!')
+        lines.append(f'⚠️ {urgent_count} платеж(а/ей) требуют внимания!')
 
     await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
 
 
 async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /fines â€” Ð¿Ñ€Ð¸Ð½ÑƒÐ´Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð°Ñ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ° ÑˆÑ‚Ñ€Ð°Ñ„Ð¾Ð² Ð½Ð° Ð²ÑÐµÑ… Ð¿Ð¾Ñ‡Ñ‚Ð°Ñ… + SMS.
-    ÐŸÐ¾ÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÑ‚ Ð½ÐµÐ¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð½Ñ‹Ðµ Ñ ÐºÐ½Ð¾Ð¿ÐºÐ¾Ð¹ âœ… ÐžÐ¿Ð»Ð°Ñ‡ÐµÐ½Ð¾."""
-    await update.message.reply_text('ðŸ” ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÑŽ Ð¿Ð¾Ñ‡Ñ‚Ñ‹ Ð¸ SMS Ð½Ð° Ð¿Ñ€ÐµÐ´Ð¼ÐµÑ‚ ÑˆÑ‚Ñ€Ð°Ñ„Ð¾Ð²...')
+    """Команда /fines — принудительная проверка штрафов на всех почтах + SMS.
+    Показывает неоплаченные с кнопкой ✅ Оплачено."""
+    await update.message.reply_text('🔍 Проверяю почты и SMS на предмет штрафов...')
 
     try:
         import subprocess
@@ -2175,60 +2182,60 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not rows:
-        await update.message.reply_text('âœ… ÐÐµÑ‚ Ð½ÐµÐ¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð½Ñ‹Ñ… ÑˆÑ‚Ñ€Ð°Ñ„Ð¾Ð².')
+        await update.message.reply_text('✅ Нет неоплаченных штрафов.')
         return
 
-    # Ð“Ñ€ÑƒÐ¿Ð¿Ð¸Ñ€ÑƒÐµÐ¼ Ð¿Ð¾ Ð½Ð¾Ð¼ÐµÑ€Ñƒ â€” Ð±ÐµÑ€Ñ‘Ð¼ Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ð¹ ÑÑ‚Ð°Ñ‚ÑƒÑ (DESC Ð¿Ð¾ Ð´Ð°Ñ‚Ðµ)
+    # Группируем по номеру — берём последний статус (DESC по дате)
     by_number = {}
     for r in rows:
         num = r[2] or str(r[0])
         by_number[num] = r
 
-    # Ð‘ÐµÑ€Ñ‘Ð¼ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ‚Ðµ, Ð³Ð´Ðµ Ð½ÐµÑ‚ paid_confirmed_at (Ð¿Ð¾ Ð½Ð¾Ð¼ÐµÑ€Ñƒ ÑˆÑ‚Ñ€Ð°Ñ„Ð° Ð´ÐµÐ´ÑƒÐ¿Ð»Ð¸Ñ†Ð¸Ñ€ÑƒÐµÐ¼)
+    # Берём только те, где нет paid_confirmed_at (по номеру штрафа дедуплицируем)
     active = []
     for r in by_number.values():
         if r[1] == 'new' or (r[1] in ('paid', 'fined') and r[8] is None):
             active.append(r)
 
     if not active:
-        await update.message.reply_text('âœ… ÐÐµÑ‚ Ð½ÐµÐ¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð½Ñ‹Ñ… ÑˆÑ‚Ñ€Ð°Ñ„Ð¾Ð².')
+        await update.message.reply_text('✅ Нет неоплаченных штрафов.')
         return
 
-    # Ð¡Ð²Ð¾Ð´ÐºÐ°
+    # Сводка
     total = sum(r[3] or 0 for r in active)
-    summary_lines = [f'ðŸš¨ *Ð¨Ñ‚Ñ€Ð°Ñ„Ñ‹: {len(active)} ÑˆÑ‚., Ð²ÑÐµÐ³Ð¾ {total:.0f} â‚½*']
+    summary_lines = [f'🚨 *Штрафы: {len(active)} шт., всего {total:.0f} ₽*']
     for r in active:
         amount = r[3] or 0
         desc = (r[4] or '').strip()[:60]
-        date_str = r[6] or 'â€”'
-        summary_lines.append(f'  ðŸ”´ {amount:.0f} â‚½ â€” {esc_md(desc) or "Ð¨Ñ‚Ñ€Ð°Ñ„"} ({date_str})')
-    summary_lines.append(f'\nâ¬‡ï¸ ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð»ÑÑŽ Ð´ÐµÑ‚Ð°Ð»Ð¸ Ñ ÐºÐ½Ð¾Ð¿ÐºÐ°Ð¼Ð¸...')
+        date_str = r[6] or '—'
+        summary_lines.append(f'  🔴 {amount:.0f} ₽ — {esc_md(desc) or "Штраф"} ({date_str})')
+    summary_lines.append(f'\n⬇️ Отправляю детали с кнопками...')
     await update.message.reply_text('\n'.join(summary_lines), parse_mode='Markdown')
 
-    # ÐšÐ°Ð¶Ð´Ñ‹Ð¹ ÑˆÑ‚Ñ€Ð°Ñ„ Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ñ‹Ð¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸ÐµÐ¼ Ñ ÐºÐ½Ð¾Ð¿ÐºÐ¾Ð¹
+    # Каждый штраф отдельным сообщением с кнопкой
     for r in active:
         fine_id = r[0]
         amount = r[3] or 0
         desc = (r[4] or '').strip()
-        date_str = r[6] or 'â€”'
+        date_str = r[6] or '—'
         vendor = (r[7] or '').strip()[:60]
         veh = (r[5] or '').strip()[:15]
         num_str = (r[2] or '')[:20]
 
-        detail_lines = [f'ðŸš¨ *Ð¨Ñ‚Ñ€Ð°Ñ„: {amount:.0f} â‚½*']
+        detail_lines = [f'🚨 *Штраф: {amount:.0f} ₽*']
         if desc:
-            detail_lines.append(f'ðŸ“‹ {esc_md(desc)}')
-        detail_lines.append(f'ðŸ“… {date_str}')
+            detail_lines.append(f'📋 {esc_md(desc)}')
+        detail_lines.append(f'📅 {date_str}')
         if veh:
-            detail_lines.append(f'ðŸš— {veh}')
+            detail_lines.append(f'🚗 {veh}')
         if vendor:
-            detail_lines.append(f'ðŸ› {vendor}')
+            detail_lines.append(f'🏛 {vendor}')
         if num_str:
-            detail_lines.append(f'â„– {num_str}')
+            detail_lines.append(f'№ {num_str}')
 
         keyboard = {
             'inline_keyboard': [[
-                {'text': 'âœ… ÐžÐ¿Ð»Ð°Ñ‡ÐµÐ½Ð¾', 'callback_data': f'fine_paid:{fine_id}'}
+                {'text': '✅ Оплачено', 'callback_data': f'fine_paid:{fine_id}'}
             ]]
         }
 
@@ -2240,8 +2247,8 @@ async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /dayexp [N] â€” Ñ‡ÐµÐºÐ¸ Ð·Ð° N Ð´Ð½ÐµÐ¹ (Ð²ÐºÐ»ÑŽÑ‡Ð°Ñ ÑÐµÐ³Ð¾Ð´Ð½Ñ) Ñ Ð¿Ñ€Ð¸Ð½ÑƒÐ´Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ð¼ ÑÐºÐ°Ð½Ð¸Ñ€Ð¾Ð²Ð°Ð½Ð¸ÐµÐ¼.
-    ÐŸÐ¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ N=1 â€” Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÑÐµÐ³Ð¾Ð´Ð½Ñ."""
+    """Команда /dayexp [N] — чеки за N дней (включая сегодня) с принудительным сканированием.
+    По умолчанию N=1 — только сегодня."""
     n_days = 1
     if ctx.args and len(ctx.args) > 0:
         try:
@@ -2251,8 +2258,8 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
-    day_label = f'Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ {n_days} Ð´Ð½.' if n_days > 1 else 'ÑÐµÐ³Ð¾Ð´Ð½Ñ'
-    msg = await update.message.reply_text(f'ðŸ” Ð¡ÐºÐ°Ð½Ð¸Ñ€ÑƒÑŽ Ð¿Ð¾Ñ‡Ñ‚Ñ‹ Ð¸ SMS Ð·Ð° {day_label}...')
+    day_label = f'последние {n_days} дн.' if n_days > 1 else 'сегодня'
+    msg = await update.message.reply_text(f'🔍 Сканирую почты и SMS за {day_label}...')
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -2267,7 +2274,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         print('[dayexp] scan timeout')
     except Exception as e:
         print(f'[dayexp] scan error: {e}')
-        await msg.edit_text('âš ï¸ ÐžÑˆÐ¸Ð±ÐºÐ° ÑÐºÐ°Ð½Ð¸Ñ€Ð¾Ð²Ð°Ð½Ð¸Ñ Ð¿Ð¾Ñ‡Ñ‚.')
+        await msg.edit_text('⚠️ Ошибка сканирования почт.')
         return
 
     conn = get_db()
@@ -2284,50 +2291,50 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not rows:
-        date_range = f'{datetime.now().strftime("%d.%m.%Y")}' if n_days == 1 else f'Ð·Ð° Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ {n_days} Ð´Ð½. (Ð¿Ð¾ {datetime.now().strftime("%d.%m.%Y")})'
-        await msg.edit_text(f'ðŸ“­ {date_range} Ð¿Ð¾ÐºÑƒÐ¿Ð¾Ðº Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.')
+        date_range = f'{datetime.now().strftime("%d.%m.%Y")}' if n_days == 1 else f'за последние {n_days} дн. (по {datetime.now().strftime("%d.%m.%Y")})'
+        await msg.edit_text(f'📭 {date_range} покупок не найдено.')
         return
 
     total = sum(r[1] or 0 for r in rows)
-    source_icons = {'gmail': 'ðŸ“§', 'yandex': 'ðŸ“§', 'yandex_food': 'ðŸ½', 'sms': 'ðŸ“±', 'local': 'ðŸ“', 'manual': 'âœï¸'}
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
 
     today_str = datetime.now().strftime('%d.%m.%Y')
-    title = f'ðŸ“Š *Ð Ð°ÑÑ…Ð¾Ð´Ñ‹ Ð·Ð° ÑÐµÐ³Ð¾Ð´Ð½Ñ ({today_str})*' if n_days == 1 else f'ðŸ“Š *Ð Ð°ÑÑ…Ð¾Ð´Ñ‹ Ð·Ð° Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ {n_days} Ð´Ð½. (Ð¿Ð¾ {today_str})*'
+    title = f'📊 *Расходы за сегодня ({today_str})*' if n_days == 1 else f'📊 *Расходы за последние {n_days} дн. (по {today_str})*'
     lines = [title]
-    lines.append(f'_{len(rows)} Ð¿Ð¾ÐºÑƒÐ¿Ð¾Ðº, Ð²ÑÐµÐ³Ð¾ {total:,.0f} â‚½_\n'.replace(',', ' '))
+    lines.append(f'_{len(rows)} покупок, всего {total:,.0f} ₽_\n'.replace(',', ' '))
 
     for r in rows:
         date_str, amount, store, source, notes = r
         amt = amount or 0
-        src_icon = source_icons.get(source or '', 'ðŸ“§')
-        store_clean = store or 'â€”'
+        src_icon = source_icons.get(source or '', '📧')
+        store_clean = store or '—'
         notes_clean = (notes or '').replace('\n', ' ').strip()
         if notes_clean:
             short_note = notes_clean[:80]
-            lines.append(f'{src_icon} *{store_clean}* â€” {amt:,.0f} â‚½'.replace(',', ' '))
+            lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
             lines.append(f'   {short_note}')
         else:
-            lines.append(f'{src_icon} *{store_clean}* â€” {amt:,.0f} â‚½'.replace(',', ' '))
+            lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
 
-    # ÐŸÐ¾ Ð¼Ð°Ð³Ð°Ð·Ð¸Ð½Ð°Ð¼
+    # По магазинам
     by_store = {}
     for r in rows:
-        s = r[2] or 'Ð”Ñ€ÑƒÐ³Ð¾Ðµ'
+        s = r[2] or 'Другое'
         by_store[s] = by_store.get(s, 0) + (r[1] or 0)
     if len(by_store) > 1:
-        lines.append(f'\nðŸ“Œ *ÐŸÐ¾ Ð¼Ð°Ð³Ð°Ð·Ð¸Ð½Ð°Ð¼:*')
+        lines.append(f'\n📌 *По магазинам:*')
         for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
-            lines.append(f'  â€¢ {s}: {a:,.0f} â‚½'.replace(',', ' '))
+            lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
 
     await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
 
 
 async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /monthexp â€” Ñ€Ð°ÑÑ…Ð¾Ð´Ñ‹ Ñ Ð½Ð°Ñ‡Ð°Ð»Ð° Ð¼ÐµÑÑÑ†Ð° Ñ Ñ€Ð°ÑÑˆÐ¸Ñ„Ñ€Ð¾Ð²ÐºÐ¾Ð¹ Ð¿Ð¾ Ð´Ð½ÑÐ¼.
-    Ð—Ð° Ñ‚ÐµÐºÑƒÑ‰Ð¸Ð¹ Ð´ÐµÐ½ÑŒ â€” Ð¿Ñ€Ð¸Ð½ÑƒÐ´Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð¾Ðµ ÑÐºÐ°Ð½Ð¸Ñ€Ð¾Ð²Ð°Ð½Ð¸Ðµ Ð¿Ð¾Ñ‡Ñ‚ + SMS (Ñ„Ð¾Ð½Ð¾Ð²Ð¾)."""
-    msg = await update.message.reply_text('ðŸ” Ð¡ÐºÐ°Ð½Ð¸Ñ€ÑƒÑŽ Ð¿Ð¾Ñ‡Ñ‚Ñ‹ Ð¸ SMS â€” ÑÐ¾Ð±Ð¸Ñ€Ð°ÑŽ Ð´Ð°Ð½Ð½Ñ‹Ðµ Ð·Ð° Ð¼ÐµÑÑÑ†...')
+    """Команда /monthexp — расходы с начала месяца с расшифровкой по дням.
+    За текущий день — принудительное сканирование почт + SMS (фоново)."""
+    msg = await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за месяц...')
 
-    # Ð¤Ð¾Ð½Ð¾Ð²Ð¾Ðµ ÑÐºÐ°Ð½Ð¸Ñ€Ð¾Ð²Ð°Ð½Ð¸Ðµ
+    # Фоновое сканирование
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable, 'daily_cheque_scan.py',
@@ -2346,9 +2353,9 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     month_start = today.strftime('%Y-%m-01')
     today_str = today.strftime('%Y-%m-%d')
     month_names = {
-        1:'Ð¯Ð½Ð²Ð°Ñ€ÑŒ', 2:'Ð¤ÐµÐ²Ñ€Ð°Ð»ÑŒ', 3:'ÐœÐ°Ñ€Ñ‚', 4:'ÐÐ¿Ñ€ÐµÐ»ÑŒ',
-        5:'ÐœÐ°Ð¹', 6:'Ð˜ÑŽÐ½ÑŒ', 7:'Ð˜ÑŽÐ»ÑŒ', 8:'ÐÐ²Ð³ÑƒÑÑ‚',
-        9:'Ð¡ÐµÐ½Ñ‚ÑÐ±Ñ€ÑŒ', 10:'ÐžÐºÑ‚ÑÐ±Ñ€ÑŒ', 11:'ÐÐ¾ÑÐ±Ñ€ÑŒ', 12:'Ð”ÐµÐºÐ°Ð±Ñ€ÑŒ'
+        1:'Январь', 2:'Февраль', 3:'Март', 4:'Апрель',
+        5:'Май', 6:'Июнь', 7:'Июль', 8:'Август',
+        9:'Сентябрь', 10:'Октябрь', 11:'Ноябрь', 12:'Декабрь'
     }
     month_name = f'{month_names.get(today.month, "")} {today.year}'
 
@@ -2365,16 +2372,16 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not rows:
-        await msg.edit_text(f'ðŸ“­ Ð—Ð° {month_name} (Ñ 1 Ð¿Ð¾ {today.day}) Ð¿Ð¾ÐºÑƒÐ¿Ð¾Ðº Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.')
+        await msg.edit_text(f'📭 За {month_name} (с 1 по {today.day}) покупок не найдено.')
         return
 
     grand_total = sum(r[1] or 0 for r in rows)
-    source_icons = {'gmail': 'ðŸ“§', 'yandex': 'ðŸ“§', 'yandex_food': 'ðŸ½', 'sms': 'ðŸ“±', 'local': 'ðŸ“', 'manual': 'âœï¸'}
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
 
-    lines = [f'ðŸ“Š *Ð Ð°ÑÑ…Ð¾Ð´Ñ‹ Ñ 1 {month_name.lower()} Ð¿Ð¾ {today.day} Ñ‡Ð¸ÑÐ»Ð¾*']
-    lines.append(f'_{len(rows)} Ð¿Ð¾ÐºÑƒÐ¿Ð¾Ðº, Ð²ÑÐµÐ³Ð¾ {grand_total:,.0f} â‚½_\n'.replace(',', ' '))
+    lines = [f'📊 *Расходы с 1 {month_name.lower()} по {today.day} число*']
+    lines.append(f'_{len(rows)} покупок, всего {grand_total:,.0f} ₽_\n'.replace(',', ' '))
 
-    # Ð“Ñ€ÑƒÐ¿Ð¿Ð¸Ñ€Ð¾Ð²ÐºÐ° Ð¿Ð¾ Ð´Ð½ÑÐ¼
+    # Группировка по дням
     by_day = {}
     for r in rows:
         d = r[0]
@@ -2385,74 +2392,74 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for day in sorted(by_day.keys(), reverse=True):
         day_rows = by_day[day]
         day_total = sum(r[1] or 0 for r in day_rows)
-        day_label = 'Ð¡ÐµÐ³Ð¾Ð´Ð½Ñ' if day == today_str else day
-        lines.append(f'\nðŸ“… *{day_label}* â€” {day_total:,.0f} â‚½ ({len(day_rows)} Ð¿Ð¾ÐºÑƒÐ¿Ð¾Ðº)'.replace(',', ' '))
+        day_label = 'Сегодня' if day == today_str else day
+        lines.append(f'\n📅 *{day_label}* — {day_total:,.0f} ₽ ({len(day_rows)} покупок)'.replace(',', ' '))
 
         for r in day_rows:
             date_str, amount, store, source, notes = r
             amt = amount or 0
-            src_icon = source_icons.get(source or '', 'ðŸ“§')
-            store_clean = store or 'â€”'
+            src_icon = source_icons.get(source or '', '📧')
+            store_clean = store or '—'
             notes_clean = (notes or '').replace('\n', ' ').strip()[:60]
             if notes_clean:
-                lines.append(f'{src_icon} *{store_clean}* â€” {amt:,.0f} â‚½ Â· {notes_clean}'.replace(',', ' '))
+                lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽ · {notes_clean}'.replace(',', ' '))
             else:
-                lines.append(f'{src_icon} *{store_clean}* â€” {amt:,.0f} â‚½'.replace(',', ' '))
+                lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
 
-    # ÐŸÐ¾ Ð¼Ð°Ð³Ð°Ð·Ð¸Ð½Ð°Ð¼
+    # По магазинам
     by_store = {}
     for r in rows:
-        s = r[2] or 'Ð”Ñ€ÑƒÐ³Ð¾Ðµ'
+        s = r[2] or 'Другое'
         by_store[s] = by_store.get(s, 0) + (r[1] or 0)
     if len(by_store) > 1:
-        lines.append(f'\nðŸ“Œ *Ð’ÑÐµÐ³Ð¾ Ð¿Ð¾ Ð¼Ð°Ð³Ð°Ð·Ð¸Ð½Ð°Ð¼:*')
+        lines.append(f'\n📌 *Всего по магазинам:*')
         for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
-            lines.append(f'  â€¢ {s}: {a:,.0f} â‚½'.replace(',', ' '))
+            lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
 
     await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
 
 
 async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /warranties â€” Ð¾Ñ‚Ñ‡Ñ‘Ñ‚ Ð¿Ð¾ Ð³Ð°Ñ€Ð°Ð½Ñ‚Ð¸ÑÐ¼."""
+    """Команда /warranties — отчёт по гарантиям."""
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from warranty_check import get_warranties_report, update_warranty_until, check_warranties, save_alerts
         conn = get_db()
-        # ÐŸÐµÑ€ÐµÑÑ‡Ñ‘Ñ‚ warranty_until
+        # Пересчёт warranty_until
         update_warranty_until(conn)
-        # ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ° Ð¸ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ðµ Ð°Ð»ÐµÑ€Ñ‚Ð¾Ð²
+        # Проверка и сохранение алертов
         alerts = check_warranties(conn)
         if alerts:
             save_alerts(conn, alerts)
-        # ÐžÑ‚Ñ‡Ñ‘Ñ‚
+        # Отчёт
         report = get_warranties_report(conn)
         conn.close()
         await update.message.reply_text(report, parse_mode='Markdown')
     except Exception as e:
         log.error(f'cmd_warranties error: {e}')
-        await update.message.reply_text(f'âŒ ÐžÑˆÐ¸Ð±ÐºÐ°: {e}')
+        await update.message.reply_text(f'❌ Ошибка: {e}')
 
 
 async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /add_item â€” Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ð²ÐµÑ‰ÑŒ Ð² Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ Ñ Ñ„Ð¾Ñ‚Ð¾, Ð±Ñ€ÐµÐ½Ð´Ð¾Ð¼ Ð¸ ÑÑ€Ð¾ÐºÐ¾Ð¼ Ð·Ð°Ð¼ÐµÐ½Ñ‹.
-    Ð¤Ð¾Ñ€Ð¼Ð°Ñ‚:
-      /add_item ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ
-      /add_item ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ | Ð±Ñ€ÐµÐ½Ð´ Ð‘Ñ€ÐµÐ½Ð´ | Ð·Ð°Ð¼ÐµÐ½Ð° 60 Ð¼ÐµÑ
-      /add_item ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ | Ð±Ñ€ÐµÐ½Ð´ Ð‘Ñ€ÐµÐ½Ð´ | Ð·Ð°Ð¼ÐµÐ½Ð° 5 Ð»ÐµÑ‚
-    ÐœÐ¾Ð¶Ð½Ð¾ Ð¿Ñ€Ð¸ÐºÑ€ÐµÐ¿Ð¸Ñ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾ Ðº ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸ÑŽ."""
+    """Команда /add_item — добавить вещь в инвентарь с фото, брендом и сроком замены.
+    Формат:
+      /add_item Название
+      /add_item Название | бренд Бренд | замена 60 мес
+      /add_item Название | бренд Бренд | замена 5 лет
+    Можно прикрепить фото к сообщению."""
     text = ' '.join(ctx.args).strip()
     if not text:
         await update.message.reply_text(
-            'âŒ Ð£ÐºÐ°Ð¶Ð¸Ñ‚Ðµ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ Ð²ÐµÑ‰Ð¸\n\n'
-            'ÐŸÑ€Ð¸Ð¼ÐµÑ€:\n'
-            '/add_item Ð¡Ñ‚Ñ€ÐµÐ¼ÑÐ½ÐºÐ° 5 ÑÑ‚ÑƒÐ¿ÐµÐ½ÐµÐ¹\n'
-            '/add_item ÐŸÑ‹Ð»ÐµÑÐ¾Ñ | Ð±Ñ€ÐµÐ½Ð´ Xiaomi | Ð·Ð°Ð¼ÐµÐ½Ð° 60 Ð¼ÐµÑ\n'
-            '/add_item ÐÐ¾ÑÐºÐ¸ | Ð±Ñ€ÐµÐ½Ð´ Nike | Ð·Ð°Ð¼ÐµÐ½Ð° 12 Ð¼ÐµÑ\n\n'
-            'ÐœÐ¾Ð¶Ð½Ð¾ Ð¿Ñ€Ð¸ÐºÑ€ÐµÐ¿Ð¸Ñ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾ Ðº ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸ÑŽ.'
+            '❌ Укажите название вещи\n\n'
+            'Пример:\n'
+            '/add_item Стремянка 5 ступеней\n'
+            '/add_item Пылесос | бренд Xiaomi | замена 60 мес\n'
+            '/add_item Носки | бренд Nike | замена 12 мес\n\n'
+            'Можно прикрепить фото к сообщению.'
         )
         return
 
-    # ÐŸÐ°Ñ€ÑÐ¸Ð¼ Ð¿Ð¾Ð»Ñ Ñ‡ÐµÑ€ÐµÐ· ÑƒÐ½Ð¸Ð²ÐµÑ€ÑÐ°Ð»ÑŒÐ½Ñ‹Ð¹ brand_parser
+    # Парсим поля через универсальный brand_parser
     from brand_parser import parse_brand_and_name
     bp = parse_brand_and_name(text)
     name = bp['name'] or text
@@ -2460,48 +2467,48 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     replace_months = bp['replace_months']
     replace_days = bp.get('replace_days')
 
-    # ÐÐ¾Ñ€Ð¼Ð°Ð»Ð¸Ð·ÑƒÐµÐ¼ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ â€” ÑƒÐ±Ð¸Ñ€Ð°ÐµÐ¼ Ð»Ð¸ÑˆÐ½ÐµÐµ
+    # Нормализуем название — убираем лишнее
     name = name.strip().strip(',;')
     if not name:
-        await update.message.reply_text('âŒ ÐÐ°Ð·Ð²Ð°Ð½Ð¸Ðµ Ð½Ðµ Ð¼Ð¾Ð¶ÐµÑ‚ Ð±Ñ‹Ñ‚ÑŒ Ð¿ÑƒÑÑ‚Ñ‹Ð¼')
+        await update.message.reply_text('❌ Название не может быть пустым')
         return
 
-    # ÐžÐ¿Ñ€ÐµÐ´ÐµÐ»ÑÐµÐ¼ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸ÑŽ Ð¿Ð¾ ÐºÐ»ÑŽÑ‡ÐµÐ²Ñ‹Ð¼ ÑÐ»Ð¾Ð²Ð°Ð¼ Ð² Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ð¸
+    # Определяем категорию по ключевым словам в названии
     cat_map = {
-        'ÑÑ‚Ñ€ÐµÐ¼ÑÐ½': 'cat_home', 'Ð¿Ñ‹Ð»ÐµÑÐ¾Ñ': 'cat_tech', 'ÑƒÑ‚ÑŽÐ³': 'cat_home',
-        'ÑƒÑ‚ÑŽÐ¶': 'cat_home', 'Ñ„ÐµÐ½': 'cat_cosmetics', 'Ñ€Ð°ÑÑ‡ÐµÑ': 'cat_cosmetics',
-        'Ñ‰Ñ‘Ñ‚Ðº': 'cat_home', 'Ð·ÑƒÐ±Ð½': 'cat_health_med', 'Ð¿Ð¾Ð»Ð¾Ñ‚ÐµÐ½': 'cat_home',
-        'Ð¿Ð¾ÑÑ‚ÐµÐ»ÑŒ': 'cat_home', 'Ð¿Ñ€Ð¾ÑÑ‚Ñ‹Ð½': 'cat_home', 'Ð½Ð°Ð²Ð¾Ð»Ð¾Ñ‡Ðº': 'cat_home',
-        'Ð¾Ð´ÐµÑÐ»': 'cat_home', 'Ð¿Ð¾Ð´ÑƒÑˆÐº': 'cat_home', 'ÐºÐ¾Ð²Ñ‘Ñ€': 'cat_home_furn',
-        'ÐºÐ¾Ð²ÐµÑ€': 'cat_home_furn', 'ÑˆÑ‚Ð¾Ñ€Ð°': 'cat_home_furn', 'ÑÐ²ÐµÑ‚Ð¸Ð»ÑŒ': 'cat_home_furn',
-        'Ð»Ð°Ð¼Ð¿Ð°': 'cat_home_furn', 'Ð»ÑŽÑÑ‚Ñ€': 'cat_home_furn', 'Ñ‚Ð¾Ñ€ÑˆÐµÑ€': 'cat_home_furn',
-        'ÐºÑ€ÐµÑÐ»': 'cat_home_furn', 'Ð´Ð¸Ð²Ð°Ð½': 'cat_home_furn', 'ÑÑ‚Ð¾Ð»': 'cat_home_furn',
-        'ÑÑ‚ÑƒÐ»': 'cat_home_furn', 'ÐºÑ€Ð¾Ð²Ð°Ñ‚': 'cat_home_furn', 'ÐºÐ¾Ð¼Ð¾Ð´': 'cat_home_furn',
-        'Ñ‚ÑƒÐ¼Ð±': 'cat_home_furn', 'ÑˆÐºÐ°Ñ„': 'cat_home_furn', 'ÑÑ‚ÐµÐ»Ð»Ð°Ð¶': 'cat_home_furn',
-        'ÐºÑƒÑ€Ñ‚Ðº': 'cat_clo_everyday', 'Ð¿Ð°Ð»ÑŒÑ‚': 'cat_clo_everyday', 'Ð¿ÑƒÑ…Ð¾Ð²': 'cat_clo_everyday',
-        'Ð¿Ð»Ð°Ñ‰': 'cat_clo_everyday', 'Ð¿Ð¸Ð´Ð¶Ð°Ðº': 'cat_clo_everyday', 'ÐºÐ¾ÑÑ‚ÑŽÐ¼': 'cat_clo_everyday',
-        'Ð´Ð¶Ð¸Ð½Ñ': 'cat_clo_everyday', 'Ð±Ñ€ÑŽÐº': 'cat_clo_everyday', 'ÑˆÑ‚Ð°Ð½Ñ‹': 'cat_clo_everyday',
-        'Ñ„ÑƒÑ‚Ð±Ð¾Ð»Ðº': 'cat_clo_everyday', 'Ñ€ÑƒÐ±Ð°ÑˆÐº': 'cat_clo_everyday', 'ÑÐ²Ð¸Ñ‚ÐµÑ€': 'cat_clo_everyday',
-        'Ð²Ð¾Ð´Ð¾Ð»Ð°Ð·': 'cat_clo_everyday', 'Ñ‚Ð¾Ð»ÑÑ‚Ð¾Ð²': 'cat_clo_everyday', 'Ñ…ÑƒÐ´Ð¸': 'cat_clo_everyday',
-        'Ð½Ð¾ÑÐº': 'cat_clo_underwear', 'Ñ‚Ñ€ÑƒÑ': 'cat_clo_underwear', 'Ð¼Ð°Ð¹Ðº': 'cat_clo_underwear',
-        'Ð±Ð¾Ñ‚Ð¸Ð½Ðº': 'cat_clo_shoes', 'ÐºÑ€Ð¾ÑÑÐ¾Ð²': 'cat_clo_shoes', 'Ñ‚ÑƒÑ„Ð»': 'cat_clo_shoes',
-        'ÑÐ°Ð¿Ð¾Ð³': 'cat_clo_shoes', 'Ñ‚Ð°Ð¿Ðº': 'cat_clo_shoes', 'ÑˆÐ»Ñ‘Ð¿Ð°Ð½': 'cat_clo_shoes',
-        'ÑˆÐ°Ñ€Ñ„': 'cat_clo_access', 'ÑˆÐ°Ð¿Ðº': 'cat_clo_access', 'Ñ€ÐµÐ¼ÐµÐ½': 'cat_clo_access',
-        'Ð¿ÐµÑ€Ñ‡Ð°Ñ‚': 'cat_clo_access', 'ÑÑƒÐ¼Ðº': 'cat_clo_access', 'Ñ€ÑŽÐºÐ·Ð°Ðº': 'cat_clo_access',
-        'Ñ‡Ð°ÑÑ‹': 'cat_clo_access', 'Ð±Ñ€Ð°ÑÐ»ÐµÑ‚': 'cat_clo_access', 'Ð¾Ñ‡Ðº': 'cat_clo_access',
-        'Ñ‚ÐµÐ»ÐµÑ„Ð¾Ð½': 'cat_tech', 'Ð½Ð¾ÑƒÑ‚Ð±ÑƒÐº': 'cat_tech', 'Ð¿Ð»Ð°Ð½ÑˆÐµÑ‚': 'cat_tech',
-        'Ð½Ð°ÑƒÑˆÐ½Ð¸Ðº': 'cat_tech', 'ÐºÐ¾Ð»Ð¾Ð½Ðº': 'cat_tech', 'Ñ€Ð¾ÑƒÑ‚ÐµÑ€': 'cat_tech',
-        'Ð¼Ð¾Ð½Ð¸Ñ‚Ð¾Ñ€': 'cat_tech', 'ÐºÐ»Ð°Ð²Ð¸Ð°Ñ‚ÑƒÑ€': 'cat_tech', 'Ð¼Ñ‹ÑˆÐº': 'cat_tech',
-        'ÐºÐ°Ð¼ÐµÑ€': 'cat_tech', 'Ð¿Ñ€Ð¸Ð½Ñ‚ÐµÑ€': 'cat_tech', 'Ð¿Ñ€Ð¾Ð²Ð¾Ð´': 'cat_tech',
-        'Ð·Ð°Ñ€ÑÐ´Ðº': 'cat_tech', 'ÐºÐ°Ð±ÐµÐ»ÑŒ': 'cat_tech', 'Ð°Ð´Ð°Ð¿Ñ‚ÐµÑ€': 'cat_tech',
-        'Ñ…Ð¾Ð»Ð¾Ð´Ð¸Ð»ÑŒ': 'cat_tech', 'Ð¼Ð¸ÐºÑ€Ð¾Ð²Ð¾Ð»Ð½': 'cat_tech', 'Ñ‚Ð¾ÑÑ‚ÐµÑ€': 'cat_tech',
-        'Ð±Ð»ÐµÐ½Ð´ÐµÑ€': 'cat_tech', 'ÐºÐ¾Ñ„ÐµÐ¼Ð¾Ð»Ðº': 'cat_tech', 'Ñ‡Ð°Ð¹Ð½Ð¸Ðº': 'cat_home_kitchen',
-        'ÑÐºÐ¾Ð²Ð¾Ñ€Ð¾Ð´': 'cat_home_kitchen', 'ÐºÐ°ÑÑ‚Ñ€ÑŽÐ»': 'cat_home_kitchen', 'Ð½Ð¾Ð¶': 'cat_home_kitchen',
-        'Ñ‚Ð°Ñ€ÐµÐ»Ðº': 'cat_home_kitchen', 'ÐºÑ€ÑƒÐ¶Ðº': 'cat_home_kitchen', 'Ñ‡Ð°ÑˆÐº': 'cat_home_kitchen',
-        'ÐºÐ¾ÑÐ¼ÐµÑ‚Ð¸Ðº': 'cat_cosmetics', 'ÐºÑ€ÐµÐ¼': 'cat_cosmetics', 'ÑˆÐ°Ð¼Ð¿ÑƒÐ½': 'cat_cosmetics',
-        'ÐºÐ¾Ð½Ð´Ð¸Ñ†Ð¸Ð¾Ð½ÐµÑ€': 'cat_cosmetics', 'Ð¼Ñ‹Ð»': 'cat_cosmetics', 'Ð´ÑƒÑ…': 'cat_cosmetics',
-        'Ð¸Ð³Ñ€ÑƒÑˆÐº': 'cat_hobbies', 'Ð½Ð°ÑÑ‚Ð¾Ð»ÑŒÐ½': 'cat_hobbies', 'ÐºÐ½Ð¸Ð³': 'cat_culture_books',
-        'ÐºÐ¾Ñ€Ð¼': 'cat_pets', 'Ð¸Ð³Ñ€ÑƒÑˆÐº.*Ð¶Ð¸Ð²Ð¾Ñ‚Ð½': 'cat_pets', 'Ð»ÐµÐ¶Ð°Ðº': 'cat_pets',
+        'стремян': 'cat_home', 'пылесос': 'cat_tech', 'утюг': 'cat_home',
+        'утюж': 'cat_home', 'фен': 'cat_cosmetics', 'расчес': 'cat_cosmetics',
+        'щётк': 'cat_home', 'зубн': 'cat_health_med', 'полотен': 'cat_home',
+        'постель': 'cat_home', 'простын': 'cat_home', 'наволочк': 'cat_home',
+        'одеял': 'cat_home', 'подушк': 'cat_home', 'ковёр': 'cat_home_furn',
+        'ковер': 'cat_home_furn', 'штора': 'cat_home_furn', 'светиль': 'cat_home_furn',
+        'лампа': 'cat_home_furn', 'люстр': 'cat_home_furn', 'торшер': 'cat_home_furn',
+        'кресл': 'cat_home_furn', 'диван': 'cat_home_furn', 'стол': 'cat_home_furn',
+        'стул': 'cat_home_furn', 'кроват': 'cat_home_furn', 'комод': 'cat_home_furn',
+        'тумб': 'cat_home_furn', 'шкаф': 'cat_home_furn', 'стеллаж': 'cat_home_furn',
+        'куртк': 'cat_clo_everyday', 'пальт': 'cat_clo_everyday', 'пухов': 'cat_clo_everyday',
+        'плащ': 'cat_clo_everyday', 'пиджак': 'cat_clo_everyday', 'костюм': 'cat_clo_everyday',
+        'джинс': 'cat_clo_everyday', 'брюк': 'cat_clo_everyday', 'штаны': 'cat_clo_everyday',
+        'футболк': 'cat_clo_everyday', 'рубашк': 'cat_clo_everyday', 'свитер': 'cat_clo_everyday',
+        'водолаз': 'cat_clo_everyday', 'толстов': 'cat_clo_everyday', 'худи': 'cat_clo_everyday',
+        'носк': 'cat_clo_underwear', 'трус': 'cat_clo_underwear', 'майк': 'cat_clo_underwear',
+        'ботинк': 'cat_clo_shoes', 'кроссов': 'cat_clo_shoes', 'туфл': 'cat_clo_shoes',
+        'сапог': 'cat_clo_shoes', 'тапк': 'cat_clo_shoes', 'шлёпан': 'cat_clo_shoes',
+        'шарф': 'cat_clo_access', 'шапк': 'cat_clo_access', 'ремен': 'cat_clo_access',
+        'перчат': 'cat_clo_access', 'сумк': 'cat_clo_access', 'рюкзак': 'cat_clo_access',
+        'часы': 'cat_clo_access', 'браслет': 'cat_clo_access', 'очк': 'cat_clo_access',
+        'телефон': 'cat_tech', 'ноутбук': 'cat_tech', 'планшет': 'cat_tech',
+        'наушник': 'cat_tech', 'колонк': 'cat_tech', 'роутер': 'cat_tech',
+        'монитор': 'cat_tech', 'клавиатур': 'cat_tech', 'мышк': 'cat_tech',
+        'камер': 'cat_tech', 'принтер': 'cat_tech', 'провод': 'cat_tech',
+        'зарядк': 'cat_tech', 'кабель': 'cat_tech', 'адаптер': 'cat_tech',
+        'холодиль': 'cat_tech', 'микроволн': 'cat_tech', 'тостер': 'cat_tech',
+        'блендер': 'cat_tech', 'кофемолк': 'cat_tech', 'чайник': 'cat_home_kitchen',
+        'сковород': 'cat_home_kitchen', 'кастрюл': 'cat_home_kitchen', 'нож': 'cat_home_kitchen',
+        'тарелк': 'cat_home_kitchen', 'кружк': 'cat_home_kitchen', 'чашк': 'cat_home_kitchen',
+        'косметик': 'cat_cosmetics', 'крем': 'cat_cosmetics', 'шампун': 'cat_cosmetics',
+        'кондиционер': 'cat_cosmetics', 'мыл': 'cat_cosmetics', 'дух': 'cat_cosmetics',
+        'игрушк': 'cat_hobbies', 'настольн': 'cat_hobbies', 'книг': 'cat_culture_books',
+        'корм': 'cat_pets', 'игрушк.*животн': 'cat_pets', 'лежак': 'cat_pets',
     }
     category = None
     nl = name.lower()
@@ -2512,16 +2519,16 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not category:
         category = 'cat_other'
 
-    # Ð¤Ð¾Ñ€Ð¼Ð¸Ñ€ÑƒÐµÐ¼ notes Ñ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÐµÐ¹ Ð¾ Ð·Ð°Ð¼ÐµÐ½Ðµ
-    notes_parts = ['Ð”Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¾ Ñ‡ÐµÑ€ÐµÐ· /add_item']
+    # Формируем notes с информацией о замене
+    notes_parts = ['Добавлено через /add_item']
     replace_days = bp.get('replace_days')
     if replace_days:
-        notes_parts.append(f'ÐžÐ¶Ð¸Ð´Ð°ÐµÑ‚ÑÑ Ð·Ð°Ð¼ÐµÐ½Ð° Ñ‡ÐµÑ€ÐµÐ· {replace_days} Ð´Ð½.')
+        notes_parts.append(f'Ожидается замена через {replace_days} дн.')
     elif replace_months:
-        notes_parts.append(f'ÐžÐ¶Ð¸Ð´Ð°ÐµÑ‚ÑÑ Ð·Ð°Ð¼ÐµÐ½Ð° Ñ‡ÐµÑ€ÐµÐ· {replace_months} Ð¼ÐµÑ.')
+        notes_parts.append(f'Ожидается замена через {replace_months} мес.')
     notes = '\n'.join(notes_parts)
 
-    # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð² Ð‘Ð”
+    # Сохраняем в БД
     conn = get_db()
     try:
         cur = conn.execute('''
@@ -2536,13 +2543,13 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
-    # Ð•ÑÐ»Ð¸ ÐµÑÑ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾ â€” ÑÐ¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ð¸ Ð¾Ð±Ð¾Ð³Ð°Ñ‰Ð°ÐµÐ¼ Ñ‡ÐµÑ€ÐµÐ· Vision API
+    # Если есть фото — сохраняем и обогащаем через Vision API
     has_photo = False
     vision_enriched = {}
     photos = []
     if update.message and update.message.photo:
         photos = update.message.photo
-    # Ð•ÑÐ»Ð¸ ÑÑ‚Ð¾ reply Ð½Ð° ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ Ñ Ñ„Ð¾Ñ‚Ð¾ â€” Ð±ÐµÑ€Ñ‘Ð¼ Ñ„Ð¾Ñ‚Ð¾ Ð¸Ð· Ð¾Ñ€Ð¸Ð³Ð¸Ð½Ð°Ð»ÑŒÐ½Ð¾Ð³Ð¾ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ñ
+    # Если это reply на сообщение с фото — берём фото из оригинального сообщения
     elif update.message and update.message.reply_to_message and update.message.reply_to_message.photo:
         photos = update.message.reply_to_message.photo
         log.info(f'add_item: using photo from reply_to_message {update.message.reply_to_message.message_id}')
@@ -2553,7 +2560,7 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             file = await best.get_file()
             file_bytes = await file.download_as_bytearray()
 
-            # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾
+            # Сохраняем фото
             import memory_lane as _ml
             media_dir = os.path.join(os.path.dirname(DB_PATH), 'data', 'media')
             mconn = get_db()
@@ -2569,7 +2576,7 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             finally:
                 mconn.close()
 
-            # Vision API Ð¾Ð±Ð¾Ð³Ð°Ñ‰ÐµÐ½Ð¸Ðµ: Ð±Ñ€ÐµÐ½Ð´, Ñ†Ð²ÐµÑ‚, Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸Ðµ
+            # Vision API обогащение: бренд, цвет, описание
             try:
                 tmp_path = os.path.join(RECEIPTS_DIR, f'_additem_{update.message.message_id}.jpg')
                 with open(tmp_path, 'wb') as fh:
@@ -2581,10 +2588,10 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
                 if vision_enriched and 'error' not in vision_enriched:
-                    # Ð‘Ñ€ÐµÐ½Ð´ Ð¸Ð· Ñ‚ÐµÐºÑÑ‚Ð° Ð¿Ñ€Ð¸Ð¾Ñ€Ð¸Ñ‚ÐµÑ‚Ð½ÐµÐµ, Vision ÐºÐ°Ðº fallback
+                    # Бренд из текста приоритетнее, Vision как fallback
                     if not brand and vision_enriched.get('brand'):
                         brand = vision_enriched['brand']
-                    # ÐžÐ±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ Ð·Ð°Ð¿Ð¸ÑÑŒ Ð² Ð‘Ð”: attributes + notes
+                    # Обновляем запись в БД: attributes + notes
                     uconn = get_db()
                     attrs = json.dumps({
                         'color': vision_enriched.get('color'),
@@ -2593,16 +2600,16 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         'material': vision_enriched.get('material'),
                         'estimated_price_rub': vision_enriched.get('estimated_price_rub'),
                     }, ensure_ascii=False)
-                    # Ð”Ð¾Ð¿Ð¾Ð»Ð½ÑÐµÐ¼ notes Ð´Ð°Ð½Ð½Ñ‹Ð¼Ð¸ Ð¾Ñ‚ Vision
+                    # Дополняем notes данными от Vision
                     vision_notes = []
                     if vision_enriched.get('color'):
-                        vision_notes.append(f"Ð¦Ð²ÐµÑ‚: {vision_enriched['color']}")
+                        vision_notes.append(f"Цвет: {vision_enriched['color']}")
                     if vision_enriched.get('material'):
-                        vision_notes.append(f"ÐœÐ°Ñ‚ÐµÑ€Ð¸Ð°Ð»: {vision_enriched['material']}")
+                        vision_notes.append(f"Материал: {vision_enriched['material']}")
                     if vision_enriched.get('description'):
-                        vision_notes.append(f"ÐžÐ¿Ð¸ÑÐ°Ð½Ð¸Ðµ: {vision_enriched['description']}")
+                        vision_notes.append(f"Описание: {vision_enriched['description']}")
                     if vision_enriched.get('estimated_price_rub'):
-                        vision_notes.append(f"ÐžÑ†ÐµÐ½Ð¾Ñ‡Ð½Ð°Ñ Ñ†ÐµÐ½Ð°: ~{vision_enriched['estimated_price_rub']} â‚½")
+                        vision_notes.append(f"Оценочная цена: ~{vision_enriched['estimated_price_rub']} ₽")
                     if vision_notes:
                         new_notes = notes + '\n' + '\n'.join(vision_notes)
                         uconn.execute(
@@ -2620,42 +2627,42 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.warning(f'add_item photo save failed: {e}')
 
-    # Ð¤Ð¾Ñ€Ð¼Ð¸Ñ€ÑƒÐµÐ¼ Ð¾Ñ‚Ð²ÐµÑ‚
-    lines = [f'âœ… Ð”Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¾: *{esc_md(name)}*']
+    # Формируем ответ
+    lines = [f'✅ Добавлено: *{esc_md(name)}*']
     if brand:
-        lines.append(f'ðŸ· Ð‘Ñ€ÐµÐ½Ð´: {esc_md(brand)}')
-    lines.append(f'ðŸ“‚ ÐšÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ: {esc_md(category)}')
+        lines.append(f'🏷 Бренд: {esc_md(brand)}')
+    lines.append(f'📂 Категория: {esc_md(category)}')
     if replace_days:
-        lines.append(f'ðŸ”„ Ð—Ð°Ð¼ÐµÐ½Ð°: Ñ‡ÐµÑ€ÐµÐ· {replace_days} Ð´Ð½.')
+        lines.append(f'🔄 Замена: через {replace_days} дн.')
     elif replace_months:
-        lines.append(f'ðŸ”„ Ð—Ð°Ð¼ÐµÐ½Ð°: Ñ‡ÐµÑ€ÐµÐ· {replace_months} Ð¼ÐµÑ.')
+        lines.append(f'🔄 Замена: через {replace_months} мес.')
     if vision_enriched and 'error' not in vision_enriched:
         if vision_enriched.get('color'):
-            lines.append(f'ðŸŽ¨ Ð¦Ð²ÐµÑ‚: {vision_enriched["color"]}')
+            lines.append(f'🎨 Цвет: {vision_enriched["color"]}')
         if vision_enriched.get('description'):
-            lines.append(f'ðŸ“ {vision_enriched["description"]}')
+            lines.append(f'📝 {vision_enriched["description"]}')
         if vision_enriched.get('style_tags'):
-            lines.append(f'ðŸ·ï¸ Ð¢ÐµÐ³Ð¸: {", ".join(vision_enriched["style_tags"])}')
+            lines.append(f'🏷️ Теги: {", ".join(vision_enriched["style_tags"])}')
         if vision_enriched.get('estimated_price_rub'):
-            lines.append(f'ðŸ’° ÐžÑ†ÐµÐ½ÐºÐ°: ~{vision_enriched["estimated_price_rub"]} â‚½')
+            lines.append(f'💰 Оценка: ~{vision_enriched["estimated_price_rub"]} ₽')
     if has_photo:
-        lines.append('ðŸ“¸ Ð¤Ð¾Ñ‚Ð¾ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¾')
+        lines.append('📸 Фото сохранено')
     lines.append(f'\nID: {item_id}')
 
-    # ÐšÐ½Ð¾Ð¿ÐºÐ° ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ñ
+    # Кнопка удаления
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton('ðŸ—‘ Ð£Ð´Ð°Ð»Ð¸Ñ‚ÑŒ', callback_data=f'item_delete:{item_id}')
+        InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}')
     ]])
 
     await update.message.reply_text('\n'.join(lines), parse_mode='Markdown', reply_markup=kb)
 
 
 async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /items â€” ÑÐ¿Ð¸ÑÐ¾Ðº Ð²ÐµÑ‰ÐµÐ¹ Ñ Ð³Ñ€ÑƒÐ¿Ð¿Ð¸Ñ€Ð¾Ð²ÐºÐ¾Ð¹ Ð¸ ÑÑ€Ð¾ÐºÐ°Ð¼Ð¸ Ð·Ð°Ð¼ÐµÐ½Ñ‹.
-    /items â€” Ð²ÑÐµ Ð²ÐµÑ‰Ð¸, ÐºÐ¾Ñ‚Ð¾Ñ€Ñ‹Ð¼ ÑÐºÐ¾Ñ€Ð¾ Ð½ÑƒÐ¶Ð½Ð° Ð·Ð°Ð¼ÐµÐ½Ð°
-    /items all â€” Ð²ÑÐµ Ð²ÐµÑ‰Ð¸
-    /items <ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ> â€” Ð²ÐµÑ‰Ð¸ Ð¿Ð¾ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¸"""
+    """Команда /items — список вещей с группировкой и сроками замены.
+    /items — все вещи, которым скоро нужна замена
+    /items all — все вещи
+    /items <категория> — вещи по категории"""
     conn = get_db()
     try:
         all_items = conn.execute('''
@@ -2673,15 +2680,15 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not all_items:
-        await update.message.reply_text('ðŸ“­ Ð’ Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€Ðµ Ð¿Ð¾ÐºÐ° Ð½ÐµÑ‚ Ð²ÐµÑ‰ÐµÐ¹. Ð”Ð¾Ð±Ð°Ð²ÑŒÑ‚Ðµ Ñ‡ÐµÑ€ÐµÐ· /add_item')
+        await update.message.reply_text('📭 В инвентаре пока нет вещей. Добавьте через /add_item')
         return
 
     today = datetime.now().date()
 
-    # Ð¤Ð¸Ð»ÑŒÑ‚Ñ€
+    # Фильтр
     args = ' '.join(ctx.args).lower() if ctx.args else ''
     if args and args != 'all':
-        # ÐŸÐ¾Ð¸ÑÐº Ð¿Ð¾ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸ÑŽ, Ð±Ñ€ÐµÐ½Ð´Ñƒ, ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¸, Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸ÑŽ, Ñ‚ÐµÐ³Ð°Ð¼
+        # Поиск по названию, бренду, категории, описанию, тегам
         filtered = []
         for r in all_items:
             name = (r[1] or '').lower()
@@ -2704,11 +2711,11 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif args == 'all':
         filtered = all_items
     else:
-        # ÐŸÐ¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ: Ñ‚Ðµ, Ñƒ ÐºÐ¾Ð³Ð¾ ÐµÑÑ‚ÑŒ replace_after_months/days Ð¸Ð»Ð¸ lifespan_months, Ð¸ Ð¾Ð½Ð¸ Ð¸ÑÑ‚ÐµÐºÐ°ÑŽÑ‚
+        # По умолчанию: те, у кого есть replace_after_months/days или lifespan_months, и они истекают
         filtered = []
         for r in all_items:
-            rep_days = r[8]  # replace_after_days (Ñ‚Ð¾Ñ‡Ð½Ð¾Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ðµ)
-            rep_months = r[7] or r[4]  # replace_after_months, Ð¿Ð¾Ñ‚Ð¾Ð¼ lifespan_months
+            rep_days = r[8]  # replace_after_days (точное значение)
+            rep_months = r[7] or r[4]  # replace_after_months, потом lifespan_months
             if not rep_months and not rep_days:
                 continue
             purchase = r[5]
@@ -2720,21 +2727,21 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     else:
                         replace_date = add_months_safe(pd, rep_months)
                     days_left = (replace_date - today).days
-                    if days_left <= 90:  # Ð±Ð»Ð¸Ð¶Ð°Ð¹ÑˆÐ¸Ðµ 3 Ð¼ÐµÑÑÑ†Ð°
+                    if days_left <= 90:  # ближайшие 3 месяца
                         filtered.append((days_left, r))
                 except (TypeError, ValueError) as e:
-                    log.warning('ÐÐµ ÑƒÐ´Ð°Ð»Ð¾ÑÑŒ Ð²Ñ‹Ñ‡Ð¸ÑÐ»Ð¸Ñ‚ÑŒ ÑÑ€Ð¾Ðº Ð·Ð°Ð¼ÐµÐ½Ñ‹ Ð´Ð»Ñ item_id=%s: %s', r[0], e)
+                    log.warning('Не удалось вычислить срок замены для item_id=%s: %s', r[0], e)
         filtered.sort(key=lambda x: x[0])
         filtered = [r[1] for r in filtered]
         if not filtered:
-            # Ð•ÑÐ»Ð¸ Ð½ÐµÑ‚ Ð²ÐµÑ‰ÐµÐ¹ Ðº Ð·Ð°Ð¼ÐµÐ½Ðµ, Ð¿Ð¾ÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÐ¼ Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ Ð´Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ðµ
+            # Если нет вещей к замене, показываем последние добавленные
             filtered = all_items[-10:]
 
     if not filtered:
-        await update.message.reply_text('ðŸ“­ ÐÐ¸Ñ‡ÐµÐ³Ð¾ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ð¿Ð¾ Ð²Ð°ÑˆÐµÐ¼Ñƒ Ð·Ð°Ð¿Ñ€Ð¾ÑÑƒ.')
+        await update.message.reply_text('📭 Ничего не найдено по вашему запросу.')
         return
 
-    # Ð“Ñ€ÑƒÐ¿Ð¿Ð¸Ñ€ÑƒÐµÐ¼ Ð¿Ð¾ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸ÑÐ¼
+    # Группируем по категориям
     by_cat = {}
     for r in filtered:
         cat = r[3] or 'cat_other'
@@ -2742,30 +2749,30 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             by_cat[cat] = []
         by_cat[cat].append(r)
 
-    # Ð§ÐµÐ»Ð¾Ð²ÐµÑ‡ÐµÑÐºÐ¸Ðµ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ñ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¹
+    # Человеческие названия категорий
     cat_names = {
-        'cat_clo_everyday': 'ðŸ‘• ÐŸÐ¾Ð²ÑÐµÐ´Ð½ÐµÐ²Ð½Ð°Ñ Ð¾Ð´ÐµÐ¶Ð´Ð°',
-        'cat_clo_underwear': 'ðŸ‘™ ÐÐ¸Ð¶Ð½ÐµÐµ Ð±ÐµÐ»ÑŒÑ‘ / Ð½Ð¾ÑÐºÐ¸',
-        'cat_clo_shoes': 'ðŸ‘Ÿ ÐžÐ±ÑƒÐ²ÑŒ',
-        'cat_clo_access': 'ðŸ§£ ÐÐºÑÐµÑÑÑƒÐ°Ñ€Ñ‹',
-        'cat_tech': 'ðŸ’» Ð¢ÐµÑ…Ð½Ð¸ÐºÐ°',
-        'cat_home': 'ðŸ  Ð¥Ð¾Ð·Ñ‚Ð¾Ð²Ð°Ñ€Ñ‹',
-        'cat_home_furn': 'ðŸª‘ ÐœÐµÐ±ÐµÐ»ÑŒ',
-        'cat_home_kitchen': 'ðŸ³ ÐšÑƒÑ…Ð½Ñ',
-        'cat_cosmetics': 'ðŸ§´ ÐšÐ¾ÑÐ¼ÐµÑ‚Ð¸ÐºÐ°',
-        'cat_health_med': 'ðŸ’Š Ð—Ð´Ð¾Ñ€Ð¾Ð²ÑŒÐµ',
-        'cat_culture_books': 'ðŸ“š ÐšÐ½Ð¸Ð³Ð¸',
-        'cat_hobbies': 'ðŸŽ® Ð¥Ð¾Ð±Ð±Ð¸',
-        'cat_pets': 'ðŸ¾ Ð–Ð¸Ð²Ð¾Ñ‚Ð½Ñ‹Ðµ',
-        'cat_sport': 'ðŸ‹ï¸ Ð¡Ð¿Ð¾Ñ€Ñ‚',
-        'cat_auto': 'ðŸš— ÐÐ²Ñ‚Ð¾',
-        'cat_food': 'ðŸŽ ÐŸÑ€Ð¾Ð´ÑƒÐºÑ‚Ñ‹',
-        'cat_other': 'ðŸ“¦ ÐŸÑ€Ð¾Ñ‡ÐµÐµ',
+        'cat_clo_everyday': '👕 Повседневная одежда',
+        'cat_clo_underwear': '👙 Нижнее бельё / носки',
+        'cat_clo_shoes': '👟 Обувь',
+        'cat_clo_access': '🧣 Аксессуары',
+        'cat_tech': '💻 Техника',
+        'cat_home': '🏠 Хозтовары',
+        'cat_home_furn': '🪑 Мебель',
+        'cat_home_kitchen': '🍳 Кухня',
+        'cat_cosmetics': '🧴 Косметика',
+        'cat_health_med': '💊 Здоровье',
+        'cat_culture_books': '📚 Книги',
+        'cat_hobbies': '🎮 Хобби',
+        'cat_pets': '🐾 Животные',
+        'cat_sport': '🏋️ Спорт',
+        'cat_auto': '🚗 Авто',
+        'cat_food': '🍎 Продукты',
+        'cat_other': '📦 Прочее',
     }
 
-    lines = ['ðŸ“‹ *Ð˜Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ:*']
+    lines = ['📋 *Инвентарь:*']
     for cat, items in sorted(by_cat.items()):
-        cat_label = cat_names.get(cat, f'ðŸ“ {cat}')
+        cat_label = cat_names.get(cat, f'📁 {cat}')
         lines.append(f'\n*{cat_label}:*')
         for r in items:
             name = r[1]
@@ -2777,38 +2784,38 @@ async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if brand:
                 name_str += f' ({esc_md(brand)})'
 
-            # Ð¡Ñ€Ð¾Ðº Ð·Ð°Ð¼ÐµÐ½Ñ‹
+            # Срок замены
             if rep and purchase:
                 try:
                     pd = datetime.strptime(purchase[:10], '%Y-%m-%d').date()
                     replace_date = add_months_safe(pd, rep)
                     days = (replace_date - today).days
                     if days <= 0:
-                        suffix = ' ðŸ”´ ÐŸÐ¾Ñ€Ð° Ð¼ÐµÐ½ÑÑ‚ÑŒ!'
+                        suffix = ' 🔴 Пора менять!'
                     elif days <= 30:
-                        suffix = f' ðŸŸ¡ Ð§ÐµÑ€ÐµÐ· {days} Ð´Ð½.'
+                        suffix = f' 🟡 Через {days} дн.'
                     else:
                         suffix = ''
                 except (TypeError, ValueError) as e:
-                    log.warning('ÐÐµ ÑƒÐ´Ð°Ð»Ð¾ÑÑŒ Ð¿Ð¾ÐºÐ°Ð·Ð°Ñ‚ÑŒ ÑÑ€Ð¾Ðº Ð·Ð°Ð¼ÐµÐ½Ñ‹ Ð´Ð»Ñ item_id=%s: %s', r[0], e)
+                    log.warning('Не удалось показать срок замены для item_id=%s: %s', r[0], e)
                     suffix = ''
             else:
                 suffix = ''
 
-            lines.append(f'  â€¢ {name_str}{suffix}')
+            lines.append(f'  • {name_str}{suffix}')
 
-    lines.append(f'\nÐ’ÑÐµÐ³Ð¾: {len(filtered)} Ð²ÐµÑ‰ÐµÐ¹')
+    lines.append(f'\nВсего: {len(filtered)} вещей')
     if not args or args == 'all':
-        lines.append('\n/items all â€” Ð¿Ð¾ÐºÐ°Ð·Ð°Ñ‚ÑŒ Ð²ÑÑ‘')
-        lines.append('/items <ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ> â€” Ñ„Ð¸Ð»ÑŒÑ‚Ñ€')
+        lines.append('\n/items all — показать всё')
+        lines.append('/items <категория> — фильтр')
 
     await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
 
 
 async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐšÐ¾Ð¼Ð°Ð½Ð´Ð° /items_full â€” Ð¿Ð¾Ð»Ð½Ñ‹Ð¹ Ð²Ñ‹Ð²Ð¾Ð´ Ñ Ñ„Ð¾Ñ‚Ð¾ Ð¸ Ð²ÑÐµÐ¼Ð¸ Ð´Ð°Ð½Ð½Ñ‹Ð¼Ð¸.
-    /items_full all â€” Ð²ÑÐµ Ð²ÐµÑ‰Ð¸ Ñ Ð¿Ð¾Ð»Ð½Ð¾Ð¹ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÐµÐ¹
-    /items_full â€” Ð²ÐµÑ‰Ð¸ Ñ Ð·Ð°Ð¼ÐµÐ½Ð¾Ð¹ <30 Ð´Ð½ÐµÐ¹ (Ñ ðŸ”´)"""
+    """Команда /items_full — полный вывод с фото и всеми данными.
+    /items_full all — все вещи с полной информацией
+    /items_full — вещи с заменой <30 дней (с 🔴)"""
     log.info(f'cmd_items_full called by chat_id={update.effective_chat.id if update.effective_chat else None}, args={ctx.args}')
     conn = get_db()
     try:
@@ -2823,7 +2830,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
               AND i.data_origin IN ('manual', 'local', 'vision_photo', 'telegram_photo', 'telegram_tag')
             ORDER BY i.category_id, i.name
         ''').fetchall()
-        # Ð—Ð°Ð³Ñ€ÑƒÐ¶Ð°ÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ (file_path Ð¸Ð· media_assets)
+        # Загружаем фото (file_path из media_assets)
         photos = {}
         for row in conn.execute('''
             SELECT ip.item_id, ma.file_path 
@@ -2836,7 +2843,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not all_items:
-        await update.message.reply_text('ðŸ“­ Ð’ Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€Ðµ Ð¿Ð¾ÐºÐ° Ð½ÐµÑ‚ Ð²ÐµÑ‰ÐµÐ¹.')
+        await update.message.reply_text('📭 В инвентаре пока нет вещей.')
         return
 
     today = datetime.now().date()
@@ -2845,7 +2852,7 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if args == 'all':
         filtered = all_items
     elif args:
-        # Ð¤Ð¸Ð»ÑŒÑ‚Ñ€ Ð¿Ð¾ Ð½Ð°Ð·Ð²Ð°Ð½Ð¸ÑŽ, Ð±Ñ€ÐµÐ½Ð´Ñƒ, Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸ÑŽ, ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ð¸
+        # Фильтр по названию, бренду, описанию, категории
         filtered = []
         for r in all_items:
             name = (r[1] or '').lower()
@@ -2862,12 +2869,12 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             color = (attrs.get('color') or '').lower()
             material = (attrs.get('material') or '').lower()
             
-            # Ð˜Ñ‰ÐµÐ¼ Ð²Ð¾ Ð²ÑÐµÑ… Ð¿Ð¾Ð»ÑÑ…
+            # Ищем во всех полях
             search_text = f'{name} {brand} {cat} {notes} {desc} {tags} {color} {material}'
             if args in search_text:
                 filtered.append(r)
     else:
-        # ÐŸÐ¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ: Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ Ð·Ð°Ð¼ÐµÐ½Ð¾Ð¹ <30 Ð´Ð½ÐµÐ¹ (ðŸ”´)
+        # По умолчанию: только с заменой <30 дней (🔴)
         filtered = []
         for r in all_items:
             rep_days = r[8]  # replace_after_days
@@ -2889,34 +2896,34 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     continue
 
     if not filtered:
-        await update.message.reply_text('ðŸ“­ ÐÐ¸Ñ‡ÐµÐ³Ð¾ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾. Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐ¹ /items_full all Ð¸Ð»Ð¸ /items_full <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ>')
+        await update.message.reply_text('📭 Ничего не найдено. Используй /items_full all или /items_full <название>')
         return
 
     cat_names = {
-        'cat_clo_everyday': 'ðŸ‘• ÐŸÐ¾Ð²ÑÐµÐ´Ð½ÐµÐ²Ð½Ð°Ñ Ð¾Ð´ÐµÐ¶Ð´Ð°',
-        'cat_clo_underwear': 'ðŸ‘™ ÐÐ¸Ð¶Ð½ÐµÐµ Ð±ÐµÐ»ÑŒÑ‘ / Ð½Ð¾ÑÐºÐ¸',
-        'cat_clo_shoes': 'ðŸ‘Ÿ ÐžÐ±ÑƒÐ²ÑŒ',
-        'cat_clo_access': 'ðŸ§£ ÐÐºÑÐµÑÑÑƒÐ°Ñ€Ñ‹',
-        'cat_tech': 'ðŸ’» Ð¢ÐµÑ…Ð½Ð¸ÐºÐ°',
-        'cat_home': 'ðŸ  Ð¥Ð¾Ð·Ñ‚Ð¾Ð²Ð°Ñ€Ñ‹',
-        'cat_home_furn': 'ðŸª‘ ÐœÐµÐ±ÐµÐ»ÑŒ',
-        'cat_home_kitchen': 'ðŸ³ ÐšÑƒÑ…Ð½Ñ',
-        'cat_cosmetics': 'ðŸ§´ ÐšÐ¾ÑÐ¼ÐµÑ‚Ð¸ÐºÐ°',
-        'cat_health_med': 'ðŸ’Š Ð—Ð´Ð¾Ñ€Ð¾Ð²ÑŒÐµ',
-        'cat_culture_books': 'ðŸ“š ÐšÐ½Ð¸Ð³Ð¸',
-        'cat_hobbies': 'ðŸŽ® Ð¥Ð¾Ð±Ð±Ð¸',
-        'cat_pets': 'ðŸ¾ Ð–Ð¸Ð²Ð¾Ñ‚Ð½Ñ‹Ðµ',
-        'cat_sport': 'ðŸ‹ï¸ Ð¡Ð¿Ð¾Ñ€Ñ‚',
-        'cat_auto': 'ðŸš— ÐÐ²Ñ‚Ð¾',
-        'cat_food': 'ðŸŽ ÐŸÑ€Ð¾Ð´ÑƒÐºÑ‚Ñ‹',
-        'cat_other': 'ðŸ“¦ ÐŸÑ€Ð¾Ñ‡ÐµÐµ',
+        'cat_clo_everyday': '👕 Повседневная одежда',
+        'cat_clo_underwear': '👙 Нижнее бельё / носки',
+        'cat_clo_shoes': '👟 Обувь',
+        'cat_clo_access': '🧣 Аксессуары',
+        'cat_tech': '💻 Техника',
+        'cat_home': '🏠 Хозтовары',
+        'cat_home_furn': '🪑 Мебель',
+        'cat_home_kitchen': '🍳 Кухня',
+        'cat_cosmetics': '🧴 Косметика',
+        'cat_health_med': '💊 Здоровье',
+        'cat_culture_books': '📚 Книги',
+        'cat_hobbies': '🎮 Хобби',
+        'cat_pets': '🐾 Животные',
+        'cat_sport': '🏋️ Спорт',
+        'cat_auto': '🚗 Авто',
+        'cat_food': '🍎 Продукты',
+        'cat_other': '📦 Прочее',
     }
 
-    # ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ ÐºÐ°Ð¶Ð´Ñ‹Ð¹ item Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ñ‹Ð¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸ÐµÐ¼ (Ñ Ñ„Ð¾Ñ‚Ð¾ ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ)
+    # Отправляем каждый item отдельным сообщением (с фото если есть)
     import asyncio
     for idx, r in enumerate(filtered):
         item_id = r[0]
-        # Ð—Ð°Ð´ÐµÑ€Ð¶ÐºÐ° Ð¼ÐµÐ¶Ð´Ñƒ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸ÑÐ¼Ð¸ Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ð¸Ð·Ð±ÐµÐ¶Ð°Ñ‚ÑŒ rate limit
+        # Задержка между сообщениями чтобы избежать rate limit
         if idx > 0:
             await asyncio.sleep(0.5)
         name = r[1]
@@ -2932,12 +2939,12 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except json.JSONDecodeError:
             pass
 
-        # Ð—Ð°Ð³Ð¾Ð»Ð¾Ð²Ð¾Ðº
+        # Заголовок
         header = f'*{esc_md(name)}*'
         if brand:
             header += f' ({esc_md(brand)})'
 
-        # Ð¡Ñ‚Ð°Ñ‚ÑƒÑ Ð·Ð°Ð¼ÐµÐ½Ñ‹
+        # Статус замены
         status_line = ''
         rep_days = r[8]
         rep_months = r[7] or r[4]
@@ -2950,39 +2957,39 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     replace_date = add_months_safe(pd, rep_months)
                 days = (replace_date - today).days
                 if days <= 0:
-                    status_line = 'ðŸ”´ *ÐŸÐžÐ Ð ÐœÐ•ÐÐ¯Ð¢Ð¬!*'
+                    status_line = '🔴 *ПОРА МЕНЯТЬ!*'
                 elif days <= 30:
-                    status_line = f'ðŸŸ¡ Ð—Ð°Ð¼ÐµÐ½Ð° Ñ‡ÐµÑ€ÐµÐ· *{days} Ð´Ð½.*'
+                    status_line = f'🟡 Замена через *{days} дн.*'
                 else:
-                    status_line = f'ðŸŸ¢ Ð—Ð°Ð¼ÐµÐ½Ð° Ñ‡ÐµÑ€ÐµÐ· {days} Ð´Ð½.'
+                    status_line = f'🟢 Замена через {days} дн.'
             except (TypeError, ValueError):
                 pass
 
-        # Ð”ÐµÑ‚Ð°Ð»Ð¸
+        # Детали
         details = []
         cat_label = cat_names.get(cat, cat)
-        details.append(f'ðŸ“‚ {cat_label}')
+        details.append(f'📂 {cat_label}')
         if attrs.get('color'):
-            details.append(f'ðŸŽ¨ Ð¦Ð²ÐµÑ‚: {attrs["color"]}')
+            details.append(f'🎨 Цвет: {attrs["color"]}')
         if attrs.get('material'):
-            details.append(f'ðŸ§µ ÐœÐ°Ñ‚ÐµÑ€Ð¸Ð°Ð»: {attrs["material"]}')
+            details.append(f'🧵 Материал: {attrs["material"]}')
         if attrs.get('description'):
-            details.append(f'ðŸ“ {attrs["description"]}')
+            details.append(f'📝 {attrs["description"]}')
         if attrs.get('style_tags'):
-            details.append(f'ðŸ·ï¸ Ð¢ÐµÐ³Ð¸: {", ".join(attrs["style_tags"])}')
+            details.append(f'🏷️ Теги: {", ".join(attrs["style_tags"])}')
         if attrs.get('estimated_price_rub'):
-            details.append(f'ðŸ’° ÐžÑ†ÐµÐ½ÐºÐ°: ~{attrs["estimated_price_rub"]} â‚½')
+            details.append(f'💰 Оценка: ~{attrs["estimated_price_rub"]} ₽')
         if notes:
-            # Ð£Ð±Ð¸Ñ€Ð°ÐµÐ¼ ÑÐ»ÑƒÐ¶ÐµÐ±Ð½Ñ‹Ðµ ÑÑ‚Ñ€Ð¾ÐºÐ¸ Ð¸ Vision-Ð´Ð°Ð½Ð½Ñ‹Ðµ (ÑƒÐ¶Ðµ Ð¿Ð¾ÐºÐ°Ð·Ð°Ð½Ñ‹ Ð² attributes)
-            clean_notes = notes.replace('Ð”Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¾ Ñ‡ÐµÑ€ÐµÐ· /add_item', '').strip()
-            # Ð£Ð±Ð¸Ñ€Ð°ÐµÐ¼ ÑÑ‚Ñ€Ð¾ÐºÐ¸ Ñ Ñ†Ð²ÐµÑ‚Ð¾Ð¼, Ð¼Ð°Ñ‚ÐµÑ€Ð¸Ð°Ð»Ð¾Ð¼, Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸ÐµÐ¼, Ñ†ÐµÐ½Ð¾Ð¹ (Ð´ÑƒÐ±Ð»Ð¸ Ð¸Ð· Vision)
-            for prefix in ['Ð¦Ð²ÐµÑ‚:', 'ÐœÐ°Ñ‚ÐµÑ€Ð¸Ð°Ð»:', 'ÐžÐ¿Ð¸ÑÐ°Ð½Ð¸Ðµ:', 'ÐžÑ†ÐµÐ½Ð¾Ñ‡Ð½Ð°Ñ Ñ†ÐµÐ½Ð°:']:
+            # Убираем служебные строки и Vision-данные (уже показаны в attributes)
+            clean_notes = notes.replace('Добавлено через /add_item', '').strip()
+            # Убираем строки с цветом, материалом, описанием, ценой (дубли из Vision)
+            for prefix in ['Цвет:', 'Материал:', 'Описание:', 'Оценочная цена:']:
                 clean_notes = '\n'.join(
                     line for line in clean_notes.split('\n') 
                     if not line.strip().startswith(prefix)
                 ).strip()
             if clean_notes:
-                details.append(f'ðŸ“‹ {clean_notes[:200]}')
+                details.append(f'📋 {clean_notes[:200]}')
 
         text = f'{header}\n'
         if status_line:
@@ -2990,20 +2997,20 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text += '\n'.join(details)
         text += f'\n\nID: `{item_id}`'
 
-        # Ð¤Ð¾Ñ€Ð¼Ð¸Ñ€ÑƒÐµÐ¼ ÐºÐ½Ð¾Ð¿ÐºÐ¸
+        # Формируем кнопки
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         buttons = []
         
-        # ÐšÐ½Ð¾Ð¿ÐºÐ° Ñ„Ð¾Ñ‚Ð¾ ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ
+        # Кнопка фото если есть
         photo_path = photos.get(item_id)
         has_photo = photo_path and os.path.exists(photo_path)
         
         if has_photo:
-            buttons.append(InlineKeyboardButton('ðŸ“· Ð¤Ð¾Ñ‚Ð¾', callback_data=f'item_photo:{item_id}'))
+            buttons.append(InlineKeyboardButton('📷 Фото', callback_data=f'item_photo:{item_id}'))
         
-        # ÐšÐ½Ð¾Ð¿ÐºÐ° ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ñ ÐµÑÐ»Ð¸ Ð·Ð°Ð¼ÐµÐ½Ð° <30 Ð´Ð½ÐµÐ¹
-        if status_line and ('ðŸ”´' in status_line or 'ðŸŸ¡' in status_line):
-            buttons.append(InlineKeyboardButton('ðŸ—‘ Ð£Ð´Ð°Ð»Ð¸Ñ‚ÑŒ', callback_data=f'item_delete:{item_id}'))
+        # Кнопка удаления если замена <30 дней
+        if status_line and ('🔴' in status_line or '🟡' in status_line):
+            buttons.append(InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}'))
         
         kb = InlineKeyboardMarkup([buttons]) if buttons else None
 
@@ -3012,39 +3019,39 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        'ðŸ›’ Consumption Agent\n\n'
-        'ÐšÐ¾Ð¼Ð°Ð½Ð´Ñ‹:\n'
-        '/list â€” Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ Ð¿Ð¾ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸ÑÐ¼\n'
-        '/alerts â€” Ð°Ð»ÐµÑ€Ñ‚Ñ‹ (Ð³Ð°Ñ€Ð°Ð½Ñ‚Ð¸Ð¸, ÑÑ€Ð¾ÐºÐ¸)\n'
-        '/find_car 3Ñ‡ 80ÐºÐ¼ â€” Ð¿Ð¾Ð´Ð±Ð¾Ñ€ Ñ‚Ð°Ñ€Ð¸Ñ„Ð° ÐºÐ°Ñ€ÑˆÐµÑ€Ð¸Ð½Ð³Ð°\n'
-        '/last_drives â€” Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ Ð¿Ð¾ÐµÐ·Ð´ÐºÐ¸ ÐºÐ°Ñ€ÑˆÐµÑ€Ð¸Ð½Ð³Ð° (Ð²ÑÐµ Ð¿Ñ€Ð¾Ð²Ð°Ð¹Ð´ÐµÑ€Ñ‹)\n'
-        '/debts â€” Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ° ÐºÑ€ÐµÐ´Ð¸Ñ‚Ð¾Ð² Ð¸ Ð·Ð°Ð¹Ð¼Ð¾Ð² Ð¿Ð¾ Ð¿Ð¾Ñ‡Ñ‚Ð°Ð¼ + SMS\n'
-        '/fines â€” Ð½ÐµÐ¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð½Ñ‹Ðµ ÑˆÑ‚Ñ€Ð°Ñ„Ñ‹\n'
-        '/dayexp â€” Ñ€Ð°ÑÑ…Ð¾Ð´Ñ‹ Ð·Ð° ÑÐµÐ³Ð¾Ð´Ð½Ñ Ñ Ñ€Ð°ÑÑˆÐ¸Ñ„Ñ€Ð¾Ð²ÐºÐ¾Ð¹\n'
-        '/monthexp â€” Ñ€Ð°ÑÑ…Ð¾Ð´Ñ‹ Ð·Ð° Ð¼ÐµÑÑÑ† Ñ Ñ€Ð°ÑÑˆÐ¸Ñ„Ñ€Ð¾Ð²ÐºÐ¾Ð¹ Ð¿Ð¾ Ð´Ð½ÑÐ¼\n'
-        '/warranties â€” Ð¾Ñ‚Ñ‡Ñ‘Ñ‚ Ð¿Ð¾ Ð³Ð°Ñ€Ð°Ð½Ñ‚Ð¸ÑÐ¼\n'
-        '/add <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ> [<Ñ†ÐµÐ½Ð°>] [<ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ>] â€” Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ñ‚Ð¾Ð²Ð°Ñ€\n'
-        '/add_photo â€” Ð·Ð°Ð³Ñ€ÑƒÐ·Ð¸Ñ‚ÑŒ Ñ„Ð¾Ñ‚Ð¾ Ñ‡ÐµÐºÐ° (OCR)\n'
-        '/check â€” ÑÑ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°\n'
-        '/add_item <Ð½Ð°Ð·Ð²Ð°Ð½Ð¸Ðµ> [| Ð±Ñ€ÐµÐ½Ð´ X] [| Ð·Ð°Ð¼ÐµÐ½Ð° N Ð¼ÐµÑ] â€” Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ð²ÐµÑ‰ÑŒ Ð² Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ\n'
-        '/items [all|ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸Ñ] â€” Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ Ð²ÐµÑ‰ÐµÐ¹ Ð¿Ð¾ ÐºÐ°Ñ‚ÐµÐ³Ð¾Ñ€Ð¸ÑÐ¼\n'
-        '/ml_last [N] â€” Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ Ð·Ð°Ð¿Ð¸ÑÐ¸ Memory Lane\n'
-        '/topic_set <ÑÐ»Ð¾Ð²Ð¾> <Ñ‚ÐµÐ¼Ð°> â€” Ð·Ð°Ð´Ð°Ñ‚ÑŒ Ñ‚ÐµÐ¼Ñƒ Ð´Ð»Ñ ÑÐ»Ð¾Ð²Ð°\n'
-        '/topic_list [Ñ‚ÐµÐ¼Ð°] â€” Ð¿Ð¾ÐºÐ°Ð·Ð°Ñ‚ÑŒ Ð²ÑÐµ Ð¿Ñ€Ð°Ð²Ð¸Ð»Ð° Ñ‚ÐµÐ¼\n'
-        '/help â€” ÑÑ‚Ð¾ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ'
+        '🛒 Consumption Agent\n\n'
+        'Команды:\n'
+        '/list — инвентарь по категориям\n'
+        '/alerts — алерты (гарантии, сроки)\n'
+        '/find_car 3ч 80км — подбор тарифа каршеринга\n'
+        '/last_drives — последние поездки каршеринга (все провайдеры)\n'
+        '/debts — проверка кредитов и займов по почтам + SMS\n'
+        '/fines — неоплаченные штрафы\n'
+        '/dayexp — расходы за сегодня с расшифровкой\n'
+        '/monthexp — расходы за месяц с расшифровкой по дням\n'
+        '/warranties — отчёт по гарантиям\n'
+        '/add <название> [<цена>] [<категория>] — добавить товар\n'
+        '/add_photo — загрузить фото чека (OCR)\n'
+        '/check — статистика\n'
+        '/add_item <название> [| бренд X] [| замена N мес] — добавить вещь в инвентарь\n'
+        '/items [all|категория] — инвентарь вещей по категориям\n'
+        '/ml_last [N] — последние записи Memory Lane\n'
+        '/topic_set <слово> <тема> — задать тему для слова\n'
+        '/topic_list [тема] — показать все правила тем\n'
+        '/help — это сообщение'
     )
 
 
 async def cmd_topic_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Ð£ÑÑ‚Ð°Ð½Ð¾Ð²Ð¸Ñ‚ÑŒ Ñ‚ÐµÐ¼Ñƒ Ð´Ð»Ñ ÐºÐ»ÑŽÑ‡ÐµÐ²Ð¾Ð³Ð¾ ÑÐ»Ð¾Ð²Ð°: /topic_set <ÑÐ»Ð¾Ð²Ð¾> <Ñ‚ÐµÐ¼Ð°>"""
+    """Установить тему для ключевого слова: /topic_set <слово> <тема>"""
     try:
         import memory_lane as _ml
     except ImportError:
-        await update.message.reply_text('Memory Lane Ð¼Ð¾Ð´ÑƒÐ»ÑŒ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½.')
+        await update.message.reply_text('Memory Lane модуль не найден.')
         return
 
     if not ctx.args or len(ctx.args) < 2:
-        await update.message.reply_text('Ð˜ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½Ð¸Ðµ: /topic_set <ÑÐ»Ð¾Ð²Ð¾> <Ñ‚ÐµÐ¼Ð°>\nÐÐ°Ð¿Ñ€Ð¸Ð¼ÐµÑ€: /topic_set ÐºÐ¾Ñ„ÐµÐ¼Ð¾Ð»ÐºÐ° Ð±Ñ‹Ñ‚Ð¾Ð²Ð°Ñ Ñ‚ÐµÑ…Ð½Ð¸ÐºÐ°')
+        await update.message.reply_text('Использование: /topic_set <слово> <тема>\nНапример: /topic_set кофемолка бытовая техника')
         return
 
     keyword = ctx.args[0].lower()
@@ -3055,23 +3062,23 @@ async def cmd_topic_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         is_new = _ml.set_topic_rule(conn, keyword, topic)
         conn.commit()
     except Exception as e:
-        await update.message.reply_text(f'\u274c ÐžÑˆÐ¸Ð±ÐºÐ°: {e}')
+        await update.message.reply_text(f'\u274c Ошибка: {e}')
         return
     finally:
         conn.close()
 
     if is_new:
-        await update.message.reply_text(f'\u2705 Ð”Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¾ Ð¿Ñ€Ð°Ð²Ð¸Ð»Ð¾: Â«{keyword}Â» \u2192 Â«{topic}Â»')
+        await update.message.reply_text(f'\u2705 Добавлено правило: «{keyword}» \u2192 «{topic}»')
     else:
-        await update.message.reply_text(f'\u2705 ÐžÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾ Ð¿Ñ€Ð°Ð²Ð¸Ð»Ð¾: Â«{keyword}Â» \u2192 Â«{topic}Â»')
+        await update.message.reply_text(f'\u2705 Обновлено правило: «{keyword}» \u2192 «{topic}»')
 
 
 async def cmd_topic_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐŸÐ¾ÐºÐ°Ð·Ð°Ñ‚ÑŒ Ð²ÑÐµ Ð¿Ñ€Ð°Ð²Ð¸Ð»Ð° Ñ‚ÐµÐ¼: /topic_list [Ñ‚ÐµÐ¼Ð°]"""
+    """Показать все правила тем: /topic_list [тема]"""
     try:
         import memory_lane as _ml
     except ImportError:
-        await update.message.reply_text('Memory Lane Ð¼Ð¾Ð´ÑƒÐ»ÑŒ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½.')
+        await update.message.reply_text('Memory Lane модуль не найден.')
         return
 
     topic_filter = ' '.join(ctx.args).lower() if ctx.args else None
@@ -3084,12 +3091,12 @@ async def cmd_topic_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not rules:
         if topic_filter:
-            await update.message.reply_text(f'ÐŸÑ€Ð°Ð²Ð¸Ð» Ð´Ð»Ñ Ñ‚ÐµÐ¼Ñ‹ Â«{topic_filter}Â» Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.')
+            await update.message.reply_text(f'Правил для темы «{topic_filter}» не найдено.')
         else:
-            await update.message.reply_text('ÐŸÑ€Ð°Ð²Ð¸Ð» Ð¿Ð¾ÐºÐ° Ð½ÐµÑ‚. Ð”Ð¾Ð±Ð°Ð²ÑŒÑ‚Ðµ /topic_set <ÑÐ»Ð¾Ð²Ð¾> <Ñ‚ÐµÐ¼Ð°>')
+            await update.message.reply_text('Правил пока нет. Добавьте /topic_set <слово> <тема>')
         return
 
-    # Ð“Ñ€ÑƒÐ¿Ð¿Ð¸Ñ€ÑƒÐµÐ¼ Ð¿Ð¾ Ñ‚ÐµÐ¼Ð°Ð¼
+    # Группируем по темам
     groups = {}
     for r in rules:
         t = r['topic']
@@ -3098,12 +3105,12 @@ async def cmd_topic_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         icon = '\U0001f3f7' if r['source'] == 'user' else ''
         groups[t].append(f"{icon}{r['keyword']} ({r['usage_count']})")
 
-    lines = [f'\U0001f9f9 ÐŸÑ€Ð°Ð²Ð¸Ð»Ð° Ñ‚ÐµÐ¼ ({len(rules)}):']
+    lines = [f'\U0001f9f9 Правила тем ({len(rules)}):']
     for topic in sorted(groups.keys()):
         kws = ', '.join(groups[topic])
         lines.append(f'\n\U0001f539 {topic}: {kws}')
 
-    # Ð Ð°Ð·Ð±Ð¸Ð²Ð°ÐµÐ¼ Ð½Ð° Ñ‡Ð°ÑÑ‚Ð¸ ÐµÑÐ»Ð¸ Ð´Ð»Ð¸Ð½Ð½Ð¾
+    # Разбиваем на части если длинно
     full = '\n'.join(lines)
     if len(full) > 4000:
         for chunk in [full[i:i+4000] for i in range(0, len(full), 4000)]:
@@ -3113,11 +3120,11 @@ async def cmd_topic_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐŸÐ¾ÐºÐ°Ð·Ð°Ñ‚ÑŒ Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ N Ð·Ð°Ð¿Ð¸ÑÐµÐ¹ Memory Lane (Ð¿Ð¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ 10)."""
+    """Показать последние N записей Memory Lane (по умолчанию 10)."""
     try:
         import memory_lane as _ml
     except ImportError:
-        await update.message.reply_text('Memory Lane Ð¼Ð¾Ð´ÑƒÐ»ÑŒ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½.')
+        await update.message.reply_text('Memory Lane модуль не найден.')
         return
 
     n = 10
@@ -3136,32 +3143,32 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not rows:
         await update.message.reply_text(
-            'Memory Lane Ð¿ÑƒÑÑ‚. ÐžÑ‚Ð¿Ñ€Ð°Ð²ÑŒ Ñ„Ð¾Ñ‚Ð¾ Ñ Ð¿Ð¾Ð´Ð¿Ð¸ÑÑŒÑŽ Â«Ð½Ñ€Ð°Ð²Ð¸Ñ‚ÑÑÂ» Ð¸Ð»Ð¸ #Ñ…ÑÑˆÑ‚ÐµÐ³Ð¾Ð¼, '
-            'Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ð·Ð°Ð¿Ð¸ÑÑŒ.'
+            'Memory Lane пуст. Отправь фото с подписью «нравится» или #хэштегом, '
+            'чтобы добавить запись.'
         )
         return
 
-    lines = [f'ðŸ§  ÐŸÐ¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ {len(rows)} Ð·Ð°Ð¿Ð¸ÑÐµÐ¹:']
+    lines = [f'🧠 Последние {len(rows)} записей:']
     for r in rows:
         cap = (r['caption'] or '').strip().replace('\n', ' ')
         if len(cap) > 60:
-            cap = cap[:57] + 'â€¦'
+            cap = cap[:57] + '…'
         try:
             tags = json.loads(r['style_tags'] or '[]')
         except (TypeError, ValueError):
             tags = []
         tag_str = ' '.join(f'#{t}' for t in tags) if tags else ''
-        topic = r['topic'] or 'â€”'
+        topic = r['topic'] or '—'
         date = (r['created_at'] or '')[:10]
-        has_photo = 'ðŸ“·' if r['media_asset_id'] else ''
+        has_photo = '📷' if r['media_asset_id'] else ''
         name = r['name'] or ''
         desc = (r['description'] or '')[:40] if r['description'] else ''
         name_part = f' {name}' if name else ''
-        desc_part = f' â€” {desc}â€¦' if desc else ''
+        desc_part = f' — {desc}…' if desc else ''
         lines.append(f'#{r["id"]:>3}{has_photo} {date} [{topic}]{name_part}{desc_part}'.rstrip())
     await update.message.reply_text('\n'.join(lines))
 
-    # ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ Ð´Ð»Ñ Ð·Ð°Ð¿Ð¸ÑÐµÐ¹, Ñƒ ÐºÐ¾Ñ‚Ð¾Ñ€Ñ‹Ñ… ÐµÑÑ‚ÑŒ media_asset_id
+    # Отправляем фото для записей, у которых есть media_asset_id
     conn2 = get_db()
     for r in rows:
         media_asset_id = r['media_asset_id']
@@ -3173,9 +3180,9 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ).fetchone()
             if not row or not os.path.exists(row[0]):
                 continue
-            caption_lines = [f'ðŸ“Œ {r["name"]}' if r['name'] else f'#{r["id"]}']
+            caption_lines = [f'📌 {r["name"]}' if r['name'] else f'#{r["id"]}']
             if r['name']:
-                caption_lines[0] = f'ðŸ“Œ {r["name"]}'
+                caption_lines[0] = f'📌 {r["name"]}'
             else:
                 caption_lines[0] = f'#{r["id"]}'
             if r['description']:
@@ -3185,11 +3192,11 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 if cap != (r['name'] or '') and not cap.startswith('#'):
                     caption_lines.append(cap)
             if r['topic']:
-                caption_lines.append(f'ðŸ“‚ {r["topic"]}')
-            caption_lines.append(f'ðŸ•’ {str(r["created_at"])[:10]}')
+                caption_lines.append(f'📂 {r["topic"]}')
+            caption_lines.append(f'🕒 {str(r["created_at"])[:10]}')
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton('ðŸ—‘ Ð£Ð´Ð°Ð»Ð¸Ñ‚ÑŒ', callback_data=f'ml_delete:{r["id"]}')
+                InlineKeyboardButton('🗑 Удалить', callback_data=f'ml_delete:{r["id"]}')
             ]])
             with open(row[0], 'rb') as fh:
                 await update.message.reply_photo(
@@ -3219,7 +3226,7 @@ async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         cur = conn.execute("UPDATE items SET warranty_months=? WHERE id=? AND deleted_at IS NULL", (months, item_id))
         if cur.rowcount == 0:
-            await update.message.reply_text(f"âŒ Item {item_id} not found")
+            await update.message.reply_text(f"❌ Item {item_id} not found")
             return
         # Reset warranty_until so update_warranty_until() recomputes it even
         # if it was already set (the helper skips non-NULL rows).
@@ -3243,7 +3250,7 @@ async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     data = query.data or ''
@@ -3253,16 +3260,16 @@ async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         alert_id = int(data.split(':', 1)[1])
     except ValueError:
-        await query.answer('âš ï¸ ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ alert id', show_alert=True)
+        await query.answer('⚠️ Некорректный alert id', show_alert=True)
         return
 
     row = get_credit_alert(alert_id)
     if not row:
-        await query.answer('âš ï¸ ÐÐ»ÐµÑ€Ñ‚ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½', show_alert=True)
+        await query.answer('⚠️ Алерт не найден', show_alert=True)
         return
 
     if row['paid_confirmed_at']:
-        await query.answer('âœ… Ð£Ð¶Ðµ Ð¾Ñ‚Ð¼ÐµÑ‡ÐµÐ½Ð¾ ÐºÐ°Ðº Ð¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð¾')
+        await query.answer('✅ Уже отмечено как оплачено')
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
@@ -3271,10 +3278,10 @@ async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     changed = confirm_credit_alert_paid(alert_id)
     if not changed:
-        await query.answer('âš ï¸ ÐÐµ ÑƒÐ´Ð°Ð»Ð¾ÑÑŒ Ð¾Ð±Ð½Ð¾Ð²Ð¸Ñ‚ÑŒ ÑÑ‚Ð°Ñ‚ÑƒÑ', show_alert=True)
+        await query.answer('⚠️ Не удалось обновить статус', show_alert=True)
         return
 
-    paid_note = '\n\nâœ… <b>ÐžÑ‚Ð¼ÐµÑ‡ÐµÐ½Ð¾ ÐºÐ°Ðº Ð¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð¾ Ð²Ñ€ÑƒÑ‡Ð½ÑƒÑŽ</b>'
+    paid_note = '\n\n✅ <b>Отмечено как оплачено вручную</b>'
     base_text = html.escape((query.message.text or '').rstrip())
     new_text = base_text + paid_note
     try:
@@ -3289,18 +3296,18 @@ async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
-    await query.answer('âœ… ÐŸÐ»Ð°Ñ‚Ñ‘Ð¶ Ð¾Ñ‚Ð¼ÐµÑ‡ÐµÐ½ ÐºÐ°Ðº Ð¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð½Ñ‹Ð¹')
+    await query.answer('✅ Платёж отмечен как оплаченный')
 
 
 async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº ÐºÐ½Ð¾Ð¿ÐºÐ¸ 'âœ… ÐžÐ¿Ð»Ð°Ñ‡ÐµÐ½Ð¾' Ð´Ð»Ñ ÑˆÑ‚Ñ€Ð°Ñ„Ð¾Ð²."""
+    """Обработчик кнопки '✅ Оплачено' для штрафов."""
     query = update.callback_query
     if query is None:
         return
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     data = query.data or ''
@@ -3310,16 +3317,16 @@ async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         fine_id = int(data.split(':', 1)[1])
     except ValueError:
-        await query.answer('âš ï¸ ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ id', show_alert=True)
+        await query.answer('⚠️ Некорректный id', show_alert=True)
         return
 
     row = get_fine(fine_id)
     if not row:
-        await query.answer('âš ï¸ Ð¨Ñ‚Ñ€Ð°Ñ„ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½', show_alert=True)
+        await query.answer('⚠️ Штраф не найден', show_alert=True)
         return
 
     if row['paid_confirmed_at']:
-        await query.answer('âœ… Ð£Ð¶Ðµ Ð¾Ñ‚Ð¼ÐµÑ‡ÐµÐ½Ð¾ ÐºÐ°Ðº Ð¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð¾')
+        await query.answer('✅ Уже отмечено как оплачено')
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
@@ -3328,10 +3335,10 @@ async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     changed = confirm_fine_paid(fine_id)
     if not changed:
-        await query.answer('âš ï¸ ÐÐµ ÑƒÐ´Ð°Ð»Ð¾ÑÑŒ Ð¾Ð±Ð½Ð¾Ð²Ð¸Ñ‚ÑŒ ÑÑ‚Ð°Ñ‚ÑƒÑ', show_alert=True)
+        await query.answer('⚠️ Не удалось обновить статус', show_alert=True)
         return
 
-    paid_note = '\n\nâœ… <b>ÐžÑ‚Ð¼ÐµÑ‡ÐµÐ½Ð¾ ÐºÐ°Ðº Ð¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð¾</b>'
+    paid_note = '\n\n✅ <b>Отмечено как оплачено</b>'
     base_text = html.escape((query.message.text or '').rstrip())
     new_text = base_text + paid_note
     try:
@@ -3346,18 +3353,18 @@ async def fine_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
-    await query.answer('âœ… Ð¨Ñ‚Ñ€Ð°Ñ„ Ð¾Ñ‚Ð¼ÐµÑ‡ÐµÐ½ ÐºÐ°Ðº Ð¾Ð¿Ð»Ð°Ñ‡ÐµÐ½Ð½Ñ‹Ð¹')
+    await query.answer('✅ Штраф отмечен как оплаченный')
 
 
 async def item_replaced_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº ÐºÐ½Ð¾Ð¿ÐºÐ¸ 'âœ… Ð—Ð°Ð¼ÐµÐ½ÐµÐ½Ð¾' Ð´Ð»Ñ Ð½Ð°Ð¿Ð¾Ð¼Ð¸Ð½Ð°Ð½Ð¸Ð¹ Ð¾ Ð·Ð°Ð¼ÐµÐ½Ðµ Ð²ÐµÑ‰ÐµÐ¹."""
+    """Обработчик кнопки '✅ Заменено' для напоминаний о замене вещей."""
     query = update.callback_query
     if query is None:
         return
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     data = query.data or ''
@@ -3367,36 +3374,36 @@ async def item_replaced_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     try:
         alert_id = int(data.split(':', 1)[1])
     except ValueError:
-        await query.answer('âš ï¸ ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ alert id', show_alert=True)
+        await query.answer('⚠️ Некорректный alert id', show_alert=True)
         return
 
     conn = get_db()
     try:
-        # ÐŸÐ¾Ð»ÑƒÑ‡Ð°ÐµÐ¼ alert Ð¸ ÑÐ²ÑÐ·Ð°Ð½Ð½Ñ‹Ð¹ item
+        # Получаем alert и связанный item
         alert = conn.execute(
             'SELECT item_id FROM alerts WHERE id = ? AND alert_type = ?',
             (alert_id, 'replace_reminder')
         ).fetchone()
         if not alert:
-            await query.answer('âš ï¸ ÐÐ»ÐµÑ€Ñ‚ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½', show_alert=True)
+            await query.answer('⚠️ Алерт не найден', show_alert=True)
             return
 
         item_id = alert['item_id']
 
-        # ÐŸÐ¾Ð¼ÐµÑ‡Ð°ÐµÐ¼ item ÐºÐ°Ðº Ð·Ð°Ð¼ÐµÐ½Ñ‘Ð½Ð½Ñ‹Ð¹
+        # Помечаем item как заменённый
         conn.execute(
             "UPDATE items SET status = 'replaced', updated_at = datetime('now') WHERE id = ?",
             (item_id,)
         )
-        # Ð—Ð°ÐºÑ€Ñ‹Ð²Ð°ÐµÐ¼ Ð°Ð»ÐµÑ€Ñ‚
+        # Закрываем алерт
         conn.execute(
             "UPDATE alerts SET status = 'actioned' WHERE id = ?",
             (alert_id,)
         )
         conn.commit()
 
-        # ÐžÐ±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ
-        replaced_note = '\n\nâœ… <b>Ð—Ð°Ð¼ÐµÐ½ÐµÐ½Ð¾</b>'
+        # Обновляем сообщение
+        replaced_note = '\n\n✅ <b>Заменено</b>'
         base_text = html.escape((query.message.text or '').rstrip())
         new_text = base_text + replaced_note
         try:
@@ -3411,23 +3418,23 @@ async def item_replaced_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
                 await query.edit_message_reply_markup(reply_markup=None)
             except Exception:
                 pass
-        await query.answer('âœ… ÐžÑ‚Ð¼ÐµÑ‡ÐµÐ½Ð¾ ÐºÐ°Ðº Ð·Ð°Ð¼ÐµÐ½Ñ‘Ð½Ð½Ð¾Ðµ')
+        await query.answer('✅ Отмечено как заменённое')
     except Exception as e:
         log.warning(f'item_replaced_callback failed: {e}')
-        await query.answer('âš ï¸ ÐžÑˆÐ¸Ð±ÐºÐ° Ð¿Ñ€Ð¸ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ð¸', show_alert=True)
+        await query.answer('⚠️ Ошибка при обновлении', show_alert=True)
     finally:
         conn.close()
 
 
 async def item_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº ÐºÐ½Ð¾Ð¿ÐºÐ¸ 'ðŸ—‘ Ð£Ð´Ð°Ð»Ð¸Ñ‚ÑŒ' Ð´Ð»Ñ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ñ item Ð¸Ð· Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€Ñ."""
+    """Обработчик кнопки '🗑 Удалить' для удаления item из инвентаря."""
     query = update.callback_query
     if query is None:
         return
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     data = query.data or ''
@@ -3437,20 +3444,20 @@ async def item_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         item_id = int(data.split(':', 1)[1])
     except ValueError:
-        await query.answer('âš ï¸ ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ item id', show_alert=True)
+        await query.answer('⚠️ Некорректный item id', show_alert=True)
         return
 
     conn = get_db()
     try:
-        # Soft delete â€” Ð¿Ð¾Ð¼ÐµÑ‡Ð°ÐµÐ¼ deleted_at
+        # Soft delete — помечаем deleted_at
         conn.execute(
             "UPDATE items SET deleted_at = datetime('now'), status = 'disposed' WHERE id = ?",
             (item_id,)
         )
         conn.commit()
 
-        # ÐžÐ±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ
-        deleted_note = '\n\nðŸ—‘ <b>Ð£Ð´Ð°Ð»ÐµÐ½Ð¾ Ð¸Ð· Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€Ñ</b>'
+        # Обновляем сообщение
+        deleted_note = '\n\n🗑 <b>Удалено из инвентаря</b>'
         base_text = html.escape((query.message.text or '').rstrip())
         new_text = base_text + deleted_note
         try:
@@ -3465,23 +3472,23 @@ async def item_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_reply_markup(reply_markup=None)
             except Exception:
                 pass
-        await query.answer('ðŸ—‘ Ð£Ð´Ð°Ð»ÐµÐ½Ð¾')
+        await query.answer('🗑 Удалено')
     except Exception as e:
         log.warning(f'item_delete_callback failed: {e}')
-        await query.answer('âš ï¸ ÐžÑˆÐ¸Ð±ÐºÐ° Ð¿Ñ€Ð¸ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ð¸', show_alert=True)
+        await query.answer('⚠️ Ошибка при удалении', show_alert=True)
     finally:
         conn.close()
 
 
 async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº ÐºÐ½Ð¾Ð¿ÐºÐ¸ 'ðŸ—‘ Ð£Ð´Ð°Ð»Ð¸Ñ‚ÑŒ' Ð´Ð»Ñ Memory Lane Ð·Ð°Ð¿Ð¸ÑÐµÐ¹ Ð² /ml_last."""
+    """Обработчик кнопки '🗑 Удалить' для Memory Lane записей в /ml_last."""
     query = update.callback_query
     if query is None:
         return
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     data = query.data or ''
@@ -3491,25 +3498,25 @@ async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         ml_id = int(data.split(':', 1)[1])
     except ValueError:
-        await query.answer('âš ï¸ ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ id', show_alert=True)
+        await query.answer('⚠️ Некорректный id', show_alert=True)
         return
 
     conn = get_db()
     try:
-        # ÐŸÐ¾Ð»ÑƒÑ‡Ð°ÐµÐ¼ media_asset_id Ð´Ð»Ñ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ñ
+        # Получаем media_asset_id для удаления
         row = conn.execute(
             'SELECT media_asset_id FROM memory_lane_items WHERE id = ?', (ml_id,)
         ).fetchone()
         if not row:
-            await query.answer('âš ï¸ Ð—Ð°Ð¿Ð¸ÑÑŒ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð°', show_alert=True)
+            await query.answer('⚠️ Запись не найдена', show_alert=True)
             return
 
         media_asset_id = row[0]
 
-        # Ð£Ð´Ð°Ð»ÑÐµÐ¼ Ð·Ð°Ð¿Ð¸ÑÑŒ Ð¸Ð· memory_lane_items
+        # Удаляем запись из memory_lane_items
         conn.execute('DELETE FROM memory_lane_items WHERE id = ?', (ml_id,))
 
-        # Ð£Ð´Ð°Ð»ÑÐµÐ¼ ÑÐ²ÑÐ·Ð°Ð½Ð½Ñ‹Ð¹ media_asset (Ñ„Ð°Ð¹Ð» + Ð·Ð°Ð¿Ð¸ÑÑŒ Ð² Ð‘Ð”)
+        # Удаляем связанный media_asset (файл + запись в БД)
         if media_asset_id:
             ma_row = conn.execute(
                 'SELECT file_path FROM media_assets WHERE id = ?', (media_asset_id,)
@@ -3523,10 +3530,10 @@ async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         conn.commit()
 
-        # ÐžÐ±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ (ÑƒÐ±Ð¸Ñ€Ð°ÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾, Ð¼ÐµÐ½ÑÐµÐ¼ Ð¿Ð¾Ð´Ð¿Ð¸ÑÑŒ)
+        # Обновляем сообщение (убираем фото, меняем подпись)
         try:
             await query.edit_message_caption(
-                caption=f'ðŸ—‘ Ð—Ð°Ð¿Ð¸ÑÑŒ #{ml_id} ÑƒÐ´Ð°Ð»ÐµÐ½Ð°',
+                caption=f'🗑 Запись #{ml_id} удалена',
                 reply_markup=None
             )
         except Exception:
@@ -3535,68 +3542,68 @@ async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-        await query.answer('ðŸ—‘ Ð—Ð°Ð¿Ð¸ÑÑŒ ÑƒÐ´Ð°Ð»ÐµÐ½Ð°')
+        await query.answer('🗑 Запись удалена')
     except Exception as e:
         log.warning(f'ml_delete_callback failed: {e}')
-        await query.answer('âš ï¸ ÐžÑˆÐ¸Ð±ÐºÐ° Ð¿Ñ€Ð¸ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ð¸', show_alert=True)
+        await query.answer('⚠️ Ошибка при удалении', show_alert=True)
     finally:
         conn.close()
 
 
 async def vision_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº ÐºÐ½Ð¾Ð¿ÐºÐ¸ 'âœ… ÐŸÐ¾Ð´Ñ‚Ð²ÐµÑ€Ð´Ð¸Ñ‚ÑŒ' â€” Ñ‚Ð¾Ð²Ð°Ñ€ ÑƒÐ¶Ðµ Ð² Ð‘Ð”, Ð¿Ñ€Ð¾ÑÐ¸Ð¼ Ð´Ð¾Ð¿. Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ."""
+    """Обработчик кнопки '✅ Подтвердить' — товар уже в БД, просим доп. информацию."""
     query = update.callback_query
     if query is None:
         return
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     pending = ctx.user_data.get('vision_pending')
     if not pending:
-        await query.answer('âš ï¸ Ð”Ð°Ð½Ð½Ñ‹Ðµ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ñ‹', show_alert=True)
+        await query.answer('⚠️ Данные не найдены', show_alert=True)
         return
 
-    # Ð£Ð±Ð¸Ñ€Ð°ÐµÐ¼ ÐºÐ½Ð¾Ð¿ÐºÐ¸ Ð¸ Ð¾Ð±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ
+    # Убираем кнопки и обновляем сообщение
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass
 
     await query.edit_message_text(
-        query.message.text + '\n\nâœ… Ð”Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¾ Ð² Ð¸Ð½Ð²ÐµÐ½Ñ‚Ð°Ñ€ÑŒ',
+        query.message.text + '\n\n✅ Добавлено в инвентарь',
         reply_markup=None
     )
-    await query.answer('âœ… Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¾')
+    await query.answer('✅ Сохранено')
 
-    # Ð—Ð°Ð¿Ñ€Ð°ÑˆÐ¸Ð²Ð°ÐµÐ¼ Ð´Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»ÑŒÐ½ÑƒÑŽ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ Ñ‡ÐµÑ€ÐµÐ· ForceReply
+    # Запрашиваем дополнительную информацию через ForceReply
     from telegram import ForceReply
     await ctx.bot.send_message(
         chat_id=update.effective_chat.id,
-        text='ðŸ“ Ð’Ð²ÐµÐ´Ð¸Ñ‚Ðµ Ð´Ð¾Ð¿Ð¾Ð»Ð½Ð¸Ñ‚ÐµÐ»ÑŒÐ½ÑƒÑŽ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸ÑŽ Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ðµ (Ð±Ñ€ÐµÐ½Ð´, Ñ€Ð°Ð·Ð¼ÐµÑ€, Ð¼Ð°Ñ‚ÐµÑ€Ð¸Ð°Ð»):',
+        text='📝 Введите дополнительную информацию о товаре (бренд, размер, материал):',
         reply_markup=ForceReply(selective=True),
         reply_to_message_id=query.message.message_id
     )
-    # Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÑÐµÐ¼ item_id Ð´Ð»Ñ Ð¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚ÐºÐ¸ Ð¾Ñ‚Ð²ÐµÑ‚Ð°
+    # Сохраняем item_id для обработки ответа
     ctx.user_data['vision_awaiting_notes'] = pending.get('item_id')
 
 
 async def vision_reject_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº ÐºÐ½Ð¾Ð¿ÐºÐ¸ 'âŒ ÐžÑ‚ÐºÐ»Ð¾Ð½Ð¸Ñ‚ÑŒ' â€” ÑƒÐ´Ð°Ð»ÑÐµÑ‚ Ñ‚Ð¾Ð²Ð°Ñ€ Ð¸Ð· Ð‘Ð” Ð¸ Ñ„Ð¾Ñ‚Ð¾."""
+    """Обработчик кнопки '❌ Отклонить' — удаляет товар из БД и фото."""
     query = update.callback_query
     if query is None:
         return
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     pending = ctx.user_data.pop('vision_pending', None)
     if not pending:
-        await query.answer('âš ï¸ Ð”Ð°Ð½Ð½Ñ‹Ðµ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ñ‹', show_alert=True)
+        await query.answer('⚠️ Данные не найдены', show_alert=True)
         return
 
     item_id = pending.get('item_id')
@@ -3605,7 +3612,7 @@ async def vision_reject_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
     conn = get_db()
     try:
-        # Ð£Ð´Ð°Ð»ÑÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ Ð¸Ð· media_assets
+        # Удаляем фото из media_assets
         if asset_id:
             ma_row = conn.execute('SELECT file_path FROM media_assets WHERE id = ?', (asset_id,)).fetchone()
             conn.execute('DELETE FROM media_assets WHERE id = ?', (asset_id,))
@@ -3615,7 +3622,7 @@ async def vision_reject_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
                 except Exception:
                     pass
 
-        # Ð£Ð´Ð°Ð»ÑÐµÐ¼ ÑÐ²ÑÐ·ÑŒ item_photos
+        # Удаляем связь item_photos
         if item_id:
             conn.execute('DELETE FROM item_photos WHERE item_id = ?', (item_id,))
             # Soft delete item
@@ -3626,40 +3633,40 @@ async def vision_reject_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
         conn.commit()
 
-        # Ð£Ð´Ð°Ð»ÑÐµÐ¼ Ð²Ñ€ÐµÐ¼ÐµÐ½Ð½Ñ‹Ð¹ Ñ„Ð°Ð¹Ð»
+        # Удаляем временный файл
         if receipt_path and os.path.exists(receipt_path):
             try:
                 os.remove(receipt_path)
             except Exception:
                 pass
 
-        # Ð£Ð±Ð¸Ñ€Ð°ÐµÐ¼ ÐºÐ½Ð¾Ð¿ÐºÐ¸ Ð¸ Ð¾Ð±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ
+        # Убираем кнопки и обновляем сообщение
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
 
         await query.edit_message_text(
-            query.message.text + '\n\nâŒ ÐžÑ‚ÐºÐ»Ð¾Ð½ÐµÐ½Ð¾ Ð¸ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¾',
+            query.message.text + '\n\n❌ Отклонено и удалено',
             reply_markup=None
         )
-        await query.answer('âŒ Ð£Ð´Ð°Ð»ÐµÐ½Ð¾')
+        await query.answer('❌ Удалено')
     except Exception as e:
         log.warning(f'vision_reject_callback failed: {e}')
-        await query.answer('âš ï¸ ÐžÑˆÐ¸Ð±ÐºÐ° Ð¿Ñ€Ð¸ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ð¸', show_alert=True)
+        await query.answer('⚠️ Ошибка при удалении', show_alert=True)
     finally:
         conn.close()
 
 
 async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ÐžÐ±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸Ðº ÐºÐ½Ð¾Ð¿ÐºÐ¸ 'ðŸ“· Ð¤Ð¾Ñ‚Ð¾' â€” Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð»ÑÐµÑ‚ Ñ„Ð¾Ñ‚Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ð°."""
+    """Обработчик кнопки '📷 Фото' — отправляет фото товара."""
     query = update.callback_query
     if query is None:
         return
     await query.answer()
 
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
-        await query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+        await query.answer('❌ Доступ запрещён', show_alert=True)
         return
 
     data = query.data or ''
@@ -3669,10 +3676,10 @@ async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         item_id = int(data.split(':', 1)[1])
     except ValueError:
-        await query.answer('âš ï¸ ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ item id', show_alert=True)
+        await query.answer('⚠️ Некорректный item id', show_alert=True)
         return
 
-    # Ð—Ð°Ð³Ñ€ÑƒÐ¶Ð°ÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ Ð¸Ð· Ð‘Ð”
+    # Загружаем фото из БД
     conn = get_db()
     try:
         row = conn.execute('''
@@ -3682,45 +3689,45 @@ async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             WHERE ip.item_id = ? LIMIT 1
         ''', (item_id,)).fetchone()
         if not row:
-            await query.answer('ðŸ“­ Ð¤Ð¾Ñ‚Ð¾ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾', show_alert=True)
+            await query.answer('📭 Фото не найдено', show_alert=True)
             return
 
         photo_path = row[0]
         if not os.path.exists(photo_path):
-            await query.answer('ðŸ“­ Ð¤Ð¾Ñ‚Ð¾ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾', show_alert=True)
+            await query.answer('📭 Фото не найдено', show_alert=True)
             return
 
-        # ÐžÑ‚Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ Ñ„Ð¾Ñ‚Ð¾ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð¼ Ð½Ð° ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ
+        # Отправляем фото ответом на сообщение
         with open(photo_path, 'rb') as f:
             await ctx.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=f.read(),
-                caption=f'ðŸ“· Ð¤Ð¾Ñ‚Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ð° ID: {item_id}'
+                caption=f'📷 Фото товара ID: {item_id}'
             )
-        await query.answer('ðŸ“· Ð¤Ð¾Ñ‚Ð¾ Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¾')
+        await query.answer('📷 Фото отправлено')
     except Exception as e:
         log.warning(f'item_photo_callback failed: {e}')
-        await query.answer('âš ï¸ ÐžÑˆÐ¸Ð±ÐºÐ° Ð¿Ñ€Ð¸ Ð¾Ñ‚Ð¿Ñ€Ð°Ð²ÐºÐµ Ñ„Ð¾Ñ‚Ð¾', show_alert=True)
+        await query.answer('⚠️ Ошибка при отправке фото', show_alert=True)
     finally:
         conn.close()
 
 
 def add_authorized_handler(app: Application, handler):
-    """ÐžÐ±Ð¾Ñ€Ð°Ñ‡Ð¸Ð²Ð°ÐµÑ‚ handler Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ¾Ð¹ Ð´Ð¾ÑÑ‚ÑƒÐ¿Ð° Ð¿ÐµÑ€ÐµÐ´ Ð´Ð¾Ð±Ð°Ð²Ð»ÐµÐ½Ð¸ÐµÐ¼ Ð² Ð¿Ñ€Ð¸Ð»Ð¾Ð¶ÐµÐ½Ð¸Ðµ."""
+    """Оборачивает handler проверкой доступа перед добавлением в приложение."""
     original_callback = handler.callback
 
     async def deny_access(update: Update):
         chat = update.effective_chat if update else None
         chat_id = chat.id if chat else None
-        log.warning('Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½ Ð´Ð»Ñ chat_id=%s', chat_id)
+        log.warning('Доступ запрещён для chat_id=%s', chat_id)
 
         if getattr(update, 'callback_query', None):
-            await update.callback_query.answer('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½', show_alert=True)
+            await update.callback_query.answer('❌ Доступ запрещён', show_alert=True)
             return
 
         message = getattr(update, 'effective_message', None)
         if message is not None:
-            await message.reply_text('âŒ Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð·Ð°Ð¿Ñ€ÐµÑ‰Ñ‘Ð½.')
+            await message.reply_text('❌ Доступ запрещён.')
 
     async def wrapped_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         chat = update.effective_chat if update else None
@@ -3733,7 +3740,7 @@ def add_authorized_handler(app: Application, handler):
     app.add_handler(handler)
 
 def main():
-    # Ð˜Ð½Ð¸Ñ†Ð¸Ð°Ð»Ð¸Ð·Ð¸Ñ€ÑƒÐµÐ¼ schema memory_lane (ÑÐ¾Ð·Ð´Ð°Ñ‘Ð¼ Ñ‚Ð°Ð±Ð»Ð¸Ñ†Ñ‹ topic_rules Ð¸ Ð´Ñ€., ÐµÑÐ»Ð¸ ÐµÑ‰Ñ‘ Ð½ÐµÑ‚)
+    # Инициализируем schema memory_lane (создаём таблицы topic_rules и др., если ещё нет)
     try:
         import memory_lane as _ml
         conn = get_db()
@@ -3743,7 +3750,7 @@ def main():
         log.warning(f'memory_lane schema init failed: {e}')
 
     if not TOKEN:
-        print('âŒ Ð£ÐºÐ°Ð¶Ð¸Ñ‚Ðµ CONSUMPTION_BOT_TOKEN')
+        print('❌ Укажите CONSUMPTION_BOT_TOKEN')
         print('   export CONSUMPTION_BOT_TOKEN=...')
         sys.exit(1)
     app = Application.builder().token(TOKEN).build()

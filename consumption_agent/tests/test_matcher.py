@@ -10,6 +10,7 @@ from matcher import (
     exact_match,
     fuzzy_match,
     match_record,
+    _build_normalized_index,
 )
 
 
@@ -91,20 +92,23 @@ def test_is_garbage_junk_pattern():
 
 def test_exact_match_found():
     items = [{"id": 1, "name": "Молоко 3.2%", "brand": "", "sku": ""}]
-    candidates = exact_match("Молоко 3.2%", "", "", items)
+    idx = _build_normalized_index(items)
+    candidates = exact_match("Молоко 3.2%", "", "", idx)
     assert len(candidates) > 0
     assert candidates[0]["score"] == 100
 
 
 def test_exact_match_not_found():
     items = [{"id": 1, "name": "Хлеб", "brand": "", "sku": ""}]
-    candidates = exact_match("Молоко", "", "", items)
+    idx = _build_normalized_index(items)
+    candidates = exact_match("Молоко", "", "", idx)
     assert candidates == []
 
 
 def test_exact_match_brand_mismatch_lowers_score():
     items = [{"id": 1, "name": "Молоко", "brand": "Parmalat", "sku": ""}]
-    candidates = exact_match("Молоко", "Домик в деревне", "", items)
+    idx = _build_normalized_index(items)
+    candidates = exact_match("Молоко", "Домик в деревне", "", idx)
     assert len(candidates) > 0
     assert candidates[0]["score"] == 90  # brand mismatch → 90
 
@@ -131,14 +135,16 @@ def test_fuzzy_match_not_found():
 
 def test_match_record_exact():
     items = [{"id": 1, "name": "Молоко 3.2%", "brand": "", "sku": ""}]
+    idx = _build_normalized_index(items)
     rec = {"recognized_product": "Молоко 3.2%", "brand": "", "sku": "", "confidence": "high"}
-    candidates = match_record(rec, items, 85, 90)
+    candidates = match_record(rec, idx, items, {}, 85, 90)
     assert len(candidates) > 0
     assert candidates[0]["method"] == "exact"
 
 
 def test_match_record_fuzzy():
     items = [{"id": 1, "name": "Молоко пастеризованное 3.2%", "brand": "", "sku": ""}]
+    idx = _build_normalized_index(items)
     rec = {"recognized_product": "Молоко пастеризованное 3.2%", "brand": "", "sku": "", "confidence": "high"}
-    candidates = match_record(rec, items, 85, 90)
+    candidates = match_record(rec, idx, items, {}, 85, 90)
     assert len(candidates) > 0
