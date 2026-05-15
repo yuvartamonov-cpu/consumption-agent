@@ -2970,7 +2970,10 @@ async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def ml_search_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Обработчик кнопки '🔍 Искать' для Memory Lane записей."""
+    """Обработчик кнопки '🔍 Искать' для Memory Lane записей.
+    
+    Поиск выполняется асинхронно — результат отправляется в чат отдельным сообщением.
+    """
     query = update.callback_query
     if query is None:
         return
@@ -2990,17 +2993,34 @@ async def ml_search_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.answer('⚠️ Некорректный id', show_alert=True)
         return
 
+    # Сразу отвечаем что ищем
+    await query.answer('🔍 Ищу...')
+    
+    # Отправляем временное сообщение
+    chat_id = update.effective_chat.id
+    temp_msg = await ctx.bot.send_message(
+        chat_id=chat_id,
+        text=f'🔍 Ищу товар #{ml_id}... Это может занять 10-20 секунд.'
+    )
+    
     try:
         from ml_search import search_item
         result = await search_item(ml_id)
+        
         if result:
-            await query.message.reply_text(result, parse_mode='HTML', disable_web_page_preview=False)
-            await query.answer('🔍 Лучшее предложение найдено')
+            # Удаляем временное сообщение и отправляем результат
+            await temp_msg.delete()
+            await ctx.bot.send_message(
+                chat_id=chat_id,
+                text=result,
+                parse_mode='HTML',
+                disable_web_page_preview=False
+            )
         else:
-            await query.answer('⚠️ Товар не найден', show_alert=True)
+            await temp_msg.edit_text('⚠️ Товар не найден. Попробуйте позже.')
     except Exception as e:
         log.warning(f'ml_search_callback failed: {e}')
-        await query.answer('⚠️ Ошибка поиска', show_alert=True)
+        await temp_msg.edit_text(f'⚠️ Ошибка поиска: {str(e)[:100]}')
 
 
 async def ml_remind_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

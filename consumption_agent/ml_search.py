@@ -296,7 +296,53 @@ async def search_item(item_id: int) -> Optional[str]:
     # Ищем лучшее соответствие через web
     best_match = await search_web_best_match(query)
     
-    return format_search_result(item, links, best_match)
+    result = format_search_result(item, links, best_match)
+    
+    # Отправляем результат на почту для истории
+    try:
+        await send_search_result_email(item, result, best_match)
+    except Exception as e:
+        print(f"Ошибка отправки email: {e}")
+    
+    return result
+
+
+async def send_search_result_email(item: Dict, result_html: str, best_match: Optional[Dict]):
+    """Отправляет результат поиска на почту."""
+    import aiosmtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    subject = f"🔍 Поиск: {item.get('name', 'Товар')}"
+    
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From'] = 'consumption-agent@local'
+    msg['To'] = 'yu.v.artamonov@gmail.com'
+    
+    # Plain text версия
+    text = f"""
+Поиск товара из Memory Lane
+
+Название: {item.get('name', 'Не указано')}
+Бренд: {item.get('brand', 'Не указан')}
+Категория: {item.get('category', 'Не указана')}
+
+Результат поиска:
+{best_match.get('title', 'Не найдено') if best_match else 'Не найдено'}
+Цена: {best_match.get('price', 'Не указана') if best_match else 'Не указана'}
+Магазин: {best_match.get('store', 'Не указан') if best_match else 'Не указан'}
+Ссылка: {best_match.get('url', 'Нет') if best_match else 'Нет'}
+
+---
+Отправлено ботом Consumption Agent
+"""
+    
+    msg.attach(MIMEText(text, 'plain'))
+    msg.attach(MIMEText(result_html, 'html'))
+    
+    # Отправка (опционально, если настроен SMTP)
+    # await aiosmtplib.send(msg, hostname='smtp.gmail.com', port=587, ...)
 
 
 if __name__ == '__main__':
