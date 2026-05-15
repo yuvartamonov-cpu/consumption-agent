@@ -629,12 +629,28 @@ def main():
         except Exception as e:
             log.error(f"❌ {cfg['name']}: {e}")
     
-    # 2. SMS
+    # 2. SMS (Phone Link) — старая логика
     try:
         log.info("📱 SMS (Phone Link)...")
         total += scan_sms_today(conn)
     except Exception as e:
         log.error(f"❌ SMS: {e}")
+    
+    # 2.1. SMS через sms_expense_monitor (новая логика для всех банков)
+    try:
+        log.info("📱 SMS Expense Monitor (все банки)...")
+        # Импортируем и запускаем
+        sys.path.insert(0, SCRIPT_DIR)
+        from sms_expense_monitor import scan_sms_expenses, import_expenses
+        expenses = scan_sms_expenses(days_back=2)
+        if expenses:
+            imported, skipped = import_expenses(expenses)
+            log.info(f"   📱 SMS Monitor: найдено {len(expenses)}, импортировано {imported}, пропущено {skipped}")
+            total += imported
+        else:
+            log.info("   📱 SMS Monitor: новых расходов не найдено")
+    except Exception as e:
+        log.error(f"❌ SMS Expense Monitor: {e}")
     
     log.info("=" * 60)
     if total:
