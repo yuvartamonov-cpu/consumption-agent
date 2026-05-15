@@ -13,7 +13,6 @@ Consumption Agent Telegram Bot
 """
 
 import logging, os, sys, re, json, subprocess, tempfile, time, html, traceback, random, asyncio
-import sqlite3
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -229,11 +228,11 @@ from services.images import (
     _fetch_html,
     find_product_image_urls,
 )
+from services.receipt_pipeline import persist_receipt, process_source
 from repositories.items import (
     get_category_id,
     insert_item,
     insert_manual_item,
-    insert_receipt_item,
     insert_tag_item,
     insert_vision_photo_item,
     mark_replaced as mark_item_replaced,
@@ -247,7 +246,6 @@ from repositories.media import (
     save_media_asset,
     unlink_item_photos,
 )
-from repositories.purchases import insert_telegram_photo_purchase
 
 
 def search_product_info_gemini(brand: str, article: str, barcode: str = None) -> dict:
@@ -937,133 +935,68 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 log.warning(f"Failed to send image {engine_url}: {e}")
         return
 
-    # === Если НЕ бирка — используем Vision API (GPT-4o-mini) ===
-    ocr_result = None
-    vision_result = None
+    # Unified receipt pipeline: image -> OCR/parser -> structured receipt -> matcher -> DB.
     try:
-        from vision_receipt import recognize_receipt
-        vision_result = recognize_receipt(receipt_path)
-        if vision_result and 'error' not in vision_result:
-            vision_items = vision_result.get('items', [])
-            if vision_items:
-                items = [{'name': it['name'], 'price': it.get('price', 0), 'qty': it.get('qty', 1),
-                          'total': it.get('price', 0) * it.get('qty', 1)} for it in vision_items]
-                total_amount = total_amount or vision_result.get('total')
-                purchase_date = purchase_date or vision_result.get('date')
-                log.info(f"Vision API: {vision_result.get('store')}, {len(items)} items, total={vision_result.get('total')}")
-        else:
-            log.warning(f"Vision API failed: {vision_result.get('error', 'unknown')}")
-    except Exception as e:
-        log.warning(f"Vision API unavailable: {e}")
+        def _process_receipt_photo():
+            conn = get_db()
+            try:
+                receipt = process_source(receipt_path, input_type='image', vision_fallback=True)
+                if total_amount and receipt.total is None:
+                    receipt.total = total_amount
+                if purchase_date:
+                    receipt.date = purchase_date
+                apply_result = persist_receipt(
+                    conn,
+                    receipt,
+                    dry_run=False,
+                    source='telegram_photo',
+                    data_origin='telegram_photo',
+                    receipt_url=receipt_path,
+                )
+                return receipt, apply_result
+            finally:
+                conn.close()
 
-    # Fallback: старый OCR-пайплайн (если Vision не сработал)
-    if not items:
-        try:
-            from scripts import receipt_ocr
-            ocr_result = await asyncio.to_thread(receipt_ocr.process_receipt, receipt_path)
-            if ocr_result.ocr_score >= 30 and (ocr_result.items or ocr_result.total):
-                items = [{'name': it.name, 'price': it.price, 'qty': it.qty, 'total': it.total} for it in ocr_result.items]
-                total_amount = total_amount or ocr_result.total
-                log.info(f"receipt_ocr fallback: {len(items)} items, score={ocr_result.ocr_score}")
-            else:
-                items = _parse_receipt_lines(text or '', total_amount)
-        except Exception as e:
-            log.warning(f"receipt_ocr fallback failed: {e}")
-            items = _parse_receipt_lines(text or '', total_amount)
-
-    if not total_amount:
-        m = re.search(r'ИТОГ[О]?[^\d]*([\d]+[.,]\d{2})', text or '')
-        if m:
-            total_amount = float(m.group(1).replace(',', '.'))
-
-    conn = get_db()
-    purchase_id = None
-
-    # Убедимся, что колонка is_delivery существует
-    try:
-        conn.execute("ALTER TABLE items ADD COLUMN is_delivery INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass  # уже существует
-
-    # Проверяем, есть ли доставка от Vision API или OCR
-    delivery = 0
-    delivery_name = 'Доставка'
-    if vision_result and 'error' not in vision_result:
-        vd = vision_result.get('delivery', {})
-        delivery = vd.get('price', 0) or 0
-        delivery_name = vd.get('name', 'Доставка')
-    elif ocr_result and hasattr(ocr_result, 'delivery_cost'):
-        delivery = ocr_result.delivery_cost or 0
-        delivery_name = getattr(ocr_result, 'delivery_item_name', 'Доставка')
-
-    # Отделяем доставку от товаров: убираем из items, если есть
-    real_items = []
-    delivery_items = []
-    if items:
-        for item in items:
-            name_lower = item['name'].lower()
-            # Ключевые слова доставки
-            dl_keywords = ['доставк', 'курьер', 'shipping', 'delivery', 'почт', 'postage', 'транспорт']
-            if any(kw in name_lower for kw in dl_keywords) or (delivery and abs(item.get('price', 0) - delivery) < 1):
-                delivery_items.append(item)
-            else:
-                real_items.append(item)
-
-        items = real_items
-
-    if items or total_amount:
-        purchase_date = purchase_date or date.today().isoformat()
-        purchase_id = insert_telegram_photo_purchase(conn, purchase_date=purchase_date, total_amount=total_amount)
-
-    if items:
-        for item in items:
-            category_id = get_category_id(conn, 'other', fallback_slug=None)
-            for keyword, cat_slug in {
-                'корм': 'cat_pets_food', 'собака': 'cat_pets', 'кошка': 'cat_pets',
-                'доставка': 'cat_services_log', 'услуга': 'cat_services_log',
-                'еда': 'cat_food', 'продукты': 'cat_food'
-            }.items():
-                if keyword in item['name'].lower():
-                    cat_id = get_category_id(conn, cat_slug, fallback_slug=None)
-                    if cat_id:
-                        category_id = cat_id
-                        break
-            insert_receipt_item(
-                conn,
-                name=item['name'],
-                price=item['price'],
-                purchase_date=purchase_date,
-                category_id=category_id,
-                purchase_id=purchase_id,
-            )
-
-    # Сохраняем доставку отдельно, если есть
-    if delivery:
-        service_cat_id = get_category_id(conn, 'service', fallback_slug=None)
-        insert_receipt_item(
-            conn,
-            name=delivery_name,
-            price=delivery,
-            purchase_date=purchase_date,
-            category_id=service_cat_id,
-            purchase_id=purchase_id,
-            is_delivery=True,
+        receipt_result, apply_result = await asyncio.to_thread(_process_receipt_photo)
+        purchase_id = apply_result.purchase_id
+        purchase_date = receipt_result.date
+        total_amount = receipt_result.total
+        items = [
+            {
+                'name': item.name,
+                'price': item.price or 0,
+                'qty': item.qty,
+                'total': item.total or item.price or 0,
+            }
+            for item in receipt_result.product_items
+        ]
+        delivery_items = [
+            {
+                'name': item.name,
+                'price': item.price or item.total or 0,
+                'qty': item.qty,
+                'total': item.total or item.price or 0,
+            }
+            for item in receipt_result.delivery_items
+        ]
+        delivery = receipt_result.delivery_total
+        vision_result = {'store': receipt_result.store}
+        log.info(
+            'receipt_pipeline: engine=%s score=%s products=%s delivery=%s purchase_id=%s',
+            receipt_result.engine,
+            receipt_result.ocr_score,
+            len(items),
+            delivery,
+            purchase_id,
         )
-    elif delivery_items:
-        # Если доставка была в items, но не выделилась через delivery_cost
-        service_cat_id = get_category_id(conn, 'service', fallback_slug=None)
-        for dli in delivery_items:
-            insert_receipt_item(
-                conn,
-                name=dli['name'],
-                price=dli['price'],
-                purchase_date=purchase_date,
-                category_id=service_cat_id,
-                purchase_id=purchase_id,
-                is_delivery=True,
-            )
+    except Exception as e:
+        log.warning(f'receipt_pipeline failed: {e}')
+        items = _parse_receipt_lines(text or '', total_amount)
+        delivery_items = []
+        delivery = 0
+        vision_result = {}
+        purchase_id = None
 
-    # Формируем структурированный вывод
     response_parts = ['🧾 Чек распознан']
 
     # Магазин из Vision API

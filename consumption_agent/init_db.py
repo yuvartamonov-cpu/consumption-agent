@@ -96,6 +96,7 @@ def create_new_schema(conn):
             purchase_source   TEXT,
             purchase_url      TEXT,
             purchase_id       INTEGER REFERENCES purchases(id),
+            is_delivery       INTEGER DEFAULT 0,
             warranty_months   INTEGER,
             expiry_date       TEXT,
             lifespan_months   INTEGER,

@@ -5,6 +5,14 @@ from datetime import date
 from typing import Any
 
 
+def ensure_delivery_column(conn) -> None:
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN is_delivery INTEGER DEFAULT 0")
+    except Exception as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
 def get_category_id(conn, slug: str, fallback_slug: str | None = "other") -> Any:
     row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (slug,)).fetchone()
     if row:
@@ -82,6 +90,8 @@ def insert_receipt_item(
     category_id,
     purchase_id: int | None,
     is_delivery: bool = False,
+    data_origin: str = "telegram_photo",
+    status: str = "in_use",
 ) -> int:
     return insert_item(
         conn,
@@ -89,9 +99,35 @@ def insert_receipt_item(
         purchase_price=price,
         purchase_date=purchase_date,
         category_id=category_id,
-        data_origin="telegram_photo",
+        data_origin=data_origin,
         purchase_id=purchase_id,
         is_delivery=1 if is_delivery else 0,
+        status=status,
+    )
+
+
+def update_purchase_details(
+    conn,
+    *,
+    item_id: int,
+    purchase_id: int,
+    purchase_price: float | None,
+    purchase_date: str,
+    quantity: float | int = 1,
+    purchase_currency: str = "RUB",
+) -> None:
+    conn.execute(
+        """
+        UPDATE items
+        SET purchase_id = ?,
+            purchase_price = ?,
+            purchase_date = ?,
+            purchase_currency = ?,
+            quantity = ?,
+            updated_at = datetime('now')
+        WHERE id = ?
+        """,
+        (purchase_id, purchase_price, purchase_date, purchase_currency, quantity, item_id),
     )
 
 
