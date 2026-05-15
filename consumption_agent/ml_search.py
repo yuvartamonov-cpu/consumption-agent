@@ -285,8 +285,10 @@ async def search_web_best_match(query: str, photo_path: Optional[str] = None) ->
         return None
 
 
-def escape_html(text: str) -> str:
+def escape_html(text: Optional[str]) -> str:
     """Экранирует HTML-символы."""
+    if not text:
+        return ''
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
@@ -303,17 +305,19 @@ def format_search_result(item: Dict, links: Dict[str, str], best_match: Optional
     ]
     
     if best_match:
-        price_str = f"{best_match['price']} ₽" if best_match.get('price') else 'цена не указана'
-        title = escape_html(best_match['title'][:80])
-        store = escape_html(best_match['store'])
+        price_str = f"{best_match.get('price', '')} ₽" if best_match.get('price') else 'цена не указана'
+        title = escape_html((best_match.get('title') or 'Найдено по фото')[:80])
+        store = escape_html(best_match.get('store', 'Маркетплейс'))
+        url = best_match.get('url', '')
         lines.extend([
             "",
             f"<b>Лучшее предложение:</b>",
             f"🛒 {store}",
             f"📦 {title}",
             f"💰 {price_str}",
-            f"<a href='{best_match['url']}'>🔗 Перейти к товару</a>",
         ])
+        if url:
+            lines.append(f"<a href='{url}'>🔗 Перейти к товару</a>")
     else:
         lines.extend([
             "",
