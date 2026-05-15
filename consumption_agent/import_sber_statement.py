@@ -179,19 +179,53 @@ def parse_statement_text(text):
 
 
 def import_to_db(operations):
-    """Вносит операции в БД consumption.db."""
+    """Вносит операции в БД consumption.db.
+    
+    Расходы → purchases, переводы → transfers.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         imported = 0
+        imported_transfers = 0
         skipped = 0
         
         for op in operations:
-            if op['is_income'] or op['amount'] is None or op['amount'] <= 0:
+            if op['amount'] is None:
                 skipped += 1
                 continue
             
-            # Дедупликация
+            # Переводы и крупные операции → отдельная таблица
+            if ('Перевод' in op['category'] or 'Перевод' in op['description'] or
+                'Прочие операции' in op['category'] and op['amount'] > 10000):
+                # Дедупликация переводов
+                existing = conn.execute('''
+                    SELECT id FROM transfers 
+                    WHERE transfer_date = ? AND amount = ? AND description = ?
+                ''', (op['date'].isoformat(), float(op['amount']), op['description'])).fetchone()
+                
+                if existing:
+                    skipped += 1
+                    continue
+                
+                conn.execute('''
+                    INSERT INTO transfers (transfer_date, amount, description, source)
+                    VALUES (?, ?, ?, ?)
+                ''', (
+                    op['date'].isoformat(),
+                    float(op['amount']),
+                    f"{op['description']} | {op['category']}",
+                    'sber_statement'
+                ))
+                imported_transfers += 1
+                continue
+            
+            # Пополнения/внесения пропускаем
+            if op['is_income']:
+                skipped += 1
+                continue
+            
+            # Расходы → purchases
             existing = conn.execute('''
                 SELECT id FROM purchases 
                 WHERE purchase_date = ? AND total_amount = ? AND store_name = ?
@@ -201,7 +235,6 @@ def import_to_db(operations):
                 skipped += 1
                 continue
             
-            # Вставка
             conn.execute('''
                 INSERT INTO purchases (purchase_date, store_name, total_amount, notes, source, data_origin)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -216,7 +249,7 @@ def import_to_db(operations):
             imported += 1
         
         conn.commit()
-        return imported, skipped
+        return imported, imported_transfers, skipped
     finally:
         conn.close()
 
@@ -239,5 +272,7 @@ if __name__ == '__main__':
     for op in expenses[:10]:
         print(f"  {op['date']} {op['time']} | {op['store']:25} | {op['amount']:>10} ₽ | {op['category']}")
     
-    imported, skipped = import_to_db(expenses)
-    print(f"\nИмпортировано: {imported}, пропущено (дубли/переводы): {skipped}")
+    imported, imported_transfers, skipped = import_to_db(expenses)
+    print(f"\nРасходов импортировано: {imported}")
+    print(f"Переводов импортировано: {imported_transfers}")
+    print(f"Пропущено (дубли/пополнения): {skipped}")
