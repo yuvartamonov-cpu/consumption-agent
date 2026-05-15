@@ -138,39 +138,95 @@ async def enrich_item_from_photo(item: Dict) -> Dict:
         return item
 
 
-async def search_web_best_match(query: str) -> Optional[Dict]:
-    """Ищет лучшее соответствие через web_search.
+async def search_by_image_yandex(photo_path: str) -> Optional[Dict]:
+    """Поиск по изображению через Яндекс.Картинки.
     
     Returns:
         Dict с title, url, price, store или None
     """
     try:
-        # Используем web_search для поиска
-        from web_search import web_search
-        results = web_search(query + ' купить цена', count=5)
+        import requests
         
-        if not results:
+        # Загружаем фото на Яндекс.Картинки
+        url = "https://yandex.ru/images/search"
+        
+        with open(photo_path, 'rb') as f:
+            files = {'upfile': ('image.jpg', f, 'image/jpeg')}
+            response = requests.post(
+                url,
+                files=files,
+                params={'rpt': 'imageview', 'format': 'json'},
+                timeout=30
+            )
+        
+        if response.status_code != 200:
             return None
         
-        # Выбираем лучший результат
-        best = None
-        for r in results:
-            title = r.get('title', '')
-            url = r.get('url', '')
-            # Ищем цену в title
-            price_match = re.search(r'(\d[\d\s]*)\s*(?:₽|руб|RUB)', title)
-            price = price_match.group(1).replace(' ', '') if price_match else None
-            
-            if 'ozon' in url or 'wildberries' in url or 'market.yandex' in url:
-                if best is None or (price and (best.get('price') is None or int(price) < int(best['price']))):
-                    best = {
-                        'title': title,
-                        'url': url,
-                        'price': price,
-                        'store': 'Ozon' if 'ozon' in url else 'Wildberries' if 'wildberries' in url else 'Яндекс.Маркет'
-                    }
+        data = response.json()
         
-        return best
+        # Ищем товары в результатах
+        if 'blocks' in data:
+            for block in data['blocks']:
+                if block.get('type') == 'products':
+                    products = block.get('products', [])
+                    if products:
+                        best = products[0]
+                        return {
+                            'title': best.get('title', 'Найдено по фото'),
+                            'url': best.get('url', ''),
+                            'price': str(best.get('price', '')),
+                            'store': best.get('shop', 'Яндекс.Маркет'),
+                        }
+        
+        return None
+    except Exception as e:
+        print(f"Ошибка поиска по фото: {e}")
+        return None
+
+
+async def search_web_best_match(query: str, photo_path: Optional[str] = None) -> Optional[Dict]:
+    """Ищет лучшее соответствие через web_search или по фото.
+    
+    Returns:
+        Dict с title, url, price, store или None
+    """
+    # Сначала пробуем поиск по фото (если есть)
+    if photo_path and os.path.exists(photo_path):
+        result = await search_by_image_yandex(photo_path)
+        if result:
+            return result
+    
+    # Fallback на текстовый поиск
+    try:
+        from web_search import web_search
+        
+        # Ищем с приоритетом на маркетплейсы
+        search_queries = [
+            query + ' site:ozon.ru',
+            query + ' site:wildberries.ru',
+            query + ' site:market.yandex.ru',
+            query + ' купить',
+        ]
+        
+        for sq in search_queries:
+            results = web_search(sq, count=3)
+            if results:
+                for r in results:
+                    title = r.get('title', '')
+                    url = r.get('url', '')
+                    # Ищем цену
+                    price_match = re.search(r'(\d[\d\s]*)\s*(?:₽|руб|RUB)', title)
+                    price = price_match.group(1).replace(' ', '') if price_match else None
+                    
+                    if any(s in url for s in ['ozon', 'wildberries', 'market.yandex']):
+                        return {
+                            'title': title,
+                            'url': url,
+                            'price': price,
+                            'store': 'Ozon' if 'ozon' in url else 'Wildberries' if 'wildberries' in url else 'Яндекс.Маркет'
+                        }
+        
+        return None
     except Exception as e:
         print(f"Ошибка web поиска: {e}")
         return None
@@ -302,8 +358,9 @@ async def search_item(item_id: int) -> Optional[str]:
     query = build_search_query(item)
     links = generate_marketplace_links(query)
     
-    # Ищем лучшее соответствие через web
-    best_match = await search_web_best_match(query)
+    # Ищем лучшее соответствие через web или по фото
+    photo_path = item.get('photo_path')
+    best_match = await search_web_best_match(query, photo_path)
     
     result = format_search_result(item, links, best_match)
     
