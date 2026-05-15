@@ -95,7 +95,45 @@ def generate_marketplace_links(query: str) -> Dict[str, str]:
     }
 
 
-def format_search_result(item: Dict, links: Dict[str, str]) -> str:
+async def search_web_best_match(query: str) -> Optional[Dict]:
+    """Ищет лучшее соответствие через web_search.
+    
+    Returns:
+        Dict с title, url, price, store или None
+    """
+    try:
+        # Используем web_search для поиска
+        from web_search import web_search
+        results = web_search(query + ' купить цена', count=5)
+        
+        if not results:
+            return None
+        
+        # Выбираем лучший результат
+        best = None
+        for r in results:
+            title = r.get('title', '')
+            url = r.get('url', '')
+            # Ищем цену в title
+            price_match = re.search(r'(\d[\d\s]*)\s*(?:₽|руб|RUB)', title)
+            price = price_match.group(1).replace(' ', '') if price_match else None
+            
+            if 'ozon' in url or 'wildberries' in url or 'market.yandex' in url:
+                if best is None or (price and (best.get('price') is None or int(price) < int(best['price']))):
+                    best = {
+                        'title': title,
+                        'url': url,
+                        'price': price,
+                        'store': 'Ozon' if 'ozon' in url else 'Wildberries' if 'wildberries' in url else 'Яндекс.Маркет'
+                    }
+        
+        return best
+    except Exception as e:
+        print(f"Ошибка web поиска: {e}")
+        return None
+
+
+def format_search_result(item: Dict, links: Dict[str, str], best_match: Optional[Dict] = None) -> str:
     """Форматирует результат поиска для Telegram."""
     name = item.get('name', 'Без названия')
     brand = item.get('brand', '')
@@ -105,12 +143,25 @@ def format_search_result(item: Dict, links: Dict[str, str]) -> str:
         f"🔍 *Поиск: {name}*",
         f"Бренд: {brand or 'не указан'}",
         f"Категория: {category}",
-        "",
-        "*Где купить:*",
-        f"[🛒 Ozon]({links['ozon']})",
-        f"[🛒 Яндекс.Маркет]({links['yandex_market']})",
-        f"[🛒 Wildberries]({links['wildberries']})",
     ]
+    
+    if best_match:
+        price_str = f"{best_match['price']} ₽" if best_match.get('price') else 'цена не указана'
+        lines.extend([
+            "",
+            f"*Лучшее предложение:*",
+            f"[{best_match['store']}] {best_match['title'][:60]}",
+            f"💰 {price_str}",
+            f"[🔗 Перейти]({best_match['url']})",
+        ])
+    else:
+        lines.extend([
+            "",
+            "*Где купить:*",
+            f"[🛒 Ozon]({links['ozon']})",
+            f"[🛒 Яндекс.Маркет]({links['yandex_market']})",
+            f"[🛒 Wildberries]({links['wildberries']})",
+        ])
     
     return '\n'.join(lines)
 
@@ -180,7 +231,7 @@ def check_reminders() -> List[Dict]:
         conn.close()
 
 
-def search_item(item_id: int) -> Optional[str]:
+async def search_item(item_id: int) -> Optional[str]:
     """Основная функция поиска товара.
     
     Returns:
@@ -193,7 +244,10 @@ def search_item(item_id: int) -> Optional[str]:
     query = build_search_query(item)
     links = generate_marketplace_links(query)
     
-    return format_search_result(item, links)
+    # Ищем лучшее соответствие через web
+    best_match = await search_web_best_match(query)
+    
+    return format_search_result(item, links, best_match)
 
 
 if __name__ == '__main__':
