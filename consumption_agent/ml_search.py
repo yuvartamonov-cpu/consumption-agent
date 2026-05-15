@@ -79,7 +79,7 @@ def build_search_query(item: Dict) -> str:
     """Формирует поисковый запрос для товара.
     
     Использует сгенерированный нейросетью запрос если есть,
-    иначе формирует из названия + бренда.
+    иначе формирует из названия + бренда + тегов.
     """
     # Если есть сгенерированный запрос от Vision API
     if item.get('search_query'):
@@ -93,6 +93,14 @@ def build_search_query(item: Dict) -> str:
     brand = item.get('brand', '')
     category = item.get('category', '')
     
+    # Если нет названия — используем теги/тему
+    if not name:
+        tags = item.get('style_tags', [])
+        if tags:
+            name = ' '.join(tags[:3])  # первые 3 тега
+        elif category:
+            name = category
+    
     # Определяем шаблон по категории
     template = SEARCH_TEMPLATES.get(category, SEARCH_TEMPLATES['default'])
     
@@ -100,6 +108,9 @@ def build_search_query(item: Dict) -> str:
         name=name,
         brand=brand or ''
     ).strip()
+    
+    if not query:
+        query = 'пальто серое купить'  # fallback
     
     return query
 
@@ -294,37 +305,38 @@ def escape_html(text: Optional[str]) -> str:
 
 def format_search_result(item: Dict, links: Dict[str, str], best_match: Optional[Dict] = None) -> str:
     """Форматирует результат поиска для Telegram (HTML)."""
-    name = escape_html(item.get('name', 'Без названия'))
-    brand = escape_html(item.get('brand', ''))
-    category = escape_html(item.get('category', 'Без категории'))
+    name = escape_html(item.get('name')) or 'Товар из Memory Lane'
+    brand = escape_html(item.get('brand')) or 'не указан'
+    category = escape_html(item.get('category')) or 'одежда'
+    query = item.get('search_query') or item.get('name') or 'пальто серое'
     
     lines = [
-        f"🔍 <b>Поиск: {name}</b>",
-        f"Бренд: {brand or 'не указан'}",
-        f"Категория: {category}",
+        f"🔍 <b>{name}</b>",
+        f"🏷 Бренд: {brand}",
+        f"📂 Категория: {category}",
     ]
     
-    if best_match:
-        price_str = f"{best_match.get('price', '')} ₽" if best_match.get('price') else 'цена не указана'
-        title = escape_html((best_match.get('title') or 'Найдено по фото')[:80])
+    if best_match and best_match.get('url'):
+        price_str = f"{best_match.get('price')} ₽" if best_match.get('price') else 'цена по ссылке'
+        title = escape_html((best_match.get('title') or name)[:80])
         store = escape_html(best_match.get('store', 'Маркетплейс'))
-        url = best_match.get('url', '')
+        url = best_match['url']
         lines.extend([
             "",
-            f"<b>Лучшее предложение:</b>",
-            f"🛒 {store}",
+            f"<b>✅ Найдено:</b>",
+            f"🛒 <b>{store}</b>",
             f"📦 {title}",
-            f"💰 {price_str}",
+            f"💰 <b>{price_str}</b>",
+            f"<a href='{url}'>🔗 Перейти к товару →</a>",
         ])
-        if url:
-            lines.append(f"<a href='{url}'>🔗 Перейти к товару</a>")
     else:
+        # Fallback: прямые ссылки на поиск
         lines.extend([
             "",
-            "<b>Где купить:</b>",
-            f"<a href='{links['ozon']}'>🛒 Ozon</a>",
-            f"<a href='{links['yandex_market']}'>🛒 Яндекс.Маркет</a>",
-            f"<a href='{links['wildberries']}'>🛒 Wildberries</a>",
+            f"<b>🔎 Поиск '{escape_html(query[:40])}':</b>",
+            f"<a href='{links['ozon']}'>🛒 Ozon — найти</a>",
+            f"<a href='{links['yandex_market']}'>🛒 Яндекс.Маркет — найти</a>",
+            f"<a href='{links['wildberries']}'>🛒 Wildberries — найти</a>",
         ])
     
     return '\n'.join(lines)
