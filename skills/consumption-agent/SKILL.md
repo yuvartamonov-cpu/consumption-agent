@@ -107,6 +107,7 @@ def calculate_drive_cost(tariff, hours, km):
 | `credit_alerts.py` | Отправка кредитных алертов в Telegram |
 | `email_importer.py` | Импорт чеков с почты |
 | `scripts/fines_bot.py` | Мониторинг штрафов ГИБДД/парковок из писем Госуслуг |
+| `purchase_dedup.py` | Дедупликация расходов между email и SMS, канонизация магазинов, учёт доставки |
 | `memory_lane.py` | Memory Lane (топики, ассоциации слово→тема) |
 | `check_debts_fines.sh` | Heartbeat-скрипт (кредиты + штрафы) |
 | `check_debts_fines_retry.sh` | Ежечасный cron 10-23, retry до успеха |
@@ -153,8 +154,15 @@ def calculate_drive_cost(tariff, hours, km):
 1. Сканирует все 4 почтовых ящика на чеки
 2. Сканирует SMS через Phone Link (2 телефона)
 3. Запускает `sms_expense_monitor.py` для всех банков
-4. Дедуплицирует записи (date + amount + store)
+4. Дедуплицирует записи через `purchase_dedup.py`
 5. Добавляет новые в `purchases`
+
+**Текущая логика дедупликации расходов:**
+- email между папками режется по `Message-ID`
+- email и SMS сравниваются по дате, каноническому названию магазина и времени операции
+- алиасы продавца схлопываются, например `Умный ритейл` → `Самокат`
+- если в email-чеке есть отдельная `доставка`, то повтором считается и SMS-списание на сумму `итог - доставка`
+- мягкое удаление дублей делается через `deleted_at`, а отчёты `/dayexp` и `/monthexp` показывают только активные записи
 
 **Таблица `purchases`:**
 ```sql
@@ -249,4 +257,3 @@ sqlite3 /home/yuri_artamonov/.openclaw/workspace/consumption_agent/consumption.d
 **Функция:** `_parse_samokat_items(html)` в `consumption_agent_full_030526.py`
 
 **Источник данных:** фискальный чек (ФФД 1.2), все цены в рублях, формат цен: `XXX.XX`
-

@@ -29,6 +29,14 @@ from pathlib import Path
 from typing import Optional
 from bs4 import BeautifulSoup
 from imap_folders import build_message_uid, discover_target_mailboxes
+from purchase_dedup import (
+    build_delivery_note,
+    build_time_note,
+    canonical_store_name,
+    email_event_details,
+    is_duplicate_purchase,
+    normalize_purchase_date,
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
@@ -132,31 +140,23 @@ def normalize_sender(from_val):
     return (m.group(1) if m else from_val).lower().strip()
 
 
-def is_already_imported(conn, date_str, amount, store_name):
-    if not date_str or not amount or not store_name:
-        return False
-    # нормализуем дату до  YYYY-MM-DD
-    d = date_str.split()[0] if ' ' in date_str else date_str
-    if '.' in d:
-        parts = d.split('.')
-        if len(parts) == 3:
-            d = f"{parts[2]}-{parts[1]}-{parts[0]}"
-    row = conn.execute(
-        "SELECT id FROM purchases WHERE purchase_date = ? AND total_amount = ? AND store_name = ?",
-        (d, float(amount), store_name)
-    ).fetchone()
-    return row is not None
+def is_already_imported(conn, date_str, amount, store_name, *, event_time=None, email_msg_id=None, delivery_fee=None):
+    return is_duplicate_purchase(
+        conn,
+        date_str,
+        amount,
+        store_name,
+        event_time=event_time,
+        email_msg_id=email_msg_id,
+        delivery_fee=delivery_fee,
+    )
 
 
 def add_purchase(conn, date_str, total_amount, store_name, items, source_name, notes_suffix='', payment_method='card', email_msg_id=None):
     if not date_str or not total_amount or not store_name:
         return None
-    # дата
-    d = date_str.split()[0] if ' ' in date_str else date_str
-    if '.' in d:
-        parts = d.split('.')
-        if len(parts) == 3:
-            d = f"{parts[2]}-{parts[1]}-{parts[0]}"
+    d = normalize_purchase_date(date_str)
+    store_name = canonical_store_name(store_name)
     
     item_names = [it[0] if isinstance(it, (list, tuple)) else it for it in items[:6]]
     if len(items) > 6:
@@ -165,15 +165,6 @@ def add_purchase(conn, date_str, total_amount, store_name, items, source_name, n
     if notes_suffix:
         notes += f" ({notes_suffix})"
 
-    # Дедупликация по email_message_id (только для писем)
-    if email_msg_id:
-        existing = conn.execute(
-            "SELECT id FROM purchases WHERE email_message_id = ?", (email_msg_id,)
-        ).fetchone()
-        if existing:
-            log.info(f"   ⏭ Уже есть (msg_id): {email_msg_id}")
-            return None
-    
     try:
         cur = conn.execute("""
             INSERT INTO purchases (purchase_date, total_amount, payment_method, source, store_name, notes, email_message_id)
@@ -199,7 +190,7 @@ def parse_ofd_cheque(html):
     text = soup.get_text(separator='\n')
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     
-    res = {'store': None, 'date': None, 'total': None, 'org': '', 'items': [], 'is_cheque': False}
+    res = {'store': None, 'date': None, 'total': None, 'delivery': None, 'org': '', 'items': [], 'is_cheque': False}
     
     if 'кассовый чек' in text.lower():
         res['is_cheque'] = True
@@ -227,6 +218,27 @@ def parse_ofd_cheque(html):
                 if m:
                     res['total'] = m.group(1).strip(); break
             if res['total']: break
+
+    # Доставка / сервисный сбор
+    for i, line in enumerate(lines):
+        lower = line.lower()
+        if not any(token in lower for token in ('доставк', 'курьер', 'service fee', 'сервисный сбор')):
+            continue
+        candidates = [line]
+        candidates.extend(lines[i + 1:i + 4])
+        for candidate in candidates:
+            m = re.search(r'(\d[\d\s]*[.,]\d{1,2}|\d[\d\s]*)', candidate)
+            if not m:
+                continue
+            try:
+                value = float(m.group(1).replace(' ', '').replace(',', '.'))
+            except Exception:
+                continue
+            if value > 0:
+                res['delivery'] = value
+                break
+        if res['delivery']:
+            break
     
     # Организация → магазин
     for line in lines:
@@ -348,6 +360,7 @@ def scan_mailbox(config, conn):
                     
                     store_name = None
                     total = None
+                    delivery_fee = None
                     items = []
                     # Парсинг даты из Email-заголовка
                     raw_date = msg.get('Date', '')
@@ -378,46 +391,74 @@ def scan_mailbox(config, conn):
                         if 'кассовый чек' in html.lower() or 'кассовый чек' in body.lower():
                             parsed = parse_ofd_cheque(html or body)
                             if parsed['is_cheque'] and parsed['store'] and parsed['total']:
-                                store_name = parsed['store']
+                                store_name = canonical_store_name(parsed['store'])
                                 total = float(re.sub(r'[^\d.,]', '', parsed['total']).replace(',', '.'))
+                                delivery_fee = parsed.get('delivery')
                                 items = parsed.get('items', [])
                                 date_str = parsed.get('date') or date_str
+                            else:
+                                delivery_fee = None
+                        else:
+                            delivery_fee = None
                     
                     # 2. Яндекс Чеки
                     if not store_name and ('check.yandex' in html or 'check.yandex' in body):
                         parsed = parse_ofd_cheque(html or body)
                         if parsed['is_cheque'] and parsed['total']:
                             total = float(re.sub(r'[^\d.,]', '', parsed['total']).replace(',', '.'))
-                            store_name = parsed.get('store') or 'Яндекс'
+                            store_name = canonical_store_name(parsed.get('store') or 'Яндекс')
+                            delivery_fee = parsed.get('delivery')
                             items = parsed.get('items', [])
                             date_str = parsed.get('date') or date_str
+                        else:
+                            delivery_fee = None
                     
                     # 3. Яндекс Плюс
                     if not store_name and ('yandex plus' in full_text or 'яндекс плюс' in full_text):
-                        store_name = 'Яндекс Плюс'
+                        store_name = canonical_store_name('Яндекс Плюс')
                         total = extract_amount_from_body(body, html)
                         if not total:
                             if 'подписк' in full_text or 'plus' in full_text:
                                 total = 449.0
+                        delivery_fee = None
                     
                     # 4. Определение магазина по отправителю
                     if not store_name:
                         sender_subj = (sender_email + ' ' + subj_val.lower()).lower()
                         for keywords, sname in TARGET_SENDERS:
                             if any(kw in sender_subj for kw in keywords):
-                                store_name = sname
+                                store_name = canonical_store_name(sname)
                                 total = extract_amount_from_body(body, html)
+                                delivery_fee = None
                                 break
                     
                     # 5. Если магазин определён — добавляем
                     if store_name and total:
                         email_id = msg.get('Message-ID', '').strip()
-                        if not is_already_imported(conn, date_str, total, store_name):
+                        normalized_date, event_time = email_event_details(date_str, raw_date)
+                        if not is_already_imported(
+                            conn,
+                            normalized_date,
+                            total,
+                            store_name,
+                            event_time=event_time,
+                            email_msg_id=email_id,
+                            delivery_fee=delivery_fee,
+                        ):
                             items_data = items if items else [(subj_val[:100], '')]
-                            add_purchase(conn, date_str, total, store_name, items_data, config['name'], email_msg_id=email_id)
+                            note_parts = []
+                            delivery_note = build_delivery_note(delivery_fee)
+                            time_note = build_time_note(event_time)
+                            if delivery_note:
+                                note_parts.append(delivery_note)
+                            if time_note:
+                                note_parts.append(time_note)
+                            notes_suffix = '; '.join(note_parts)
+                            add_purchase(conn, normalized_date, total, store_name, items_data, config['name'], notes_suffix, email_msg_id=email_id)
                             added += 1
                         else:
-                            log.info(f"   ⏭ Уже есть: {date_str} {total:.0f} ₽ {store_name}")
+                            event_mark = f' {event_time}' if event_time else ''
+                            log.info(f"   ⏭ Уже есть: {normalized_date}{event_mark} {total:.0f} ₽ {store_name}")
                     elif store_name:
                         log.info(f"   📄 {store_name}: сумма не найдена в письме")
                     
@@ -604,18 +645,26 @@ def scan_sms_today(parent_conn):
                     else:
                         store = 'SMS payment'
 
+                store = canonical_store_name(store)
+
                 if amount > 10000 and store == 'SMS payment':
                     log.info(f"   ⏭ SMS пропущен (крупная сумма, не расход): {amount:.0f} ₽")
                     continue
 
                 sms_found += 1
                 date_str = dt.strftime('%Y-%m-%d') if dt else datetime.now().strftime('%Y-%m-%d')
+                event_time = dt.strftime('%H:%M') if dt else None
 
-                if not is_already_imported(parent_conn, date_str, amount, store):
-                    add_purchase(parent_conn, date_str, amount, store, [(body[:100], '')], 'sms', 'через SMS')
+                if not is_already_imported(parent_conn, date_str, amount, store, event_time=event_time):
+                    notes_suffix = 'через SMS'
+                    time_suffix = build_time_note(event_time)
+                    if time_suffix:
+                        notes_suffix = f'{notes_suffix}; {time_suffix}'
+                    add_purchase(parent_conn, date_str, amount, store, [(body[:100], '')], 'sms', notes_suffix)
                     added += 1
                 else:
-                    log.info(f"   ⏭ SMS уже есть: {date_str} {amount:.0f} ₽ {store}")
+                    event_mark = f' {event_time}' if event_time else ''
+                    log.info(f"   ⏭ SMS уже есть: {date_str}{event_mark} {amount:.0f} ₽ {store}")
 
             parent_conn.commit()
             total_added += added

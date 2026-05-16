@@ -21,6 +21,7 @@ from typing import List, Optional, Dict
 sys.path.insert(0, os.path.dirname(__file__))
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
+from purchase_dedup import build_time_note, canonical_store_name, extract_event_time, is_duplicate_purchase
 
 # Путь к базе Phone Link
 PHONE_LINK_DB_GLOB = (
@@ -163,9 +164,10 @@ def parse_sms_body(body: str, sender: str = '') -> Optional[Dict]:
             
             return {
                 'amount': amount,
-                'store': store.strip(),
+                'store': canonical_store_name(store.strip()),
                 'raw': body,
                 'bank': bank,
+                'event_time': extract_event_time(body),
             }
     
     return None
@@ -247,15 +249,20 @@ def import_expenses(expenses: List[Dict]) -> tuple:
         
         for exp in expenses:
             # Дедупликация
-            existing = conn.execute('''
-                SELECT id FROM purchases 
-                WHERE purchase_date = ? AND total_amount = ? AND store_name = ?
-            ''', (exp['date'].isoformat(), exp['amount'], exp['store'])).fetchone()
-            
-            if existing:
+            if is_duplicate_purchase(
+                conn,
+                exp['date'].isoformat(),
+                exp['amount'],
+                exp['store'],
+                event_time=exp.get('event_time'),
+            ):
                 skipped += 1
                 continue
             
+            note_suffix = build_time_note(exp.get('event_time'))
+            note = f"SMS: {exp['raw'][:100]}"
+            if note_suffix:
+                note += f" ({note_suffix})"
             conn.execute('''
                 INSERT INTO purchases (purchase_date, store_name, total_amount, notes, source, data_origin)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -263,7 +270,7 @@ def import_expenses(expenses: List[Dict]) -> tuple:
                 exp['date'].isoformat(),
                 exp['store'],
                 exp['amount'],
-                f"SMS: {exp['raw'][:100]}",
+                note,
                 'sms_sber',
                 'sms_sber'
             ))
