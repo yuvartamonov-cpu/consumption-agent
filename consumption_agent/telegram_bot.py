@@ -2456,6 +2456,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/items [all|категория] — инвентарь вещей по категориям\n'
         '/ml_last [N] — последние записи Memory Lane\n'
         '/ml_search <id> — найти товар (pipeline v2: dedup + anomaly + taste)\n'
+        '/ml_stats — CTR по источникам (active learning)\n'
         '/topic_set <слово> <тема> — задать тему для слова\n'
         '/topic_list [тема] — показать все правила тем\n'
         '/help — это сообщение'
@@ -3004,6 +3005,20 @@ async def ml_search_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text=f'🔍 Ищу товар #{ml_id}... Это может занять 10-20 секунд.'
     )
     
+    # Stage 9 active-learning: log this as an explicit user request
+    try:
+        import ml_clicks
+        conn_log = get_db()
+        try:
+            ml_clicks.log_click(
+                conn_log, item_id=ml_id,
+                action='search_request', source='button_v1',
+            )
+        finally:
+            conn_log.close()
+    except Exception as _e:
+        log.warning(f'ml_clicks log_click failed: {_e}')
+
     try:
         from ml_search import search_item
         result = await search_item(ml_id)
@@ -3062,6 +3077,49 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.warning(f'cmd_ml_search failed: {e}')
         await temp.edit_text(f'⚠️ Ошибка: {str(e)[:200]}')
+
+
+async def cmd_ml_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/ml_stats — CTR по источникам для активного обучения (Stage 9)."""
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+    try:
+        import ml_clicks
+        conn = get_db()
+        try:
+            ml_clicks.ensure_clicks_schema(conn)
+            stats = ml_clicks.ctr_per_source(conn, since_days=30)
+            recent = ml_clicks.recent_events(conn, limit=8)
+        finally:
+            conn.close()
+
+        if not stats:
+            await update.message.reply_text(
+                '📊 ml_stats: пока нет данных.\n'
+                'Используйте /ml_search <id> и кликайте по ссылкам — '
+                'CTR появится тут.'
+            )
+            return
+
+        lines = ['📊 <b>ml_stats</b> (за 30 дней)\n']
+        lines.append('<b>CTR по источникам:</b>')
+        for src, s in sorted(stats.items(), key=lambda x: -x[1]['ctr']):
+            ctr_pct = round(s['ctr'] * 100, 1)
+            lines.append(
+                f"  • <b>{src}</b>: {s['clicks']}/{s['impressions']} "
+                f"({ctr_pct}%)"
+            )
+        if recent:
+            lines.append('\n<b>Последние события:</b>')
+            for e in recent[:5]:
+                kind = '👀' if e['kind'] == 'impression' else '🖱'
+                act = e.get('action') or ''
+                src = e.get('source') or '—'
+                lines.append(f"  {kind} #{e['item_id']} · {src} · {act} · {e['ts'][:16]}")
+        await update.message.reply_text('\n'.join(lines), parse_mode='HTML')
+    except Exception as e:
+        log.warning(f'cmd_ml_stats failed: {e}')
+        await update.message.reply_text(f'⚠️ Ошибка: {str(e)[:200]}')
 
 
 async def ml_remind_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3331,6 +3389,7 @@ def main():
     add_authorized_handler(app, CommandHandler('set_warranty', cmd_set_warranty))
     add_authorized_handler(app, CommandHandler('ml_last', cmd_ml_last))
     add_authorized_handler(app, CommandHandler('ml_search', cmd_ml_search))
+    add_authorized_handler(app, CommandHandler('ml_stats', cmd_ml_stats))
     add_authorized_handler(app, CommandHandler('topic_set', cmd_topic_set))
     add_authorized_handler(app, CommandHandler('topic_list', cmd_topic_list))
     add_authorized_handler(app, CommandHandler('help', cmd_help))

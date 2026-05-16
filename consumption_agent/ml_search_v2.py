@@ -30,6 +30,7 @@ from typing import Any, Awaitable, Callable, Optional
 import ml_anomaly
 import ml_attributes
 import ml_canonical
+import ml_clicks
 import ml_inventory
 import ml_query_expansion
 import ml_taste
@@ -276,6 +277,14 @@ async def search_ml_item_v2(
     collisions = ml_inventory.find_inventory_collisions(conn, attrs)
     result['inventory_collisions'] = collisions
     result['collision_warning'] = ml_inventory.format_collision_warning(collisions)
+
+    # 10. Log impressions for active learning (Stage 9)
+    try:
+        ml_clicks.log_impressions(
+            conn, item_id, ranked, category=attrs.get('category')
+        )
+    except Exception as e:
+        log.warning("ml_search_v2: log_impressions failed: %s", e)
 
     return result
 
