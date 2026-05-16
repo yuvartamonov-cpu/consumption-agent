@@ -108,15 +108,20 @@ async def _default_candidates_provider(
     sources: list[str],
     photo_path: Optional[str],
 ) -> list[dict]:
-    """Production stub — returns empty until external APIs are wired.
+    """Production default — delegates to ml_providers.composite_provider.
 
-    Real wiring (Ozon/WB/YM/SerpAPI) lives in ml_search.py async helpers;
-    callers can swap them in or build their own composite.
+    Fetches real candidates from Wildberries (public API), Ozon (if
+    cookies available), and Yandex Market (link-only fallback).
     """
-    log.info("ml_search_v2: default candidates_provider returns empty "
-             "(no marketplace API wired). queries=%d sources=%d",
-             len(queries), len(sources))
-    return []
+    try:
+        import ml_providers
+        return await ml_providers.composite_provider(queries, sources, photo_path)
+    except ImportError:
+        log.warning("ml_search_v2: ml_providers not available, returning empty")
+        return []
+    except Exception as e:
+        log.warning("ml_search_v2: composite_provider failed: %s", e)
+        return []
 
 
 # ---------------------------------------------------------------------------

@@ -437,16 +437,38 @@ def escape_html(text: Optional[str]) -> str:
 
 def format_search_result(item: Dict, links: Dict[str, str], best_match: Optional[Dict] = None) -> str:
     """Форматирует результат поиска для Telegram (HTML)."""
-    name = escape_html(item.get('name')) or 'Товар из Memory Lane'
+    # Формируем название из тегов если name пустое
+    raw_name = item.get('name', '')
+    if not raw_name:
+        tags = item.get('style_tags', [])
+        if tags:
+            raw_name = ' '.join(tags[:3])
+        else:
+            raw_name = item.get('category', 'Товар')
+    
+    name = escape_html(raw_name) or 'Товар из Memory Lane'
     brand = escape_html(item.get('brand')) or 'не указан'
     category = escape_html(item.get('category')) or 'одежда'
-    query = item.get('search_query') or item.get('name') or 'пальто серое'
+    query = item.get('search_query') or raw_name or 'пальто серое'
+    
+    # Добавляем описание если есть
+    description = escape_html(item.get('description', ''))
+    
+    # Формируем строку тегов
+    tags = item.get('style_tags', [])
+    tags_str = ' '.join(f'#{t}' for t in tags[:5]) if tags else ''
     
     lines = [
         f"🔍 <b>{name}</b>",
         f"🏷 Бренд: {brand}",
         f"📂 Категория: {category}",
     ]
+    
+    if description:
+        lines.append(f"📝 {description}")
+    
+    if tags_str:
+        lines.append(f"🏷 {tags_str}")
     
     if best_match and best_match.get('url'):
         price_str = f"{best_match.get('price')} ₽" if best_match.get('price') else 'цена по ссылке'
