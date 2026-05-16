@@ -560,8 +560,11 @@ async def search_item(item_id: int) -> Optional[str]:
     links = generate_marketplace_links(query)
     
     # Ищем лучшее соответствие через web или по фото
-    photo_path = item.get('photo_path')
-    best_match = await search_web_best_match(query, photo_path)
+    # FIXME: API маркетплейсов часто возвращают нерелевантные результаты
+    # Отключаем до реализации нормального поиска через рабочую модель
+    # photo_path = item.get('photo_path')
+    # best_match = await search_web_best_match(query, photo_path)
+    best_match = None
     
     result = format_search_result(item, links, best_match)
     

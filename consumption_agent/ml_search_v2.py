@@ -1,0 +1,405 @@
+"""
+ml_search_v2.py — Orchestrator that wires Stages 1-4 together.
+
+Pipeline:
+    1. Load memory_lane_items row + photo path
+    2. Get attributes (cached attributes_json OR fresh Vision extraction)
+    3. Build query expansion tree
+    4. Run federated search via injectable candidates_provider
+    5. Canonicalize results across marketplaces
+    6. Flag price anomalies
+    7. Detect inventory collisions
+    8. Build user taste profile + re-rank by combined score
+    9. Format for Telegram
+
+Both the Vision call and the marketplace search are injectable so this
+module is fully testable without network or OpenAI API access.
+
+Public API:
+    search_ml_item_v2(conn, item_id, ...) -> dict
+    format_search_result_telegram(result) -> str
+"""
+from __future__ import annotations
+
+import asyncio
+import html as _html
+import logging
+import sqlite3
+from typing import Any, Awaitable, Callable, Optional
+
+import ml_anomaly
+import ml_attributes
+import ml_canonical
+import ml_inventory
+import ml_query_expansion
+import ml_taste
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Source routing (text-only mirror of SKILL.md §3 brand authority cascade)
+# ---------------------------------------------------------------------------
+CATEGORY_SOURCES: dict[str, list[str]] = {
+    'одежда':    ['lamoda', 'brandshop', 'wildberries', 'ozon', 'yandex_market'],
+    'обувь':     ['lamoda', 'brandshop', 'sneakerhead', 'wildberries', 'ozon'],
+    'техника':   ['dns', 'citilink', 'mvideo', 'ozon', 'yandex_market'],
+    'мебель':    ['hoff', 'mrdoors', 'ikea', 'ozon', 'wildberries'],
+    'интерьер':  ['hoff', 'ikea', 'ozon', 'wildberries', 'yandex_market'],
+    'косметика': ['goldapple', 'iledebeaute', 'wildberries', 'ozon'],
+    'аксессуары':['lamoda', 'brandshop', 'ozon', 'wildberries', 'yandex_market'],
+}
+DEFAULT_SOURCES = ['ozon', 'wildberries', 'yandex_market']
+
+# How many query variants we ask each source to try (most-specific first)
+QUERIES_PER_SOURCE = 3
+
+
+def route_sources(attrs: dict, *, top_n: int = 5) -> list[str]:
+    """Pick marketplaces appropriate for the item's category, plus the
+    brand site if a brand was recognised."""
+    cat = (attrs.get('category') or '').lower()
+    base = CATEGORY_SOURCES.get(cat, DEFAULT_SOURCES)
+    out = list(base)[:top_n]
+    if attrs.get('brand'):
+        out.insert(0, f"brand:{attrs['brand']}")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Provider types (typed for clarity, not enforced)
+# ---------------------------------------------------------------------------
+AttributeExtractor = Callable[[Optional[str], str], Awaitable[dict]]
+CandidatesProvider = Callable[[list[str], list[str], Optional[str]], Awaitable[list[dict]]]
+
+
+# ---------------------------------------------------------------------------
+# Default providers
+# ---------------------------------------------------------------------------
+async def _default_attribute_extractor(photo_path: Optional[str], caption: str) -> dict:
+    """Production default — calls ml_attributes.extract_attributes_async."""
+    if not photo_path:
+        # No photo, nothing to call Vision on. Return defaults.
+        return ml_attributes.validate_attributes({})
+    return await ml_attributes.extract_attributes_async(photo_path, caption)
+
+
+async def _default_candidates_provider(
+    queries: list[str],
+    sources: list[str],
+    photo_path: Optional[str],
+) -> list[dict]:
+    """Production stub — returns empty until external APIs are wired.
+
+    Real wiring (Ozon/WB/YM/SerpAPI) lives in ml_search.py async helpers;
+    callers can swap them in or build their own composite.
+    """
+    log.info("ml_search_v2: default candidates_provider returns empty "
+             "(no marketplace API wired). queries=%d sources=%d",
+             len(queries), len(sources))
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Item loading
+# ---------------------------------------------------------------------------
+def _load_item(conn: sqlite3.Connection, item_id: int) -> Optional[dict]:
+    """Fetch memory_lane_items row joined with media file path."""
+    has_attrs = _has_column(conn, 'memory_lane_items', 'attributes_json')
+    has_vision = _has_column(conn, 'memory_lane_items', 'name')
+
+    cols = ['m.id', 'm.caption', 'm.topic', 'm.style_tags', 'm.media_asset_id']
+    if has_vision:
+        cols += ['m.name', 'm.description', 'm.brand']
+    else:
+        cols += ['NULL AS name', 'NULL AS description', 'NULL AS brand']
+    if has_attrs:
+        cols.append('m.attributes_json')
+    else:
+        cols.append('NULL AS attributes_json')
+    cols.append('a.file_path')
+
+    sql = (
+        f"SELECT {', '.join(cols)} "
+        f"FROM memory_lane_items m "
+        f"LEFT JOIN media_assets a ON a.id = m.media_asset_id "
+        f"WHERE m.id = ?"
+    )
+    try:
+        cur = conn.execute(sql, (item_id,))
+        row = cur.fetchone()
+    except sqlite3.OperationalError as e:
+        log.warning("ml_search_v2: cannot load item %d: %s", item_id, e)
+        return None
+    if not row:
+        return None
+    return dict(zip([d[0] for d in cur.description], row))
+
+
+def _has_column(conn: sqlite3.Connection, table: str, col: str) -> bool:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(r[1] == col for r in rows)
+    except sqlite3.OperationalError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Attribute resolution (cached vs fresh)
+# ---------------------------------------------------------------------------
+async def _resolve_attributes(
+    conn: sqlite3.Connection,
+    item: dict,
+    extractor: AttributeExtractor,
+    *,
+    force_refresh: bool = False,
+) -> dict:
+    """Return validated attribute dict for the item.
+
+    If attributes_json was cached (Stage 1 migration done) and not stale,
+    use it. Otherwise call the extractor, validate, persist.
+    """
+    cached_raw = item.get('attributes_json')
+    if cached_raw and not force_refresh:
+        try:
+            import json
+            cached = json.loads(cached_raw)
+            return ml_attributes.validate_attributes(cached)
+        except (TypeError, ValueError):
+            log.warning("ml_search_v2: corrupt attributes_json for item %s", item.get('id'))
+
+    photo_path = item.get('file_path')
+    caption = item.get('caption') or ''
+    attrs = await extractor(photo_path, caption)
+
+    # Persist for next time (best-effort)
+    try:
+        ml_attributes.save_attributes(conn, item['id'], attrs)
+    except sqlite3.OperationalError as e:
+        log.warning("ml_search_v2: could not cache attributes: %s", e)
+    return attrs
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+async def search_ml_item_v2(
+    conn: sqlite3.Connection,
+    item_id: int,
+    *,
+    candidates_provider: Optional[CandidatesProvider] = None,
+    attribute_extractor: Optional[AttributeExtractor] = None,
+    force_refresh_attrs: bool = False,
+    profile_id: str = 'default',
+    decay_days: float = 180.0,
+) -> dict:
+    """Run the full visual-product-search pipeline.
+
+    Returns a dict; never raises on missing data — falls back to defaults
+    and reports them in `result['errors']`.
+    """
+    extractor = attribute_extractor or _default_attribute_extractor
+    fetcher = candidates_provider or _default_candidates_provider
+
+    result: dict[str, Any] = {
+        'item_id': item_id,
+        'attributes': {},
+        'queries': [],
+        'sources_used': [],
+        'canonical_groups': [],
+        'inventory_collisions': [],
+        'collision_warning': None,
+        'summary': {},
+        'errors': [],
+    }
+
+    # 1. Load item
+    item = _load_item(conn, item_id)
+    if not item:
+        result['errors'].append(f"item {item_id} not found")
+        return result
+
+    # 2. Attributes
+    try:
+        attrs = await _resolve_attributes(conn, item, extractor,
+                                          force_refresh=force_refresh_attrs)
+    except Exception as e:
+        log.exception("ml_search_v2: attribute extraction failed")
+        result['errors'].append(f"attributes: {e}")
+        attrs = ml_attributes.validate_attributes({})
+    # Merge any item-level brand/name/topic into attrs as a soft prior
+    # (Vision result wins, but if it's empty we use what we have)
+    if not attrs.get('brand') and item.get('brand'):
+        attrs['brand'] = item['brand']
+    if not attrs.get('category') and item.get('topic'):
+        attrs['category'] = item['topic']
+    result['attributes'] = attrs
+
+    # 3. Query expansion + 4. Source routing
+    expanded = ml_query_expansion.expand_queries(attrs)
+    result['queries'] = expanded
+    sources = route_sources(attrs)
+    result['sources_used'] = sources
+
+    if not expanded:
+        result['errors'].append('no queries could be expanded from attributes')
+        return result
+
+    # 5. Federated search
+    queries = [q for q, _ in expanded][:QUERIES_PER_SOURCE]
+    try:
+        candidates = await fetcher(queries, sources, item.get('file_path'))
+    except Exception as e:
+        log.exception("ml_search_v2: candidates_provider failed")
+        result['errors'].append(f"candidates: {e}")
+        candidates = []
+
+    # 6. Canonicalize
+    canonical = ml_canonical.canonicalize(candidates, attrs)
+    result['summary'] = ml_canonical.group_stats(canonical)
+
+    # 7. Anomalies (with brand-history from items table)
+    def _brand_avg(brand):
+        return ml_anomaly.avg_paid_for_brand(conn, brand) if brand else None
+    flagged = ml_anomaly.detect_all(
+        canonical, attrs, brand_history_provider=_brand_avg
+    )
+
+    # 8. Taste profile + re-rank
+    profile = ml_taste.build_taste_profile(
+        conn, decay_days=decay_days, profile_id=profile_id
+    )
+    ranked = ml_taste.rank_candidates(flagged, profile, attrs=attrs)
+    result['canonical_groups'] = ranked
+
+    # 9. Inventory collision check
+    collisions = ml_inventory.find_inventory_collisions(conn, attrs)
+    result['inventory_collisions'] = collisions
+    result['collision_warning'] = ml_inventory.format_collision_warning(collisions)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Telegram formatting
+# ---------------------------------------------------------------------------
+def _esc(s: Any) -> str:
+    if s is None:
+        return ''
+    return _html.escape(str(s))
+
+
+def _fmt_price_range(g: dict) -> str:
+    pmin = g.get('price_min')
+    pmax = g.get('price_max')
+    if pmin is None:
+        return 'цена по ссылке'
+    if pmax is None or pmax == pmin:
+        return f"{pmin:,} ₽".replace(',', ' ')
+    return f"{pmin:,}–{pmax:,} ₽".replace(',', ' ')
+
+
+def _fmt_anomaly(a: Optional[dict]) -> str:
+    if not a:
+        return ''
+    icon = '⚠️' if a['kind'] == 'suspicious_cheap' else '💸'
+    return f"{icon} {_esc(a['reason'])}"
+
+
+def format_search_result_telegram(result: dict, *, max_groups: int = 5) -> str:
+    """Render a Telegram HTML reply for the /ml_search command."""
+    attrs = result.get('attributes', {})
+    groups = result.get('canonical_groups', [])
+
+    lines = []
+    name = attrs.get('subcategory') or attrs.get('category') or 'товар'
+    brand = attrs.get('brand')
+    title = f"🔍 <b>{_esc(name)}</b>"
+    if brand:
+        title += f" · {_esc(brand)}"
+    lines.append(title)
+
+    bits = []
+    if attrs.get('primary_color'):
+        bits.append(_esc(attrs['primary_color']))
+    if attrs.get('material'):
+        bits.append(_esc(attrs['material']))
+    if attrs.get('style'):
+        bits.append(', '.join(_esc(s) for s in attrs['style'][:2]))
+    if bits:
+        lines.append('· '.join(bits))
+
+    # Collision warning first — user should see it before considering buying
+    if result.get('collision_warning'):
+        lines.append('')
+        lines.append(_esc(result['collision_warning']))
+
+    if not groups:
+        lines.append('')
+        if result.get('errors'):
+            lines.append(f"⚠️ {_esc('; '.join(result['errors']))}")
+        else:
+            lines.append('Ничего не нашёл по этим параметрам.')
+        return '\n'.join(lines)
+
+    summary = result.get('summary') or {}
+    if summary.get('groups'):
+        lines.append('')
+        lines.append(
+            f"<b>Найдено</b>: {summary['groups']} товаров "
+            f"в {summary['total_listings']} листингах"
+        )
+
+    lines.append('')
+    for i, g in enumerate(groups[:max_groups], 1):
+        store = _esc(g.get('store', '?'))
+        url = g.get('url')
+        title_txt = _esc((g.get('title') or g.get('name') or '—')[:80])
+        price_str = _fmt_price_range(g)
+        n_sources = g.get('sources_count', 1)
+        n_sources_label = f" · {n_sources} площадки" if n_sources > 1 else ''
+
+        line = (f"<b>{i}.</b> {title_txt}\n"
+                f"   🛒 <b>{store}</b>{n_sources_label} · {price_str}")
+        anomaly_line = _fmt_anomaly(g.get('anomaly'))
+        if anomaly_line:
+            line += f"\n   {anomaly_line}"
+        if url:
+            line += f"\n   <a href=\"{_esc(url)}\">🔗 открыть</a>"
+        lines.append(line)
+
+    if len(groups) > max_groups:
+        lines.append('')
+        lines.append(f"… ещё {len(groups) - max_groups} вариантов")
+
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def _main_cli():
+    import argparse
+    import os
+    import sys
+    parser = argparse.ArgumentParser(description='visual-product-search v2 pipeline')
+    parser.add_argument('item_id', type=int, help='memory_lane_items.id')
+    parser.add_argument('--db', default=os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'consumption.db'))
+    parser.add_argument('--force-refresh-attrs', action='store_true')
+    args = parser.parse_args()
+
+    if not os.path.exists(args.db):
+        print(f"DB not found: {args.db}", file=sys.stderr)
+        sys.exit(1)
+
+    conn = sqlite3.connect(args.db)
+    result = asyncio.run(search_ml_item_v2(
+        conn, args.item_id, force_refresh_attrs=args.force_refresh_attrs
+    ))
+    conn.close()
+    print(format_search_result_telegram(result))
+
+
+if __name__ == '__main__':
+    _main_cli()
