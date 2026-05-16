@@ -30,7 +30,7 @@ CREDIT_SENDERS = {
     'rosbank', 'uralsib', 'homecredit', 'rencredit',
     'pochtabank', 'akbars', 'absolut', 'mdm',
     'turbozaim', 'joy_finance', 'nebus',
-    'ekvazaim', 'webzaim',
+    'ekvazaim', 'webzaim', 'dengi_srazu',
 }
 
 # Спам-МФО (не настоящие напоминания, а рекламный спам)

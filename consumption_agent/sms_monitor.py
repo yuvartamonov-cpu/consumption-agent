@@ -41,6 +41,7 @@ BODY_SENDER_PATTERNS = {
     'boostra': ['boostra', 'бустра'],
     'ekvazaim': ['эквазайм', 'ekvazaim'],
     'webzaim': ['webzaim', 'вебзайм'],
+    'dengi_srazu': ['деньги сразу', 'dengisrazu', 'dengi-srazu'],
 }
 
 SMS_INTEREST_PATTERNS = [

@@ -69,6 +69,7 @@ MFO_PATTERNS = {
     'boostra': ['boostra', 'бустра'],
     'ekvazaim': ['эквазайм', 'ekvazaim'],
     'webzaim': ['webzaim', 'вебзайм'],
+    'dengi_srazu': ['деньги сразу', 'dengisrazu', 'dengi-srazu'],
 }
 
 ALL_PATTERNS = {**BANK_PATTERNS, **MFO_PATTERNS}

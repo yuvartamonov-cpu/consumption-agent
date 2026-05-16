@@ -63,6 +63,7 @@ CREATE TABLE credit_alerts (
 | `boostra` | Boostra | boostra, бустра |
 | `ekvazaim` | Эквазайм | эквазайм, ekvazaim |
 | `webzaim` | Webzaim | webzaim, вебзайм |
+| `dengi_srazu` | Деньги Сразу | деньги сразу, dengisrazu, dengi-srazu |
 
 ## Ключевые файлы
 
