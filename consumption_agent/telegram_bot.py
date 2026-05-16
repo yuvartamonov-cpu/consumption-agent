@@ -1780,6 +1780,30 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
 
+    # Проверка на подозрительные дубли
+    try:
+        import purchase_duplicate_detector as pdd
+        conn = get_db()
+        try:
+            groups = pdd.find_suspected_duplicates(conn, days_back=n_days)
+            for group in groups:
+                resolved = pdd.auto_resolve_if_email_dedup(conn, group)
+                if resolved:
+                    question = pdd.format_duplicate_question(resolved)
+                    kb = pdd.build_duplicate_keyboard(resolved)
+                    await ctx.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=question,
+                        parse_mode='Markdown',
+                        reply_markup=kb,
+                    )
+        finally:
+            conn.close()
+    except ImportError:
+        pass
+    except Exception as e:
+        log.warning(f'dayexp duplicate check failed: {e}')
+
 
 async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /monthexp — расходы с начала месяца с расшифровкой по дням.
@@ -1869,6 +1893,30 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
 
     await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
+
+    # Проверка на подозрительные дубли
+    try:
+        import purchase_duplicate_detector as pdd
+        conn = get_db()
+        try:
+            groups = pdd.find_suspected_duplicates(conn)
+            for group in groups:
+                resolved = pdd.auto_resolve_if_email_dedup(conn, group)
+                if resolved:
+                    question = pdd.format_duplicate_question(resolved)
+                    kb = pdd.build_duplicate_keyboard(resolved)
+                    await ctx.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=question,
+                        parse_mode='Markdown',
+                        reply_markup=kb,
+                    )
+        finally:
+            conn.close()
+    except ImportError:
+        pass
+    except Exception as e:
+        log.warning(f'monthexp duplicate check failed: {e}')
 
 
 async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3363,6 +3411,76 @@ async def vision_reject_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         conn.close()
 
 
+async def dedup_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '🗑 Удалить дубли' — помечает дубли как deleted."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('dedup_delete:'):
+        return
+
+    ids_str = data.split(':', 1)[1]
+    try:
+        ids = [int(x) for x in ids_str.split(',') if x.strip().isdigit()]
+    except ValueError:
+        await query.answer('⚠️ Некорректные id', show_alert=True)
+        return
+
+    if not ids:
+        return
+
+    conn = get_db()
+    try:
+        for pid in ids:
+            conn.execute(
+                'UPDATE purchases SET deleted_at = datetime("now") WHERE id = ? AND deleted_at IS NULL',
+                (pid,),
+            )
+        conn.commit()
+        log.info(f'dedup_delete: deleted {len(ids)} purchases: {ids}')
+        await query.edit_message_text(
+            query.message.text + '\n\n🗑 Помечены как дубли',
+            reply_markup=None,
+            parse_mode='Markdown',
+        )
+        await query.answer(f'✅ {len(ids)} записей помечены дублями')
+    except Exception as e:
+        log.warning(f'dedup_delete_callback failed: {e}')
+        await query.answer('⚠️ Ошибка', show_alert=True)
+    finally:
+        conn.close()
+
+
+async def dedup_keep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '✅ Оставить' — убирает кнопки, оставляет записи как есть."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    try:
+        await query.edit_message_text(
+            query.message.text + '\n\n✅ Оставлено',
+            reply_markup=None,
+            parse_mode='Markdown',
+        )
+        await query.answer('✅ Записи оставлены')
+    except Exception as e:
+        log.warning(f'dedup_keep_callback failed: {e}')
+        await query.answer('⚠️ Ошибка', show_alert=True)
+
+
 async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки '📷 Фото' — отправляет фото товара."""
     query = update.callback_query
@@ -3467,6 +3585,8 @@ def main():
     add_authorized_handler(app, CallbackQueryHandler(ml_remind_set_callback, pattern=r'^ml_remind_set:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
     add_authorized_handler(app, CallbackQueryHandler(vision_reject_callback, pattern=r'^vision_reject$'))
+    add_authorized_handler(app, CallbackQueryHandler(dedup_delete_callback, pattern=r'^dedup_delete:'))
+    add_authorized_handler(app, CallbackQueryHandler(dedup_keep_callback, pattern=r'^dedup_keep:'))
 
     # Generate alerts once at startup
     gen = generate_alerts()

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-12T18:16:15.628Z",
+  "updatedAt": "2026-05-16T17:48:36.109Z",
   "entries": {
     "memory:memory/2026-04-25.md:1:35": {
       "key": "memory:memory/2026-04-25.md:1:35",
@@ -502,20 +502,22 @@
       "endLine": 100,
       "source": "memory",
       "snippet": "- Сохранил файл: `betting/picks/2026-04-27-week.md`. - Итог: 4 пика, средняя уверенность 3.5. - Топ-2 идеи: Atlético Madrid vs Arsenal — ТМ 2.5; Nottingham Forest vs Aston Villa — ТМ 2.5. ## Consumption Agent — ревью и переработка - Утром Юрий дал ревью на первую версию документации consumption agent. - Ключевая критика: - Мультипликативная формула веса (Priority × Frequency × Urgency) — статическая, не работает для реальных кейсов (куртка в июле, аллергия в сезон, подарки). Переделано на байесовскую модель: P(need | season, calendar, inventory, budget, profile). Frequency → Temporal Pattern (continuous/seasonal/sparse/event_driven/lifecycle/subscription). - Преждевременная оптимизация",
-      "recallCount": 2,
+      "recallCount": 3,
       "dailyCount": 0,
       "groundedCount": 0,
-      "totalScore": 0.7167389929294585,
-      "maxScore": 0.3615206241607666,
+      "totalScore": 1.0786776423454283,
+      "maxScore": 0.3619386494159698,
       "firstRecalledAt": "2026-05-06T16:18:11.746Z",
-      "lastRecalledAt": "2026-05-07T19:25:22.742Z",
+      "lastRecalledAt": "2026-05-16T17:48:36.109Z",
       "queryHashes": [
         "7e8c910cf507",
-        "035a0835c982"
+        "035a0835c982",
+        "87c645fc116a"
       ],
       "recallDays": [
         "2026-05-06",
-        "2026-05-07"
+        "2026-05-07",
+        "2026-05-16"
       ],
       "conceptTags": [
         "betting/picks/2026-04-27-week.md",
@@ -535,20 +537,22 @@
       "endLine": 35,
       "source": "memory",
       "snippet": "# 2026-04-28 (Вт) ## Домены — рассылка - **Отправлено 25 писем** из базы wave3 (первая партия). Остаток 42 контакта в `wave3_tomorrow.csv`. - **Шаблон**: универсальный, все 4 домена (`medtrade.ru`, `medzakaz.ru`, `medtender.ru`, `gormed.ru`). - **Лог**: обновлён в `mailing_log.csv`. - **План на завтра**: отправить оставшиеся 42 письма. ## Consumption Agent ### Статус - **База**: SQLite `consumption.db` с 4 таблицами (`purchases`, `purchase_items`, `cheques_log`, `recognized_items`). - **Данные**: 93 товара в `recognized_items` (29 со скриншотов, 64 из Excel). ### Что сделано - Распознаны скриншоты Ozon (10 файлов → 29 товаров). - Добавлены товары из Excel (64 позиции с датами покупок).",
-      "recallCount": 2,
+      "recallCount": 3,
       "dailyCount": 0,
       "groundedCount": 0,
-      "totalScore": 0.7028727918863296,
-      "maxScore": 0.3516451060771942,
+      "totalScore": 1.0630060762166975,
+      "maxScore": 0.360133284330368,
       "firstRecalledAt": "2026-05-06T16:18:11.746Z",
-      "lastRecalledAt": "2026-05-07T19:25:22.742Z",
+      "lastRecalledAt": "2026-05-16T17:48:36.109Z",
       "queryHashes": [
         "7e8c910cf507",
-        "035a0835c982"
+        "035a0835c982",
+        "87c645fc116a"
       ],
       "recallDays": [
         "2026-05-06",
-        "2026-05-07"
+        "2026-05-07",
+        "2026-05-16"
       ],
       "conceptTags": [
         "wave3-tomorrow.csv",
@@ -693,18 +697,20 @@
       "endLine": 6,
       "source": "memory",
       "snippet": "- У consumption_agent roadmap обновлён: добавлены отдельные задачи по Госуслугам и поиску полной истории чеков Яндекс Драйв. - Код consumption_agent синхронизирован с Paperclip AI через git; при ребейзе был конфликт в telegram_bot.py, его разрешили объединением /find_car и /warranties. - Автоотправка roadmap на Gmail из WSL 10.05.2026 не заработала: SMTP/STARTTLS таймаутится даже при работающем VPN на Windows. - Старый Gmail app password считался скомпрометированным и был отозван/заменён пользователем 10.05.2026; секреты в память не записывать. - После замены Gmail app password отправка почты из WSL заработала через SMTP_SSL:465; roadmap успешно отправлен на yu.v.artamonov@gmail.com.",
-      "recallCount": 1,
+      "recallCount": 2,
       "dailyCount": 0,
       "groundedCount": 0,
-      "totalScore": 0.4049908697605133,
+      "totalScore": 0.7775975495576859,
       "maxScore": 0.4049908697605133,
       "firstRecalledAt": "2026-05-11T23:20:51.302Z",
-      "lastRecalledAt": "2026-05-11T23:20:51.302Z",
+      "lastRecalledAt": "2026-05-16T17:48:36.109Z",
       "queryHashes": [
-        "736c9fb7c717"
+        "736c9fb7c717",
+        "87c645fc116a"
       ],
       "recallDays": [
-        "2026-05-12"
+        "2026-05-12",
+        "2026-05-16"
       ],
       "conceptTags": [
         "consumption-agent",
@@ -724,19 +730,21 @@
       "endLine": 27,
       "source": "memory",
       "snippet": "# 2026-05-12 ## Consumption Agent — Memory Lane improvements ### /ml_last fixed and enhanced - Исправлена ошибка `AttributeError: 'sqlite3.Row' object has no attribute 'get'` в `/ml_last` — переписано на прямой доступ по ключу `r['media_asset_id']` - Команда `/ml_last` теперь отправляет фото для записей с `media_asset_id` - У каждого фото — кнопка 🗑 Удалить (колбэк `ml_delete_callback`), которая удаляет запись из `memory_lane_items` + файл из `media_assets` ### Vision enrichment → БД - `save_memory_lane()` теперь принимает `vision_info` (name, description, brand из Vision API) - Добавлены колонки `name`, `description`, `brand` в таблицу `memory_lane_items` (через `_ensure_vision_columns`",
-      "recallCount": 2,
+      "recallCount": 3,
       "dailyCount": 0,
       "groundedCount": 0,
-      "totalScore": 0.8331250846385956,
+      "totalScore": 1.1918277829885482,
       "maxScore": 0.42205805778503414,
       "firstRecalledAt": "2026-05-12T12:51:02.515Z",
-      "lastRecalledAt": "2026-05-12T18:16:15.628Z",
+      "lastRecalledAt": "2026-05-16T14:33:10.990Z",
       "queryHashes": [
         "3ab94adaf455",
-        "5a26374e33a2"
+        "5a26374e33a2",
+        "078ab1b68e02"
       ],
       "recallDays": [
-        "2026-05-12"
+        "2026-05-12",
+        "2026-05-16"
       ],
       "conceptTags": [
         "ml-last",
@@ -747,6 +755,37 @@
         "media-assets",
         "save-memory-lane",
         "vision-info"
+      ]
+    },
+    "memory:memory/2026-05-16.md:1:7": {
+      "key": "memory:memory/2026-05-16.md:1:7",
+      "path": "memory/2026-05-16.md",
+      "startLine": 1,
+      "endLine": 7,
+      "source": "memory",
+      "snippet": "## Memory Lane search - Зафиксировано текущее состояние поиска товаров из Memory Lane как промежуточный baseline: текущий `consumption_agent/ml_search.py` слишком примитивен. - Ограничения текущей версии: запрос строится в основном как `name + brand + \"купить\"`, упор только на маркетплейсы, нет нормального поиска по сайтам производителей и дистрибьюторов. - Предпочтительное направление следующей итерации: передавать распознанные данные товара в рабочую LLM для генерации более умного поискового запроса, затем искать не только по маркетплейсам, но и по официальным/дистрибьюторским сайтам. - Поручение от Юрия на этот момент: отправить текущий skill/snapshot по Memory Lane search на почту и зак",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.42944163382053374,
+      "maxScore": 0.42944163382053374,
+      "firstRecalledAt": "2026-05-16T14:33:10.990Z",
+      "lastRecalledAt": "2026-05-16T14:33:10.990Z",
+      "queryHashes": [
+        "078ab1b68e02"
+      ],
+      "recallDays": [
+        "2026-05-16"
+      ],
+      "conceptTags": [
+        "consumption-agent/ml-search.py",
+        "официальным/дистрибьюторским",
+        "skill/snapshot",
+        "lane",
+        "зафиксировано",
+        "текущее",
+        "состояние",
+        "поиска"
       ]
     }
   }
