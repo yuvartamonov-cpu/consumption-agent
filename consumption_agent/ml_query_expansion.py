@@ -94,17 +94,17 @@ def expand_queries(attrs: dict, *, include_purchase_intent: bool = False) -> Lis
     if article:
         push(article, 'article')
 
-    # T2: brand + article
+    # T2: brand + article (with quotes for exact brand match)
     if article and brand:
-        push(_join(brand, article), 'brand_article')
+        push(_join(f'"{brand}"', article), 'brand_article')
 
-    # T3: brand + model
+    # T3: brand + model (with quotes for exact brand match)
     if brand and model:
-        push(_join(brand, model), 'brand_model')
+        push(_join(f'"{brand}"', model), 'brand_model')
 
-    # T4: brand + subcategory + colour
+    # T4: brand + subcategory + colour (with quotes for exact brand match)
     if brand and base_noun:
-        push(_join(brand, base_noun, color), 'brand_subcat')
+        push(_join(f'"{brand}"', base_noun, color), 'brand_subcat')
 
     # T5: descriptive — subcategory + colour + material + fit/length
     if base_noun:

@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import logging
+import re
 import sqlite3
 from typing import Any, Awaitable, Callable, Optional
 
@@ -43,24 +44,26 @@ log = logging.getLogger(__name__)
 # Source routing (text-only mirror of SKILL.md §3 brand authority cascade)
 # ---------------------------------------------------------------------------
 CATEGORY_SOURCES: dict[str, list[str]] = {
-    'одежда':    ['lamoda', 'brandshop', 'wildberries', 'ozon', 'yandex_market'],
-    'обувь':     ['lamoda', 'brandshop', 'sneakerhead', 'wildberries', 'ozon'],
-    'техника':   ['dns', 'citilink', 'mvideo', 'ozon', 'yandex_market'],
-    'мебель':    ['hoff', 'mrdoors', 'ikea', 'ozon', 'wildberries'],
-    'интерьер':  ['hoff', 'ikea', 'ozon', 'wildberries', 'yandex_market'],
-    'косметика': ['goldapple', 'iledebeaute', 'wildberries', 'ozon'],
-    'аксессуары':['lamoda', 'brandshop', 'ozon', 'wildberries', 'yandex_market'],
+    'одежда':    ['lamoda', 'brandshop', 'wildberries', 'yandex_market', 'aliexpress', 'alibaba'],
+    'обувь':     ['lamoda', 'brandshop', 'sneakerhead', 'wildberries', 'yandex_market', 'aliexpress'],
+    'техника':   ['dns', 'citilink', 'mvideo', 'yandex_market', 'wildberries', 'aliexpress', 'alibaba'],
+    'мебель':    ['hoff', 'mrdoors', 'ikea', 'yandex_market', 'wildberries', 'alibaba'],
+    'интерьер':  ['hoff', 'ikea', 'yandex_market', 'wildberries', 'aliexpress', 'alibaba'],
+    'косметика': ['goldapple', 'iledebeaute', 'wildberries', 'yandex_market', 'aliexpress'],
+    'аксессуары':['lamoda', 'brandshop', 'wildberries', 'yandex_market', 'aliexpress', 'alibaba'],
 }
-DEFAULT_SOURCES = ['ozon', 'wildberries', 'yandex_market']
+DEFAULT_SOURCES = ['wildberries', 'yandex_market', 'lamoda', 'aliexpress', 'alibaba']
 
 # How many query variants we ask each source to try (most-specific first)
 QUERIES_PER_SOURCE = 3
+
+_NONWORD_RX = re.compile(r'[^\w]+', flags=re.UNICODE)
 
 
 def route_sources(
     attrs: dict,
     *,
-    top_n: int = 5,
+    top_n: int = 7,
     conn: Optional[sqlite3.Connection] = None,
 ) -> list[str]:
     """Pick marketplaces appropriate for the item's category, plus the
@@ -166,6 +169,90 @@ def _has_column(conn: sqlite3.Connection, table: str, col: str) -> bool:
         return any(r[1] == col for r in rows)
     except sqlite3.OperationalError:
         return False
+
+
+def _normalize_for_match(value: Any) -> str:
+    """Lowercase and collapse punctuation for conservative exact matching."""
+    text = ml_canonical.normalize(value)
+    if not text:
+        return ''
+    return _NONWORD_RX.sub(' ', text).strip()
+
+
+def _contains_normalized_phrase(haystack: Any, needle: Any) -> bool:
+    """True when normalized phrase appears as a whole phrase."""
+    n = _normalize_for_match(needle)
+    if not n:
+        return False
+    h = _normalize_for_match(haystack)
+    if not h:
+        return False
+    return f' {n} ' in f' {h} '
+
+
+def _select_provider_queries(
+    expanded: list[tuple[str, str]],
+    attrs: dict,
+    *,
+    max_n: int = QUERIES_PER_SOURCE,
+) -> list[str]:
+    """Keep brand searches brand-constrained to avoid noisy fallbacks."""
+    if not expanded:
+        return []
+
+    brand = attrs.get('brand')
+    if brand:
+        branded = [q for q, _ in expanded if _contains_normalized_phrase(q, brand)]
+        if branded:
+            return branded[:max_n]
+    return [q for q, _ in expanded][:max_n]
+
+
+def _candidate_matches_brand(candidate: dict, brand: str) -> bool:
+    """Conservative exact brand match; no fuzzy hamington/remington collisions."""
+    for field in (
+        candidate.get('brand'),
+        candidate.get('title'),
+        candidate.get('name'),
+        candidate.get('url'),
+    ):
+        if _contains_normalized_phrase(field, brand):
+            return True
+    return False
+
+
+def _candidate_has_explicit_brand(candidate: dict) -> bool:
+    """True when provider returned a concrete brand value for the listing."""
+    return bool(_normalize_for_match(candidate.get('brand')))
+
+
+def _filter_candidates_for_exact_brand(
+    candidates: list[dict],
+    attrs: dict,
+) -> tuple[list[dict], Optional[str]]:
+    """Drop candidates that do not mention the recognised brand."""
+    brand = (attrs.get('brand') or '').strip()
+    if not brand:
+        return candidates, None
+
+    matched: list[dict] = []
+    neutral: list[dict] = []
+    conflicting: list[dict] = []
+    for cand in candidates:
+        if _candidate_matches_brand(cand, brand):
+            matched.append(cand)
+        elif _candidate_has_explicit_brand(cand):
+            conflicting.append(cand)
+        else:
+            neutral.append(cand)
+
+    if matched:
+        return matched + neutral, None
+    if neutral:
+        return neutral, None
+    if conflicting:
+        return [], f"точных совпадений по бренду {brand} не найдено"
+    return [], None
 
 
 # ---------------------------------------------------------------------------
@@ -280,13 +367,17 @@ async def search_ml_item_v2(
         return result
 
     # 5. Federated search
-    queries = [q for q, _ in expanded][:QUERIES_PER_SOURCE]
+    queries = _select_provider_queries(expanded, attrs)
     try:
         candidates = await fetcher(queries, sources, item.get('file_path'))
     except Exception as e:
         log.exception("ml_search_v2: candidates_provider failed")
         result['errors'].append(f"candidates: {e}")
         candidates = []
+
+    candidates, brand_filter_error = _filter_candidates_for_exact_brand(candidates, attrs)
+    if brand_filter_error:
+        result['errors'].append(brand_filter_error)
 
     # 6. Canonicalize
     canonical = ml_canonical.canonicalize(candidates, attrs)

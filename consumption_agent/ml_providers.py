@@ -51,6 +51,142 @@ OZON_COOKIES_PATH = os.path.join(
     "www.ozon.ru_cookies.txt",
 )
 
+RETAILER_SEARCH_URLS = {
+    'lamoda': 'https://www.lamoda.ru/catalogsearch/result/?q={query}',
+    'brandshop': 'https://brandshop.ru/search/?q={query}',
+    'sneakerhead': 'https://sneakerhead.ru/search/?q={query}',
+    'dns': 'https://www.dns-shop.ru/search/?q={query}',
+    'citilink': 'https://www.citilink.ru/search/?text={query}',
+    'mvideo': 'https://www.mvideo.ru/search?text={query}',
+    'hoff': 'https://hoff.ru/search/?q={query}',
+    'mrdoors': 'https://www.mrdoors.ru/search/?q={query}',
+    'ikea': 'https://www.ikea.com/ru/ru/search/?q={query}',
+    'goldapple': 'https://goldapple.ru/catalogsearch/result/?q={query}',
+    'iledebeaute': 'https://iledebeaute.ru/search/?q={query}',
+    'aliexpress': 'https://www.aliexpress.com/wholesale?SearchText={query}',
+    'alibaba': 'https://www.alibaba.com/trade/search?SearchText={query}',
+}
+
+RETAILER_TITLES = {
+    'lamoda': 'Lamoda',
+    'brandshop': 'Brandshop',
+    'sneakerhead': 'Sneakerhead',
+    'dns': 'DNS',
+    'citilink': 'Citilink',
+    'mvideo': 'М.Видео',
+    'hoff': 'Hoff',
+    'mrdoors': 'Mr.Doors',
+    'ikea': 'IKEA',
+    'goldapple': 'Золотое Яблоко',
+    'iledebeaute': 'Иль де Ботэ',
+    'aliexpress': 'AliExpress',
+    'alibaba': 'Alibaba',
+}
+
+WEB_SEARCH_ENGINES = [
+    ('Google', 'https://www.google.com/search?q={query}'),
+    ('Yandex', 'https://yandex.ru/search/?text={query}'),
+]
+
+FOREIGN_RETAILERS = frozenset({'aliexpress', 'alibaba'})
+
+QUERY_TRANSLATIONS = {
+    'джемпер': 'sweater',
+    'свитер': 'sweater',
+    'пуловер': 'pullover',
+    'кардиган': 'cardigan',
+    'худи': 'hoodie',
+    'толстовка': 'sweatshirt',
+    'футболка': 't-shirt',
+    'майка': 'tank top',
+    'рубашка': 'shirt',
+    'поло': 'polo',
+    'пальто': 'coat',
+    'куртка': 'jacket',
+    'ветровка': 'windbreaker',
+    'парка': 'parka',
+    'пиджак': 'blazer',
+    'костюм': 'suit',
+    'брюки': 'pants',
+    'джинсы': 'jeans',
+    'юбка': 'skirt',
+    'платье': 'dress',
+    'кроссовки': 'sneakers',
+    'кеды': 'trainers',
+    'ботинки': 'boots',
+    'туфли': 'shoes',
+    'сумка': 'bag',
+    'рюкзак': 'backpack',
+    'часы': 'watch',
+    'очки': 'glasses',
+    'наушники': 'headphones',
+    'ноутбук': 'laptop',
+    'смартфон': 'smartphone',
+    'телефон': 'phone',
+    'планшет': 'tablet',
+    'диван': 'sofa',
+    'кресло': 'armchair',
+    'стол': 'table',
+    'стул': 'chair',
+    'шкаф': 'wardrobe',
+    'серый': 'gray',
+    'серая': 'gray',
+    'серое': 'gray',
+    'серые': 'gray',
+    'черный': 'black',
+    'черная': 'black',
+    'черное': 'black',
+    'белый': 'white',
+    'белая': 'white',
+    'белое': 'white',
+    'синий': 'blue',
+    'синяя': 'blue',
+    'синее': 'blue',
+    'красный': 'red',
+    'красная': 'red',
+    'красное': 'red',
+    'зеленый': 'green',
+    'зеленая': 'green',
+    'зеленое': 'green',
+    'желтый': 'yellow',
+    'желтая': 'yellow',
+    'желтое': 'yellow',
+    'коричневый': 'brown',
+    'коричневая': 'brown',
+    'бежевый': 'beige',
+    'бежевая': 'beige',
+    'кожаный': 'leather',
+    'кожаная': 'leather',
+    'шерстяной': 'wool',
+    'шерстяная': 'wool',
+    'хлопковый': 'cotton',
+    'хлопковая': 'cotton',
+    'льняной': 'linen',
+    'льняная': 'linen',
+    'casual': 'casual',
+    'sport': 'sport',
+    'sporty': 'sport',
+}
+
+_QUERY_WORD_RX = re.compile(r"[\wА-Яа-яЁё]+", re.UNICODE)
+
+
+def translate_query_for_source(query: str, source: str) -> str:
+    """Translate Russian product terms to English for foreign marketplaces."""
+    if not query:
+        return query
+    src = (source or "").strip().lower()
+    if src not in FOREIGN_RETAILERS:
+        return query
+
+    def repl(match: re.Match[str]) -> str:
+        word = match.group(0)
+        return QUERY_TRANSLATIONS.get(word.lower(), word)
+
+    translated = _QUERY_WORD_RX.sub(repl, query)
+    translated = re.sub(r"\s+", " ", translated).strip()
+    return translated or query
+
 
 # ---------------------------------------------------------------------------
 # Wildberries — public v5 search API
@@ -336,6 +472,69 @@ def yandex_market_links(queries: Sequence[str], *, limit: int = 3) -> list[dict]
     return results
 
 
+def retailer_links(
+    queries: Sequence[str],
+    sources: Sequence[str],
+    *,
+    limit_per_source: int = 1,
+) -> list[dict]:
+    """Generate direct search links for explicit retailer sources."""
+    out: list[dict] = []
+    plain_sources = [s.lower() for s in sources if not s.lower().startswith("brand:")]
+    for src in plain_sources:
+        template = RETAILER_SEARCH_URLS.get(src)
+        if not template:
+            continue
+        title = RETAILER_TITLES.get(src, src)
+        for query in list(queries)[:limit_per_source]:
+            source_query = translate_query_for_source(query, src)
+            encoded = urllib.parse.quote(source_query)
+            out.append({
+                "title": f"🔗 {title}: {source_query[:60]}",
+                "brand": "",
+                "url": template.format(query=encoded),
+                "price": None,
+                "store": title,
+                "source": src,
+                "image_url": "",
+                "_link_only": True,
+            })
+    return out
+
+
+def brand_site_links(
+    queries: Sequence[str],
+    sources: Sequence[str],
+    *,
+    engines_per_brand: int = 2,
+) -> list[dict]:
+    """Generate web-search links aimed at official brand sites."""
+    brand_sources = [s for s in sources if s.lower().startswith("brand:")]
+    if not brand_sources:
+        return []
+
+    out: list[dict] = []
+    for src in brand_sources:
+        brand = src.split(":", 1)[1].strip()
+        if not brand:
+            continue
+        for query in list(queries)[:1]:
+            official_query = f"{brand} {query} официальный сайт купить"
+            for engine_name, template in WEB_SEARCH_ENGINES[:engines_per_brand]:
+                encoded = urllib.parse.quote(official_query)
+                out.append({
+                    "title": f"🔗 {brand}: {engine_name} официальный поиск",
+                    "brand": brand,
+                    "url": template.format(query=encoded),
+                    "price": None,
+                    "store": "Официальный сайт",
+                    "source": "brand_site",
+                    "image_url": "",
+                    "_link_only": True,
+                })
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Composite provider — the one you plug into ml_search_v2
 # ---------------------------------------------------------------------------
@@ -344,36 +543,32 @@ async def composite_provider(
     sources: list[str],
     photo_path: Optional[str],
 ) -> list[dict]:
-    """Fetch candidates from all available marketplace APIs in parallel.
+    """Fetch candidates with an emphasis on direct seller links.
 
     This is the production `CandidatesProvider` for ml_search_v2.
     Matches the signature: (queries, sources, photo_path) -> list[dict].
 
     `sources` is the bandit-ranked list from route_sources(). We only
-    query APIs for sources that appear in the list.
+    query APIs or emit links for sources that appear in the list.
     """
     src_set = {s.lower() for s in sources}
-    # Also include "brand:..." sources as general marketplace queries
-    has_brand = any(s.startswith("brand:") for s in sources)
 
     tasks: list[asyncio.Task] = []
     task_labels: list[str] = []
+    all_results: list[dict] = []
+
+    all_results.extend(brand_site_links(queries, sources))
+    all_results.extend(retailer_links(queries, sources))
 
     if any(s in src_set for s in ("wildberries", "wb")):
         tasks.append(asyncio.ensure_future(search_wildberries(queries)))
         task_labels.append("wb")
 
-    if any(s in src_set for s in ("ozon",)):
-        tasks.append(asyncio.ensure_future(search_ozon(queries)))
-        task_labels.append("ozon")
-
     # YM link-only — run synchronously (no network call)
-    ym_results: list[dict] = []
     if any(s in src_set for s in ("yandex_market", "ym")):
-        ym_results = yandex_market_links(queries)
+        all_results.extend(yandex_market_links(queries))
 
     # Wait for async providers
-    all_results: list[dict] = list(ym_results)
     if tasks:
         done = await asyncio.gather(*tasks, return_exceptions=True)
         for label, result in zip(task_labels, done):
@@ -386,6 +581,6 @@ async def composite_provider(
     log.info(
         "composite_provider: %d total candidates from %d sources "
         "(queries=%d)",
-        len(all_results), len(task_labels) + bool(ym_results), len(queries),
+        len(all_results), len(sources), len(queries),
     )
     return all_results

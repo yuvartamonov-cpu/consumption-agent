@@ -150,6 +150,11 @@ def canonical_fingerprint(cand: dict, attrs: dict | None = None,
     """
     attrs = attrs or {}
 
+    if cand.get('_link_only'):
+        src = normalize(cand.get('source') or cand.get('store') or 'link')
+        url = normalize(cand.get('url') or cand.get('title') or '')
+        return f"link:{src}|{_hash12(url or repr(sorted(cand.items())))}"
+
     brand = normalize(attrs.get('brand') or cand.get('brand'))
     model = normalize(cand.get('model') or attrs.get('model'))
     article = normalize(cand.get('article') or attrs.get('article'))

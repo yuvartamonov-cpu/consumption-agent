@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import ml_search_v2 as v2
 from ml_search_v2 import (
+    _select_provider_queries,
     search_ml_item_v2,
     format_search_result_telegram,
     route_sources,
@@ -23,12 +24,14 @@ def test_route_sources_uses_category_map():
     sources = route_sources({'category': 'одежда'})
     assert 'lamoda' in sources
     assert 'wildberries' in sources
+    assert 'aliexpress' in sources
 
 
 def test_route_sources_default_for_unknown_category():
     sources = route_sources({'category': 'неизвестно'})
-    assert 'ozon' in sources
     assert 'wildberries' in sources
+    assert 'lamoda' in sources
+    assert 'alibaba' in sources
 
 
 def test_route_sources_prepends_brand_site():
@@ -39,6 +42,17 @@ def test_route_sources_prepends_brand_site():
 def test_route_sources_empty_attrs():
     sources = route_sources({})
     assert sources  # falls back to DEFAULT_SOURCES
+
+
+def test_select_provider_queries_keeps_only_branded_variants():
+    queries = [
+        ('"hamington" джемпер серый', 'brand_subcat'),
+        ('джемпер серый', 'descriptive'),
+        ('джемпер casual', 'style_broad'),
+    ]
+    assert _select_provider_queries(queries, {'brand': 'hamington'}) == [
+        '"hamington" джемпер серый'
+    ]
 
 
 # ────────────────────────────────────────────────
@@ -422,6 +436,67 @@ def test_pipeline_provider_exception_doesnt_crash():
     ))
     assert any('rate limited' in e for e in result['errors'])
     assert result['canonical_groups'] == []
+    conn.close()
+
+
+def test_pipeline_filters_out_foreign_brand_results():
+    conn = _setup_full_db([{
+        'id': 1,
+        'caption': 'нравится джемпер hamington',
+        'liked_features': '["нравится"]',
+        'style_tags': '["casual"]',
+        'topic': 'одежда',
+        'brand': 'hamington',
+        'attributes_json': json.dumps({
+            'category': 'одежда',
+            'subcategory': 'джемпер',
+            'brand': 'hamington',
+            'primary_color': 'серый',
+        }),
+    }])
+
+    async def noisy_provider(q, s, p):
+        return [
+            {'store': 'Wildberries', 'title': 'Джемпер женский серый', 'brand': 'AITA MODA',
+             'price': '999', 'url': 'https://wb.ru/1'},
+            {'store': 'Wildberries', 'title': 'Remington sweater', 'brand': 'Remington',
+             'price': '1999', 'url': 'https://wb.ru/2'},
+        ]
+
+    async def cached(*a, **kw):
+        return {}
+
+    result = _run(search_ml_item_v2(
+        conn, 1, candidates_provider=noisy_provider, attribute_extractor=cached,
+    ))
+    assert result['canonical_groups'] == []
+    assert any('hamington' in e for e in result['errors'])
+    conn.close()
+
+
+def test_link_only_results_do_not_collapse_into_one_group():
+    conn = _setup_full_db([{
+        'id': 1,
+        'caption': 'x',
+        'liked_features': '["нравится"]',
+        'attributes_json': json.dumps({
+            'category': 'одежда', 'subcategory': 'джемпер', 'brand': 'hamington'
+        }),
+    }])
+
+    async def link_provider(q, s, p):
+        return [
+            {'title': '🔗 hamington: Google', 'store': 'Официальный сайт', 'source': 'brand_site', 'url': 'https://google.example', '_link_only': True},
+            {'title': '🔗 Lamoda: hamington', 'store': 'Lamoda', 'source': 'lamoda', 'url': 'https://lamoda.example', '_link_only': True},
+        ]
+
+    async def cached(*a, **kw):
+        return {}
+
+    result = _run(search_ml_item_v2(
+        conn, 1, candidates_provider=link_provider, attribute_extractor=cached,
+    ))
+    assert len(result['canonical_groups']) == 2
     conn.close()
 
 

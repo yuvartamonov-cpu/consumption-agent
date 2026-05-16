@@ -56,6 +56,8 @@ SOURCE_TRUST: dict[str, float] = {
     'ozon': 0.70, 'wildberries': 0.70, 'wb': 0.70,
     'yandex_market': 0.70, 'yandex market': 0.70, 'ym': 0.70,
     'я.маркет': 0.70, 'яндекс.маркет': 0.70,
+    'aliexpress': 0.60, 'ali express': 0.60,
+    'alibaba': 0.55,
     # Tier 5 — C2C / grey market
     'avito': 0.40, 'юла': 0.40, 'youla': 0.40,
 }
