@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from bs4 import BeautifulSoup
+from imap_folders import build_message_uid, discover_target_mailboxes
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
@@ -275,139 +276,159 @@ def scan_mailbox(config, conn):
     try:
         imap = imaplib.IMAP4_SSL(config['host'], timeout=30)
         imap.login(config['user'], password)
-        imap.select('INBOX')
-        
+        mailboxes = discover_target_mailboxes(imap)
+        log.info(f"   Папки: {', '.join(mailboxes)}")
+        seen_ids = set()
+
         today_str = datetime.now().strftime('%d-%b-%Y')
-        result, data = imap.search(None, f'(ON {today_str})')
-        ids = data[0].split()
-        
-        # Если сегодня нет, проверь за последние 2 дня (для первой синхронизации)
-        if not ids:
-            yesterday = (datetime.now() - timedelta(days=1)).strftime('%d-%b-%Y')
-            result, data = imap.search(None, f'(ON {yesterday})')
-            ids = data[0].split()
-        
-        if not ids:
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%d-%b-%Y')
+        scanned_any = False
+
+        for mailbox_name in mailboxes:
+            try:
+                status, _ = imap.select(f'"{mailbox_name}"', readonly=True)
+                if status != 'OK':
+                    log.warning(f"   ⚠️ Не удалось открыть папку {mailbox_name}")
+                    continue
+            except Exception as e:
+                log.warning(f"   ⚠️ Не удалось открыть папку {mailbox_name}: {e}")
+                continue
+
+            result, data = imap.search(None, f'(ON {today_str})')
+            ids = data[0].split() if data and data[0] else []
+
+            if not ids:
+                result, data = imap.search(None, f'(ON {yesterday})')
+                ids = data[0].split() if data and data[0] else []
+
+            if not ids:
+                continue
+
+            scanned_any = True
+            log.info(f"   {mailbox_name}: {len(ids)} писем")
+
+            for num in ids:
+                try:
+                    _, msg_data = imap.fetch(num, '(RFC822)')
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    dedup_key = build_message_uid(msg.get('Message-ID', ''), config['name'], mailbox_name, num)
+                    if dedup_key in seen_ids:
+                        continue
+                    seen_ids.add(dedup_key)
+                
+                    from_val = msg.get('From', '')
+                    subj_val = decode_mime(msg.get('Subject', ''))
+                    sender_email = normalize_sender(from_val)
+
+                    # Пропускаем письма от самого consumption_agent (отчёты, уведомления)
+                    if any(skip in (subj_val + ' ' + from_val + ' ' + sender_email).lower() for skip in ['отчёт о расходах', 'собираем чемоданы', 'consumption agent', 'consumption_agent']):
+                        log.info(f"   ⏭ Пропущено (self): {subj_val[:60]}")
+                        continue
+
+                    # Извлекаем тело
+                    body = ''
+                    html = ''
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            ct = part.get_content_type()
+                            try:
+                                pl = part.get_payload(decode=True)
+                                if pl:
+                                    d = pl.decode('utf-8', errors='replace')
+                                    if ct == 'text/html': html += d
+                                    elif ct == 'text/plain': body += d
+                            except: pass
+                    else:
+                        try:
+                            pl = msg.get_payload(decode=True)
+                            if pl: body += pl.decode('utf-8', errors='replace')
+                        except: pass
+
+                    full_text = f"{from_val} {subj_val} {body} {html}".lower()
+                    
+                    store_name = None
+                    total = None
+                    items = []
+                    # Парсинг даты из Email-заголовка
+                    raw_date = msg.get('Date', '')
+                    date_str = ''
+                    if raw_date:
+                        for fmt in ['%d %b %Y', '%Y-%m-%d', '%d.%m.%Y']:
+                            try:
+                                parsed = datetime.strptime(raw_date[:11], fmt)
+                                date_str = parsed.strftime('%Y-%m-%d')
+                                break
+                            except:
+                                pass
+                        if not date_str:
+                            # Пробуем другие форматы
+                            m = re.search(r'(\d{1,2}\s+[A-Z][a-z]{2}\s+\d{4})', raw_date)
+                            if m:
+                                try:
+                                    parsed = datetime.strptime(m.group(1), '%d %b %Y')
+                                    date_str = parsed.strftime('%Y-%m-%d')
+                                except: pass
+                        if not date_str:
+                            date_str = datetime.now().strftime('%Y-%m-%d')
+                    else:
+                        date_str = datetime.now().strftime('%Y-%m-%d')
+
+                    # 1. Платформа ОФД — детальный парсинг чека
+                    if 'chek.pofd' in sender_email or 'pofd' in sender_email or '1-ofd' in sender_email:
+                        if 'кассовый чек' in html.lower() or 'кассовый чек' in body.lower():
+                            parsed = parse_ofd_cheque(html or body)
+                            if parsed['is_cheque'] and parsed['store'] and parsed['total']:
+                                store_name = parsed['store']
+                                total = float(re.sub(r'[^\d.,]', '', parsed['total']).replace(',', '.'))
+                                items = parsed.get('items', [])
+                                date_str = parsed.get('date') or date_str
+                    
+                    # 2. Яндекс Чеки
+                    if not store_name and ('check.yandex' in html or 'check.yandex' in body):
+                        parsed = parse_ofd_cheque(html or body)
+                        if parsed['is_cheque'] and parsed['total']:
+                            total = float(re.sub(r'[^\d.,]', '', parsed['total']).replace(',', '.'))
+                            store_name = parsed.get('store') or 'Яндекс'
+                            items = parsed.get('items', [])
+                            date_str = parsed.get('date') or date_str
+                    
+                    # 3. Яндекс Плюс
+                    if not store_name and ('yandex plus' in full_text or 'яндекс плюс' in full_text):
+                        store_name = 'Яндекс Плюс'
+                        total = extract_amount_from_body(body, html)
+                        if not total:
+                            if 'подписк' in full_text or 'plus' in full_text:
+                                total = 449.0
+                    
+                    # 4. Определение магазина по отправителю
+                    if not store_name:
+                        sender_subj = (sender_email + ' ' + subj_val.lower()).lower()
+                        for keywords, sname in TARGET_SENDERS:
+                            if any(kw in sender_subj for kw in keywords):
+                                store_name = sname
+                                total = extract_amount_from_body(body, html)
+                                break
+                    
+                    # 5. Если магазин определён — добавляем
+                    if store_name and total:
+                        email_id = msg.get('Message-ID', '').strip()
+                        if not is_already_imported(conn, date_str, total, store_name):
+                            items_data = items if items else [(subj_val[:100], '')]
+                            add_purchase(conn, date_str, total, store_name, items_data, config['name'], email_msg_id=email_id)
+                            added += 1
+                        else:
+                            log.info(f"   ⏭ Уже есть: {date_str} {total:.0f} ₽ {store_name}")
+                    elif store_name:
+                        log.info(f"   📄 {store_name}: сумма не найдена в письме")
+                    
+                except Exception as e:
+                    log.error(f"   ❌ Ошибка письма {num} в папке {mailbox_name}: {e}")
+                    continue
+
+        if not scanned_any:
             log.info(f"   Нет писем за последние 2 дня")
             imap.logout()
             return 0
-        
-        log.info(f"   Писем: {len(ids)}")
-        
-        for num in ids:
-            try:
-                _, msg_data = imap.fetch(num, '(RFC822)')
-                msg = email.message_from_bytes(msg_data[0][1])
-                
-                from_val = msg.get('From', '')
-                subj_val = decode_mime(msg.get('Subject', ''))
-                sender_email = normalize_sender(from_val)
-
-                # Пропускаем письма от самого consumption_agent (отчёты, уведомления)
-                if any(skip in (subj_val + ' ' + from_val + ' ' + sender_email).lower() for skip in ['отчёт о расходах', 'собираем чемоданы', 'consumption agent', 'consumption_agent']):
-                    log.info(f"   ⏭ Пропущено (self): {subj_val[:60]}")
-                    continue
-
-                # Извлекаем тело
-                body = ''
-                html = ''
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        ct = part.get_content_type()
-                        try:
-                            pl = part.get_payload(decode=True)
-                            if pl:
-                                d = pl.decode('utf-8', errors='replace')
-                                if ct == 'text/html': html += d
-                                elif ct == 'text/plain': body += d
-                        except: pass
-                else:
-                    try:
-                        pl = msg.get_payload(decode=True)
-                        if pl: body += pl.decode('utf-8', errors='replace')
-                    except: pass
-                
-                full_text = f"{from_val} {subj_val} {body} {html}".lower()
-                
-                store_name = None
-                total = None
-                items = []
-                # Парсинг даты из Email-заголовка
-                raw_date = msg.get('Date', '')
-                date_str = ''
-                if raw_date:
-                    for fmt in ['%d %b %Y', '%Y-%m-%d', '%d.%m.%Y']:
-                        try:
-                            parsed = datetime.strptime(raw_date[:11], fmt)
-                            date_str = parsed.strftime('%Y-%m-%d')
-                            break
-                        except:
-                            pass
-                    if not date_str:
-                        # Пробуем другие форматы
-                        m = re.search(r'(\d{1,2}\s+[A-Z][a-z]{2}\s+\d{4})', raw_date)
-                        if m:
-                            try:
-                                parsed = datetime.strptime(m.group(1), '%d %b %Y')
-                                date_str = parsed.strftime('%Y-%m-%d')
-                            except: pass
-                    if not date_str:
-                        date_str = datetime.now().strftime('%Y-%m-%d')
-                else:
-                    date_str = datetime.now().strftime('%Y-%m-%d')
-                
-                # 1. Платформа ОФД — детальный парсинг чека
-                if 'chek.pofd' in sender_email or 'pofd' in sender_email or '1-ofd' in sender_email:
-                    if 'кассовый чек' in html.lower() or 'кассовый чек' in body.lower():
-                        parsed = parse_ofd_cheque(html or body)
-                        if parsed['is_cheque'] and parsed['store'] and parsed['total']:
-                            store_name = parsed['store']
-                            total = float(re.sub(r'[^\d.,]', '', parsed['total']).replace(',', '.'))
-                            items = parsed.get('items', [])
-                            date_str = parsed.get('date') or date_str
-                
-                # 2. Яндекс Чеки
-                if not store_name and ('check.yandex' in html or 'check.yandex' in body):
-                    parsed = parse_ofd_cheque(html or body)
-                    if parsed['is_cheque'] and parsed['total']:
-                        total = float(re.sub(r'[^\d.,]', '', parsed['total']).replace(',', '.'))
-                        store_name = parsed.get('store') or 'Яндекс'
-                        items = parsed.get('items', [])
-                        date_str = parsed.get('date') or date_str
-                
-                # 3. Яндекс Плюс
-                if not store_name and ('yandex plus' in full_text or 'яндекс плюс' in full_text):
-                    store_name = 'Яндекс Плюс'
-                    total = extract_amount_from_body(body, html)
-                    if not total:
-                        # подписка Яндекс Плюс — 449 ₽
-                        if 'подписк' in full_text or 'plus' in full_text:
-                            total = 449.0
-                
-                # 4. Определение магазина по отправителю (только email + тема, не всё тело)
-                if not store_name:
-                    sender_subj = (sender_email + ' ' + subj_val.lower()).lower()
-                    for keywords, sname in TARGET_SENDERS:
-                        if any(kw in sender_subj for kw in keywords):
-                            store_name = sname
-                            total = extract_amount_from_body(body, html)
-                            break
-                
-                # 5. Если магазин определён — добавляем
-                if store_name and total:
-                    email_id = msg.get('Message-ID', '').strip()
-                    if not is_already_imported(conn, date_str, total, store_name):
-                        items_data = items if items else [(subj_val[:100], '')]
-                        add_purchase(conn, date_str, total, store_name, items_data, config['name'], email_msg_id=email_id)
-                        added += 1
-                    else:
-                        log.info(f"   ⏭ Уже есть: {date_str} {total:.0f} ₽ {store_name}")
-                elif store_name:
-                    log.info(f"   📄 {store_name}: сумма не найдена в письме")
-                
-            except Exception as e:
-                log.error(f"   ❌ Ошибка письма {num}: {e}")
-                continue
         
         imap.logout()
         conn.commit()

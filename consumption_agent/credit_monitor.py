@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple
 import json
 
 from consumption.db import connect as db_connect
+from imap_folders import build_message_uid, discover_target_mailboxes
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 
@@ -560,52 +561,64 @@ def check_email_account(config: dict, days_back: int = 1) -> List[CreditAlert]:
         # Убираем пробелы из пароля (для app password)
         password_clean = config['password'].replace(' ', '')
         mail.login(login_user, password_clean)
-        mail.select('INBOX')
-        
-        # Ищем письма ТОЛЬКО за текущий день (ON)
+        mailboxes = discover_target_mailboxes(mail)
+        print(f"   Папки: {', '.join(mailboxes)}")
+        seen_ids = set()
         on_date = datetime.now().strftime('%d-%b-%Y')
-        
-        # Сначала пробуем только непрочитанные (быстро)
-        _, message_numbers = mail.search(None, f'(ON {on_date} UNSEEN)')
-        nums = message_numbers[0].split()
-        
-        # Если непрочитанных нет — ищем все за сегодня
-        if not nums:
-            _, message_numbers = mail.search(None, f'(ON {on_date})')
-            nums = message_numbers[0].split()
-            print(f"   Писем за сегодня (все): {len(nums)}")
-        else:
-            print(f"   Писем за сегодня (непрочитанных): {len(nums)}")
-        
-        for num in nums[:100]:  # Ограничиваем 100 письмами для скорости
+
+        for mailbox_name in mailboxes:
             try:
-                _, msg_data = mail.fetch(num, '(RFC822)')
-                msg = email.message_from_bytes(msg_data[0][1])
-                
-                subject = decode_subject(msg)
-                body = get_email_body(msg)
-                sender = msg.get('From', '')
-                message_id = msg.get('Message-ID', '')
-                
-                if is_credit_message(subject, body):
-                    bank_id, bank_name = detect_sender_name(subject + ' ' + body)
-                    payment_date = extract_payment_date(subject + ' ' + body)
-                    payment_amount = extract_payment_amount(subject + ' ' + body)
-                    
-                    alert = CreditAlert(
-                        source='email',
-                        sender=sender,
-                        sender_name=bank_id,
-                        subject=subject,
-                        body=body[:500],  # Ограничиваем длину
-                        payment_date=payment_date,
-                        payment_amount=payment_amount,
-                        raw_message_id=message_id,
-                    )
-                    alerts.append(alert)
+                status, _ = mail.select(f'"{mailbox_name}"', readonly=True)
+                if status != 'OK':
+                    print(f"   ⚠️ Не удалось открыть папку {mailbox_name}")
+                    continue
             except Exception as e:
-                print(f"⚠️ Ошибка обработки письма: {e}")
+                print(f"   ⚠️ Не удалось открыть папку {mailbox_name}: {e}")
                 continue
+
+            _, message_numbers = mail.search(None, f'(ON {on_date} UNSEEN)')
+            nums = message_numbers[0].split() if message_numbers and message_numbers[0] else []
+
+            if not nums:
+                _, message_numbers = mail.search(None, f'(ON {on_date})')
+                nums = message_numbers[0].split() if message_numbers and message_numbers[0] else []
+                print(f"   {mailbox_name}: писем за сегодня (все): {len(nums)}")
+            else:
+                print(f"   {mailbox_name}: писем за сегодня (непрочитанных): {len(nums)}")
+
+            for num in nums[:100]:
+                try:
+                    _, msg_data = mail.fetch(num, '(RFC822)')
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    dedup_key = build_message_uid(msg.get('Message-ID', ''), config['name'], mailbox_name, num)
+                    if dedup_key in seen_ids:
+                        continue
+                    seen_ids.add(dedup_key)
+                    
+                    subject = decode_subject(msg)
+                    body = get_email_body(msg)
+                    sender = msg.get('From', '')
+                    message_id = msg.get('Message-ID', '')
+                    
+                    if is_credit_message(subject, body):
+                        bank_id, bank_name = detect_sender_name(subject + ' ' + body)
+                        payment_date = extract_payment_date(subject + ' ' + body)
+                        payment_amount = extract_payment_amount(subject + ' ' + body)
+                        
+                        alert = CreditAlert(
+                            source='email',
+                            sender=sender,
+                            sender_name=bank_id,
+                            subject=subject,
+                            body=body[:500],
+                            payment_date=payment_date,
+                            payment_amount=payment_amount,
+                            raw_message_id=message_id or dedup_key,
+                        )
+                        alerts.append(alert)
+                except Exception as e:
+                    print(f"⚠️ Ошибка обработки письма в {mailbox_name}: {e}")
+                    continue
         
         mail.close()
         mail.logout()

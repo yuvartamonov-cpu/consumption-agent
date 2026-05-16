@@ -30,6 +30,8 @@ PROJECT_DIR = os.path.join(SCRIPT_DIR, '..') if os.path.basename(SCRIPT_DIR) == 
 sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
+from imap_folders import build_message_uid, discover_target_mailboxes
+
 # ─────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────
@@ -228,70 +230,71 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
         try:
             imap = imaplib.IMAP4_SSL(imap_host, timeout=15)
             imap.login(watcher['user'], password)
-            imap.select('INBOX')
         except Exception as e:
             print(f'  XX {label}: IMAP failed: {e}')
             continue
 
-        for sender in FINE_SENDERS:
+        mailboxes = discover_target_mailboxes(imap)
+        print(f'  {label}: папки {", ".join(mailboxes)}')
+        seen_ids = set()
+
+        for mailbox_name in mailboxes:
             try:
-                status, ids = imap.search(None, 'FROM', sender, 'SINCE', since_str)
-                all_ids = ids[0].split() if ids[0] else []
-            except Exception as e:
-                print(f'  XX {label}: search failed: {e}')
-                continue
-
-            if not all_ids:
-                continue
-
-            headers = _fetch_headers_batch(imap, all_ids)
-
-            fine_uids = []
-            fine_headers = []
-            for uid, hdr in zip(all_ids, headers):
-                sl = hdr['subject'].lower()
-                if any(kw in sl for kw in NOT_FINE_KEYWORDS):
+                status, _ = imap.select(f'"{mailbox_name}"', readonly=True)
+                if status != 'OK':
+                    print(f'  XX {label}: cannot open {mailbox_name}')
                     continue
-                if any(kw in sl for kw in FINE_KEYWORDS):
-                    fine_uids.append(uid)
-                    fine_headers.append(hdr)
-
-            if not fine_uids:
+            except Exception as e:
+                print(f'  XX {label}: cannot open {mailbox_name}: {e}')
                 continue
 
-            print(f'  {label}/{sender}: {len(fine_uids)} писем')
+            for sender in FINE_SENDERS:
+                try:
+                    status, ids = imap.search(None, 'FROM', sender, 'SINCE', since_str)
+                    all_ids = ids[0].split() if ids and ids[0] else []
+                except Exception as e:
+                    print(f'  XX {label}/{mailbox_name}: search failed: {e}')
+                    continue
 
-            batch = ','.join(uid.decode() if isinstance(uid, bytes) else str(uid) for uid in fine_uids)
-            try:
-                _, data = imap.fetch(batch, '(BODY.PEEK[])')
-                bodies = {}
-                for i in range(0, len(data), 2):
-                    raw = data[i][1]
-                    msg = email.message_from_bytes(raw)
-                    html = extract_html_body(msg)
-                    text = html_to_text(html)
-                    bodies[len(bodies)] = text
-            except Exception as e:
-                print(f'    ошибка пакета: {e}')
-                bodies = {}
-                for uid in fine_uids:
+                if not all_ids:
+                    continue
+
+                headers = _fetch_headers_batch(imap, all_ids)
+                fine_uids = []
+                fine_headers = []
+                for uid, hdr in zip(all_ids, headers):
+                    sl = hdr['subject'].lower()
+                    if any(kw in sl for kw in NOT_FINE_KEYWORDS):
+                        continue
+                    if any(kw in sl for kw in FINE_KEYWORDS):
+                        fine_uids.append(uid)
+                        fine_headers.append(hdr)
+
+                if not fine_uids:
+                    continue
+
+                print(f'  {label}/{mailbox_name}/{sender}: {len(fine_uids)} писем')
+
+                for uid, hdr in zip(fine_uids, fine_headers):
                     try:
                         _, fd = imap.fetch(uid, '(BODY.PEEK[])')
                         msg = email.message_from_bytes(fd[0][1])
+                        dedup_key = build_message_uid(msg.get('Message-ID', ''), label, mailbox_name, uid)
+                        if dedup_key in seen_ids:
+                            continue
+                        seen_ids.add(dedup_key)
+
                         html = extract_html_body(msg)
                         text = html_to_text(html)
-                        bodies[len(bodies)] = text
-                    except Exception:
-                        pass
-
-            for idx, (uid, hdr) in enumerate(zip(fine_uids, fine_headers)):
-                text = bodies.get(idx, '')
-                details = parse_fine_details(text, hdr['subject'])
-                details['raw_subject'] = hdr['subject'][:100]
-                details['raw_date'] = hdr['date_str'][:30]
-                details['mailbox'] = label
-                details['uid'] = uid.decode() if isinstance(uid, bytes) else str(uid)
-                all_fines.append(details)
+                        details = parse_fine_details(text, hdr['subject'])
+                        details['raw_subject'] = hdr['subject'][:100]
+                        details['raw_date'] = hdr['date_str'][:30]
+                        details['mailbox'] = f'{label}/{mailbox_name}'
+                        details['uid'] = dedup_key
+                        all_fines.append(details)
+                    except Exception as e:
+                        print(f'    ошибка письма {label}/{mailbox_name}: {e}')
+                        continue
 
         imap.logout()
 
@@ -571,21 +574,25 @@ def main():
             imap_host = watcher.get('imap', 'imap.mail.ru')
             imap = imaplib.IMAP4_SSL(imap_host)
             imap.login(watcher['user'], password)
-            imap.select('INBOX')
-            for sender in FINE_SENDERS:
-                status, ids = imap.search(None, 'FROM', sender)
-                all_ids = ids[0].split() if ids[0] else []
-                print(f'{watcher["label"]}: {len(all_ids)} от {sender}')
-                for uid in all_ids[-10:]:
-                    _, fd = imap.fetch(uid, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])')
-                    raw = fd[0][1].decode('utf-8', errors='replace')
-                    date = ''
-                    subject = ''
-                    for ln in raw.split('\n'):
-                        ln = ln.strip()
-                        if ln.lower().startswith('date:'): date = ln[5:].strip()
-                        elif ln.lower().startswith('subject:'): subject = decode_subj(ln[8:].strip())
-                    print(f'  [{date}] {subject[:80]}')
+            mailboxes = discover_target_mailboxes(imap)
+            for mailbox_name in mailboxes:
+                status, _ = imap.select(f'"{mailbox_name}"', readonly=True)
+                if status != 'OK':
+                    continue
+                for sender in FINE_SENDERS:
+                    status, ids = imap.search(None, 'FROM', sender)
+                    all_ids = ids[0].split() if ids[0] else []
+                    print(f'{watcher["label"]}/{mailbox_name}: {len(all_ids)} от {sender}')
+                    for uid in all_ids[-10:]:
+                        _, fd = imap.fetch(uid, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])')
+                        raw = fd[0][1].decode('utf-8', errors='replace')
+                        date = ''
+                        subject = ''
+                        for ln in raw.split('\n'):
+                            ln = ln.strip()
+                            if ln.lower().startswith('date:'): date = ln[5:].strip()
+                            elif ln.lower().startswith('subject:'): subject = decode_subj(ln[8:].strip())
+                        print(f'  [{date}] {subject[:80]}')
             imap.logout()
         return
 
