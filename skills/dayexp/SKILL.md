@@ -1,6 +1,6 @@
 ---
 name: dayexp
-description: "Команда /dayexp — расходы за сегодня с принудительным сканированием всех 4 почт (Gmail, Yandex, Mail.ru Zorea, Mail.ru Neutrinon) и SMS с двух телефонов (Phone Link Z Fold 3 + Z Fold 4). Используй когда пользователь хочет: (1) посмотреть расходы за сегодняшний день, (2) запустить принудительное сканирование чеков из почт и SMS, (3) получить сводку расходов с группировкой по магазинам."
+description: "Команда /dayexp — расходы за сегодня с принудительным сканированием всех 4 почт (Gmail, Yandex, Mail.ru Zorea, Mail.ru Neutrinon), релевантных IMAP-папок (`INBOX`, `Spam/Junk`, папки чеков/`Receipts`) и SMS с двух телефонов (Phone Link Z Fold 3 + Z Fold 4). Используй когда пользователь хочет: (1) посмотреть расходы за сегодняшний день, (2) запустить принудительное сканирование чеков из почт и SMS, (3) получить сводку расходов с группировкой по магазинам."
 ---
 
 # dayexp — Расходы за сегодня
@@ -47,4 +47,14 @@ dayexp/
 
 - `consumption_agent/consumption.db` — SQLite БД
 - `consumption_agent/daily_cheque_scan.py` — скрипт сканирования почт и SMS
+- `consumption_agent/imap_folders.py` — выбор релевантных IMAP-папок (`INBOX`, `Spam/Junk`, папки чеков)
 - Таблица `purchases` с полями: `purchase_date`, `total_amount`, `store_name`, `source`, `notes`, `deleted_at`
+
+## IMAP-охват
+
+`daily_cheque_scan.py` сканирует не только `INBOX`, а все релевантные папки, найденные через `imap_folders.py`:
+- `INBOX`
+- `Spam` / `Junk` / `Спам`
+- папки с чеками вроде `Receipts`, `Checks`, `чеки`
+
+Дедупликация между папками идёт по `Message-ID`, чтобы одно письмо не учитывалось дважды.

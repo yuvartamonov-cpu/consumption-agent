@@ -1,6 +1,6 @@
 ---
 name: monthexp
-description: "Команда /monthexp — расходы с 1 числа текущего месяца по сегодня с принудительным сканированием всех 4 почт (Gmail, Yandex, Mail.ru Zorea, Mail.ru Neutrinon) и SMS с двух телефонов (Phone Link Z Fold 3 + Z Fold 4). Используй когда пользователь хочет: (1) посмотреть расходы за месяц, (2) получить сводку с группировкой по дням и магазинам, (3) увидеть общие траты с начала месяца."
+description: "Команда /monthexp — расходы с 1 числа текущего месяца по сегодня с принудительным сканированием всех 4 почт (Gmail, Yandex, Mail.ru Zorea, Mail.ru Neutrinon), релевантных IMAP-папок (`INBOX`, `Spam/Junk`, папки чеков/`Receipts`) и SMS с двух телефонов (Phone Link Z Fold 3 + Z Fold 4). Используй когда пользователь хочет: (1) посмотреть расходы за месяц, (2) получить сводку с группировкой по дням и магазинам, (3) увидеть общие траты с начала месяца."
 ---
 
 # monthexp — Расходы с 1 числа месяца
@@ -47,4 +47,14 @@ monthexp/
 
 - `consumption_agent/consumption.db` — SQLite БД
 - `consumption_agent/daily_cheque_scan.py` — скрипт сканирования почт и SMS
+- `consumption_agent/imap_folders.py` — выбор релевантных IMAP-папок (`INBOX`, `Spam/Junk`, папки чеков)
 - Таблица `purchases` с полями: `purchase_date`, `total_amount`, `store_name`, `source`, `notes`, `deleted_at`
+
+## IMAP-охват
+
+`/monthexp` использует тот же `daily_cheque_scan.py`, что и `/dayexp`, поэтому охватывает:
+- `INBOX`
+- `Spam` / `Junk` / `Спам`
+- папки чеков вроде `Receipts`, `Checks`, `чеки`
+
+Дубликаты между папками режутся по `Message-ID`.

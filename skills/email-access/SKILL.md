@@ -1,6 +1,6 @@
 ---
 name: email-access
-description: Доступ ко всем 4 почтовым ящикам (Gmail, Yandex, Mail.ru Zorea, Mail.ru Neutrinon) и SMS через Phone Link для сканирования почт на чеки и расходы, импорта в БД consumption.db, проверки SMS на двух телефонах, добавления покупок по данным из писем.
+description: Доступ ко всем 4 почтовым ящикам (Gmail, Yandex, Mail.ru Zorea, Mail.ru Neutrinon) и SMS через Phone Link для сканирования почт на чеки и расходы, включая релевантные IMAP-папки (`INBOX`, `Spam/Junk`, папки чеков/Receipts), импорта в БД consumption.db, проверки SMS на двух телефонах, добавления покупок по данным из писем.
 ---
 
 # Email Access — Доступ к почтам и SMS
@@ -45,24 +45,26 @@ def windows_ticks_to_datetime(value):
 
 ## Сканирование чеков — готовый скрипт
 
-`scripts/daily_cheque_scan.py` — ежедневное сканирование всех 4 почт + SMS:
+`daily_cheque_scan.py` — ежедневное сканирование всех 4 почт + SMS:
 
 ```bash
 cd ~/.openclaw/workspace/consumption_agent
 source venv/bin/activate
 source .env
-python3 scripts/daily_cheque_scan.py
+python3 daily_cheque_scan.py
 ```
 
 Скрипт:
 1. Подключается ко всем 4 почтам через IMAP
-2. Ищет письма за сегодня (+ вчера для первой синхронизации)
-3. Определяет магазин по отправителю (Самокат, Ozon, WB, Яндекс и т.д.)
-4. Парсит HTML-чеки Платформы ОФД (сумма, дата, товары)
-5. Для писем без HTML-чека — ищет сумму регулярками
-6. Сканирует SMS из Phone Link на предмет расходов
-7. Добавляет записи в `purchases` (дедупликация по дате+сумме+магазину)
-8. Логирует всё в `logs/daily_cheque_scan.log`
+2. Обходит релевантные папки: `INBOX`, `Spam/Junk/Спам`, папки чеков вроде `Receipts` / `Checks` / `чеки`
+3. Ищет письма за сегодня (+ вчера для первой синхронизации)
+4. Определяет магазин по отправителю (Самокат, Ozon, WB, Яндекс и т.д.)
+5. Парсит HTML-чеки Платформы ОФД (сумма, дата, товары)
+6. Для писем без HTML-чека — ищет сумму регулярками
+7. Сканирует SMS из Phone Link на предмет расходов
+8. Добавляет записи в `purchases` (дедупликация по дате+сумме+магазину)
+9. Дополнительно режет дубли между папками по `Message-ID`
+10. Логирует всё в `logs/daily_cheque_scan.log`
 
 ## Определение магазинов
 
@@ -92,10 +94,14 @@ python3 scripts/daily_cheque_scan.py
 ```python
 # Подключение к одной почте:
 import imaplib
+from imap_folders import discover_target_mailboxes
+
 imap = imaplib.IMAP4_SSL('imap.gmail.com', timeout=20)
 imap.login('yu.v.artamonov@gmail.com', pwd)
-imap.select('INBOX')
-result, data = imap.search(None, '(ON 12-May-2026)')
+folders = discover_target_mailboxes(imap)
+for mailbox in folders:
+    imap.select(f'"{mailbox}"', readonly=True)
+    result, data = imap.search(None, '(ON 12-May-2026)')
 ```
 
 ## Примечания
