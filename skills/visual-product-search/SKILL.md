@@ -6,7 +6,7 @@ description: Многоэтапный конвейер поиска товаро
 # Visual Product Search — Sprint Plan
 
 > Обновлено: 2026-05-16
-> Тесты: 363 passed | Модули: 9 (ml_*.py) | Коммиты: 8 (Stages 1–6, 9, orchestrator)
+> Статус: ядро pipeline работает, retrieval layer переведён в режим seller-link search
 
 ---
 
@@ -20,12 +20,12 @@ description: Многоэтапный конвейер поиска товаро
 | 4 | Price Anomaly Detection | `ml_anomaly.py` | 24 | ✅ Done |
 | 5 | Inventory Collision Check | `ml_inventory.py` | 24 | ✅ Done |
 | 6 | Taste Profile Re-Ranker | `ml_taste.py` | 46 | ✅ Done |
-| 7 | Orchestrator v2 Pipeline | `ml_search_v2.py` | 21 | ✅ Done |
+| 7 | Orchestrator v2 Pipeline | `ml_search_v2.py` | 21+ | ✅ Done |
 | 8 | Click Tracking + Active Learning | `ml_clicks.py` | 21 | ✅ Done |
 | 9 | Thompson-Sampling Bandit | `ml_bandit.py` | 19 | ✅ Done |
 | 10 | Telegram Integration | `telegram_bot.py` | — | ✅ Done |
 | 11 | CLIP Visual Gate | — | — | 🔲 Not started |
-| 12 | Marketplace API Wiring | — | — | 🔲 Not started |
+| 12 | Retrieval / Seller Links | `ml_providers.py` | partial | 🟡 In progress |
 | 13 | Reverse Image Search | — | — | 🔲 Not started |
 | 14 | Price Drop Alerts | — | — | 🔲 Not started |
 | 15 | OOS Recovery | — | — | 🔲 Not started |
@@ -49,8 +49,8 @@ description: Многоэтапный конвейер поиска товаро
            │
            ▼
 ┌─────────────────────────┐
-│ 3. Federated Search     │  Bandit-routed sources + API calls           🔲
-└──────────┬──────────────┘  ml_search_v2.py (stub provider)
+│ 3. Federated Search     │  WB API + прямые seller links + brand search 🟡
+└──────────┬──────────────┘  ml_search_v2.py + ml_providers.py
            │
            ▼
 ┌─────────────────────────┐
@@ -139,31 +139,44 @@ description: Многоэтапный конвейер поиска товаро
 - `positive_fingerprints()` / `dismissed_fingerprints()` feed taste refinement
 - `bandit_outcomes_since()` feeds bandit updates
 
+### 9. Current Retrieval Strategy
+- `route_sources()` больше не опирается на Ozon как на основной источник: приоритет у `Lamoda`, `Brandshop`, `DNS`, `Citilink`, `Hoff`, `IKEA`, `Goldapple`, `Иль де Ботэ`, `Wildberries`, `Яндекс.Маркет`, а также `AliExpress`/`Alibaba` как дополнительных площадок.
+- `composite_provider()` в `ml_providers.py` сейчас делает упор на **прямые ссылки продавцов**, а не на парсинг маркетплейсов:
+  - `Wildberries` — единственный live API provider в текущем default-flow;
+  - `Lamoda`, `Brandshop`, `Sneakerhead`, `DNS`, `Citilink`, `М.Видео`, `Hoff`, `Mr.Doors`, `IKEA`, `Золотое Яблоко`, `Иль де Ботэ`, `AliExpress`, `Alibaba` — link-only search URLs;
+  - для `brand:<brand>` добавляются отдельные ссылки на поиск официального сайта через `Google` и `Yandex`.
+- Для точности брендовых запросов:
+  - в `ml_query_expansion.py` бренд в `brand_article`, `brand_model`, `brand_subcat` оборачивается в кавычки;
+  - в `ml_search_v2.py` введён strict brand gating: если бренд распознан, в provider уходит только брендовый query, а выдача с явным чужим брендом отбрасывается;
+  - `link-only` результаты больше не схлопываются в один canonical group.
+- Для иностранных площадок (`AliExpress`, `Alibaba`) запросы автоматически переводятся с русского на английский в `translate_query_for_source()` перед генерацией ссылок.
+- Практический вывод: текущий retrieval layer хорошо подходит для сценария "дай прямые ссылки, где искать товар", но пока не решает задачу полноценного автоматического сбора карточек/цен с официальных сайтов.
+
 ---
 
 ## Задачи кодирования (Sprint Backlog)
 
-### 🔴 P0 — Критический путь (без этого поиск возвращает пустоту)
+### 🔴 P0 — Критический путь
 
-#### TASK-201: Wire Ozon API provider
-**Файлы:** `ml_search.py`, `ml_search_v2.py`
-**Описание:** Реализовать `OzonCandidatesProvider` — async функцию, которая принимает `(queries, sources, photo_path)` и возвращает `list[dict]` с полями `title, url, price, store, image_url`. Использовать существующие Ozon-хелперы из `ml_search.py` (сейчас отключены коммитом `5340b1b`). Нужны валидные cookies (файл `ozon_cookies.json` — пользователь должен экспортировать заново, текущий пуст).
-**Acceptance:** `candidates_provider` возвращает ≥1 результат для запроса "Nike Air Force 1" на Ozon.
+#### TASK-201: Improve direct seller retrieval
+**Файлы:** `ml_providers.py`, `ml_search_v2.py`
+**Описание:** Усилить seller-link strategy: добавить больше прямых retail sources, нормализацию query по категориям и более умный порядок выдачи для official/retailer links.
+**Acceptance:** `/ml_search <id>` по брендовой вещи стабильно возвращает несколько прямых seller links без мусора от чужих брендов.
 
-#### TASK-202: Wire Wildberries API provider
-**Файлы:** `ml_search.py`, `ml_search_v2.py`
-**Описание:** Аналогично TASK-201 для WB. WB API проще (публичный search endpoint). Вернуть `list[dict]` в том же формате.
-**Acceptance:** WB provider возвращает ≥1 результат.
+#### TASK-202: Enrich foreign marketplace translation
+**Файлы:** `ml_providers.py`
+**Описание:** Расширить перевод запросов для `AliExpress`/`Alibaba`: добавить больше категорий, материалов, размеров, пола и устойчивых fashion-терминов.
+**Acceptance:** Запросы на иностранные площадки формируются на понятном английском без русских хвостов.
 
-#### TASK-203: Wire Yandex Market API provider
-**Файлы:** `ml_search.py`, `ml_search_v2.py`
-**Описание:** Yandex Market через SerpAPI или прямой scraping. Результат — `list[dict]`.
-**Acceptance:** YM provider возвращает ≥1 результат.
+#### TASK-203: Structured official-site search
+**Файлы:** `ml_providers.py`, новый `ml_official_sites.py` (опционально)
+**Описание:** Вместо голых поисковых ссылок научиться строить более точные official-site candidates: брендовый домен, российский дистрибьютор, авторизованные продавцы.
+**Acceptance:** Для известных брендов в выдаче появляются не только generic search links, но и более точные official/distributor entry points.
 
-#### TASK-204: Composite candidates_provider
-**Файлы:** `ml_search_v2.py`
-**Описание:** Объединить TASK-201/202/203 в один `CompositeCandidatesProvider`, который запускает все providers параллельно через `asyncio.gather()`, объединяет результаты, нормализует формат. Заменить `_default_candidates_provider` (который сейчас возвращает `[]`).
-**Acceptance:** `/ml_search <id>` в Telegram возвращает реальные товары с нескольких площадок.
+#### TASK-204: Optional marketplace enrichment
+**Файлы:** `ml_providers.py`
+**Описание:** Сохранять `Wildberries` как единственный живой API-source по умолчанию. Интеграции с Ozon или другими жёстко защищёнными площадками считать вторичными и необязательными.
+**Acceptance:** Поисковый пайплайн полезен даже без автоматизации Ozon.
 
 ### 🟡 P1 — Улучшение качества
 

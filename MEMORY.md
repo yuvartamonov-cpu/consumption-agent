@@ -9,6 +9,9 @@
 - **IMAP (Gmail):** yu.v.artamonov@gmail.com / пароль [REDACTED_OLD_GMAIL_APP_PASSWORD] (app password)
 - **Путь проекта:** ~/.openclaw/workspace/consumption_agent/
 - **Конфиг marketplace:** MARKETPLACE_SENDERS — Ozon + Яндекс.Маркет, WB и Megamarket не найдены (писем нет)
+- **Memory Lane search (16.05.2026):** `ml_search_v2` переведён в режим seller-link search: прямые ссылки продавцов/ритейлеров и официальный brand-site fallback важнее попыток автоматизировать Ozon.
+- **Иностранные площадки:** `AliExpress` и `Alibaba` добавлены как дополнительные источники ссылок; запросы для них переводятся с русского на английский.
+- **Качество поиска:** введён строгий brand gating, чтобы `hamington` не матчился в `Remington`; link-only выдача не схлопывается в одну карточку.
 - **Cron:** 10:10 ежедневно (daily_run.sh: import --max 20 + enrich + check)
 - **Репорт:** gen_report.py (генерирует report_consumption_agent.pdf — 35 КБ, ~4 страницы, есть warning по символу \n в шрифте DejaVu)
 - **Telegram-ручной ввод:** consumption_telegram.sh (вызов из OpenClaw)
@@ -128,4 +131,3 @@
 - Не отображается интеграция OpenClaw ⇄ Paperclip CEO
 - OCR-задача в roadmap.md не синхронизируется
 - **План:** разобраться 12.05: попробовать зайти через localhost:18789 с Windows, или установить плагин, или прямой API
-
