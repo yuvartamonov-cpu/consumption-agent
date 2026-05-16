@@ -2455,6 +2455,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/add_item <название> [| бренд X] [| замена N мес] — добавить вещь в инвентарь\n'
         '/items [all|категория] — инвентарь вещей по категориям\n'
         '/ml_last [N] — последние записи Memory Lane\n'
+        '/ml_search <id> — найти товар (pipeline v2: dedup + anomaly + taste)\n'
         '/topic_set <слово> <тема> — задать тему для слова\n'
         '/topic_list [тема] — показать все правила тем\n'
         '/help — это сообщение'
@@ -3023,6 +3024,46 @@ async def ml_search_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await temp_msg.edit_text(f'⚠️ Ошибка поиска: {str(e)[:100]}')
 
 
+async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/ml_search <id> — поиск товара из Memory Lane по новому pipeline.
+
+    Использует ml_search_v2: attribute extraction → query expansion →
+    canonicalization → anomaly flag → inventory collision → taste re-rank.
+    """
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+    args = ctx.args if hasattr(ctx, 'args') else []
+    if not args:
+        await update.message.reply_text(
+            'Usage: /ml_search <id>\nПодсказка: /ml_last покажет доступные id.'
+        )
+        return
+    try:
+        ml_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text('⚠️ id должен быть числом')
+        return
+
+    temp = await update.message.reply_text(
+        f'🔍 Запускаю pipeline v2 для #{ml_id}... 5–15 сек.'
+    )
+    try:
+        import ml_search_v2
+        conn = get_db()
+        try:
+            result = await ml_search_v2.search_ml_item_v2(conn, ml_id)
+        finally:
+            conn.close()
+        text = ml_search_v2.format_search_result_telegram(result)
+        await temp.delete()
+        await update.message.reply_text(
+            text, parse_mode='HTML', disable_web_page_preview=True
+        )
+    except Exception as e:
+        log.warning(f'cmd_ml_search failed: {e}')
+        await temp.edit_text(f'⚠️ Ошибка: {str(e)[:200]}')
+
+
 async def ml_remind_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки '⏰ Напомнить' — предлагает выбрать когда напомнить."""
     query = update.callback_query
@@ -3289,6 +3330,7 @@ def main():
     add_authorized_handler(app, CommandHandler('warranties', cmd_warranties))
     add_authorized_handler(app, CommandHandler('set_warranty', cmd_set_warranty))
     add_authorized_handler(app, CommandHandler('ml_last', cmd_ml_last))
+    add_authorized_handler(app, CommandHandler('ml_search', cmd_ml_search))
     add_authorized_handler(app, CommandHandler('topic_set', cmd_topic_set))
     add_authorized_handler(app, CommandHandler('topic_list', cmd_topic_list))
     add_authorized_handler(app, CommandHandler('help', cmd_help))
