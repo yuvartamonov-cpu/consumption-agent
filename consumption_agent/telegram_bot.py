@@ -3018,20 +3018,13 @@ async def ml_search_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.warning(f'ml_clicks log_click failed: {_e}')
 
     try:
-        from ml_search import search_item
-        result = await search_item(ml_id)
+        # Удаляем временное сообщение
+        await temp_msg.delete()
         
-        if result:
-            # Удаляем временное сообщение и отправляем результат
-            await temp_msg.delete()
-            await ctx.bot.send_message(
-                chat_id=chat_id,
-                text=result,
-                parse_mode='HTML',
-                disable_web_page_preview=False
-            )
-        else:
-            await temp_msg.edit_text('⚠️ Товар не найден. Попробуйте позже.')
+        # Вызываем cmd_ml_search напрямую с правильными аргументами
+        # Используем существующий update, но меняем ctx.args
+        ctx.args = [str(ml_id)]
+        await cmd_ml_search(update, ctx)
     except Exception as e:
         log.warning(f'ml_search_callback failed: {e}')
         await temp_msg.edit_text(f'⚠️ Ошибка поиска: {str(e)[:100]}')
@@ -3057,8 +3050,14 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('⚠️ id должен быть числом')
         return
 
-    temp = await update.message.reply_text(
-        f'🔍 Запускаю pipeline v2 для #{ml_id}... 5–15 сек.'
+    # Определяем chat_id для ответа (работает и из команды, и из callback)
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if not chat_id:
+        return
+    
+    temp = await ctx.bot.send_message(
+        chat_id=chat_id,
+        text=f'🔍 Запускаю pipeline v2 для #{ml_id}... 5–15 сек.'
     )
     try:
         import ml_search_v2
@@ -3068,13 +3067,20 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         finally:
             conn.close()
         text = ml_search_v2.format_search_result_telegram(result)
-        await temp.delete()
-        await update.message.reply_text(
-            text, parse_mode='HTML', disable_web_page_preview=True
+        await ctx.bot.delete_message(chat_id=chat_id, message_id=temp.message_id)
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode='HTML',
+            disable_web_page_preview=True
         )
     except Exception as e:
         log.warning(f'cmd_ml_search failed: {e}')
-        await temp.edit_text(f'⚠️ Ошибка: {str(e)[:200]}')
+        await ctx.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=temp.message_id,
+            text=f'⚠️ Ошибка: {str(e)[:200]}'
+        )
 
 
 async def cmd_ml_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
