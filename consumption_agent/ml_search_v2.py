@@ -29,6 +29,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 import ml_anomaly
 import ml_attributes
+import ml_bandit
 import ml_canonical
 import ml_clicks
 import ml_inventory
@@ -56,12 +57,29 @@ DEFAULT_SOURCES = ['ozon', 'wildberries', 'yandex_market']
 QUERIES_PER_SOURCE = 3
 
 
-def route_sources(attrs: dict, *, top_n: int = 5) -> list[str]:
+def route_sources(
+    attrs: dict,
+    *,
+    top_n: int = 5,
+    conn: Optional[sqlite3.Connection] = None,
+) -> list[str]:
     """Pick marketplaces appropriate for the item's category, plus the
-    brand site if a brand was recognised."""
+    brand site if a brand was recognised.
+
+    When `conn` is provided, the bandit (Stage 6) reorders the candidate
+    list by Thompson sampling — sources that historically led to user
+    clicks for this category float to the top. Brand site stays pinned
+    at position 0.
+    """
     cat = (attrs.get('category') or '').lower()
-    base = CATEGORY_SOURCES.get(cat, DEFAULT_SOURCES)
-    out = list(base)[:top_n]
+    base = list(CATEGORY_SOURCES.get(cat, DEFAULT_SOURCES))
+    if conn is not None:
+        try:
+            base = ml_bandit.sample_sources(conn, cat, base, k=len(base))
+        except Exception as e:
+            log.warning("ml_search_v2: bandit sampling failed, "
+                        "falling back to static order: %s", e)
+    out = base[:top_n]
     if attrs.get('brand'):
         out.insert(0, f"brand:{attrs['brand']}")
     return out
@@ -236,10 +254,10 @@ async def search_ml_item_v2(
         attrs['category'] = item['topic']
     result['attributes'] = attrs
 
-    # 3. Query expansion + 4. Source routing
+    # 3. Query expansion + 4. Source routing (bandit-aware)
     expanded = ml_query_expansion.expand_queries(attrs)
     result['queries'] = expanded
-    sources = route_sources(attrs)
+    sources = route_sources(attrs, conn=conn)
     result['sources_used'] = sources
 
     if not expanded:

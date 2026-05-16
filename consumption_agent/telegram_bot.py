@@ -3084,31 +3084,50 @@ async def cmd_ml_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
         return
     try:
+        import ml_bandit
         import ml_clicks
         conn = get_db()
         try:
             ml_clicks.ensure_clicks_schema(conn)
             stats = ml_clicks.ctr_per_source(conn, since_days=30)
             recent = ml_clicks.recent_events(conn, limit=8)
+            # Refresh bandit from latest click data, then snapshot
+            ml_bandit.update_from_clicks(conn, lookback_days=30)
+            bandit_state = ml_bandit.snapshot(conn)
         finally:
             conn.close()
 
-        if not stats:
+        if not stats and not bandit_state:
             await update.message.reply_text(
                 '📊 ml_stats: пока нет данных.\n'
                 'Используйте /ml_search <id> и кликайте по ссылкам — '
-                'CTR появится тут.'
+                'CTR и bandit появятся тут.'
             )
             return
 
         lines = ['📊 <b>ml_stats</b> (за 30 дней)\n']
-        lines.append('<b>CTR по источникам:</b>')
-        for src, s in sorted(stats.items(), key=lambda x: -x[1]['ctr']):
-            ctr_pct = round(s['ctr'] * 100, 1)
-            lines.append(
-                f"  • <b>{src}</b>: {s['clicks']}/{s['impressions']} "
-                f"({ctr_pct}%)"
-            )
+
+        if stats:
+            lines.append('<b>CTR по источникам:</b>')
+            for src, s in sorted(stats.items(), key=lambda x: -x[1]['ctr']):
+                ctr_pct = round(s['ctr'] * 100, 1)
+                lines.append(
+                    f"  • <b>{src}</b>: {s['clicks']}/{s['impressions']} "
+                    f"({ctr_pct}%)"
+                )
+
+        if bandit_state:
+            lines.append('\n<b>Bandit p̂ (категория → источник):</b>')
+            # Show top 8 by p_mean
+            for r in bandit_state[:8]:
+                cat = r['category'] or '—'
+                src = r['source']
+                p = round(r['p_mean'] * 100, 1)
+                lines.append(
+                    f"  • {cat} → {src}: {p}% "
+                    f"(α={r['alpha']:.1f} β={r['beta']:.1f})"
+                )
+
         if recent:
             lines.append('\n<b>Последние события:</b>')
             for e in recent[:5]:
