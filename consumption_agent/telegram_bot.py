@@ -87,8 +87,46 @@ def calculate_drive_cost(tariff, hours, km):
 
     return max(round(base, -1), 500)  # округляем до 10₽, минимум 500₽
 
-from telegram import Update, PhotoSize, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
+try:
+    from telegram import Update, PhotoSize, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
+except Exception:  # pragma: no cover - import fallback for test envs without PTB
+    class _TelegramStub:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class _FilterStub:
+        def __and__(self, other):
+            return self
+
+        def __invert__(self):
+            return self
+
+    class _ContextTypesStub:
+        DEFAULT_TYPE = object
+
+    class _ApplicationBuilderStub:
+        def token(self, *_args, **_kwargs):
+            return self
+
+        def build(self):
+            raise RuntimeError("python-telegram-bot is unavailable")
+
+    class _ApplicationStub:
+        @staticmethod
+        def builder():
+            return _ApplicationBuilderStub()
+
+    Update = PhotoSize = InlineKeyboardMarkup = _TelegramStub
+    Application = _ApplicationStub
+    CommandHandler = MessageHandler = CallbackQueryHandler = _TelegramStub
+    ContextTypes = _ContextTypesStub
+    filters = type(
+        "_FiltersStub",
+        (),
+        {"PHOTO": _FilterStub(), "TEXT": _FilterStub(), "COMMAND": _FilterStub()},
+    )()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)

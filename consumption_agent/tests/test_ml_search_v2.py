@@ -46,12 +46,12 @@ def test_route_sources_empty_attrs():
 
 def test_select_provider_queries_keeps_only_branded_variants():
     queries = [
-        ('"hamington" джемпер серый', 'brand_subcat'),
+        ('hamington джемпер серый', 'brand_subcat'),
         ('джемпер серый', 'descriptive'),
         ('джемпер casual', 'style_broad'),
     ]
     assert _select_provider_queries(queries, {'brand': 'hamington'}) == [
-        '"hamington" джемпер серый'
+        'hamington джемпер серый'
     ]
 
 
