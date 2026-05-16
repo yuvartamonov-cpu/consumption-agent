@@ -2601,11 +2601,9 @@ async def cmd_ml_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ).fetchone()
             if not row or not os.path.exists(row[0]):
                 continue
-            caption_lines = [f'📌 {r["name"]}' if r['name'] else f'#{r["id"]}']
+            caption_lines = [f'🧠 ML #{r["id"]}']
             if r['name']:
-                caption_lines[0] = f'📌 {r["name"]}'
-            else:
-                caption_lines[0] = f'#{r["id"]}'
+                caption_lines.append(f'📌 {r["name"]}')
             if r['description']:
                 caption_lines.append(r['description'])
             if r['caption']:
