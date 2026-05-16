@@ -116,6 +116,17 @@ def expand_queries(attrs: dict, *, include_purchase_intent: bool = False) -> Lis
     if base_noun and styles:
         push(_join(base_noun, *styles[:2]), 'style_broad')
 
+    # T7: category_noun — when subcategory is long/compound, also try
+    # just category + key words extracted from subcategory
+    if subcat and cat and subcat != cat:
+        # If subcat is multi-word, try cat + first word of subcat
+        words = subcat.split()
+        if len(words) >= 2:
+            push(_join(cat, words[0], color), 'category_noun')
+        # Also try subcat alone without modifiers (shorter = broader)
+        if len(words) >= 3:
+            push(_join(words[0], color), 'noun_color')
+
     if include_purchase_intent:
         out = [(_join(q, 'купить'), tag) for q, tag in out]
 

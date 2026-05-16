@@ -257,10 +257,20 @@ async def search_ml_item_v2(
         attrs['brand'] = item['brand']
     if not attrs.get('category') and item.get('topic'):
         attrs['category'] = item['topic']
+    if not attrs.get('subcategory') and item.get('name'):
+        attrs['subcategory'] = item['name']
     result['attributes'] = attrs
 
     # 3. Query expansion + 4. Source routing (bandit-aware)
     expanded = ml_query_expansion.expand_queries(attrs)
+    # If item has a name that differs from expanded queries, prepend it
+    # as a direct "item_name" tier — the user-visible name is often the
+    # most effective search query.
+    item_name = (item.get('name') or '').strip()
+    if item_name:
+        existing_texts = {q for q, _ in expanded}
+        if item_name not in existing_texts:
+            expanded.insert(0, (item_name, 'item_name'))
     result['queries'] = expanded
     sources = route_sources(attrs, conn=conn)
     result['sources_used'] = sources
