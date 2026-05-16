@@ -57,6 +57,9 @@ BODY_SENDER_PATTERNS = {
     'ekvazaim': ['эквазайм', 'ekvazaim'],
     'webzaim': ['webzaim', 'вебзайм'],
     'dengi_srazu': ['деньги сразу', 'dengisrazu', 'dengi-srazu'],
+    'flashzaim': ['флэшзайм', 'flashzaim', 'flash-zaim'],
+    'fast_finance': ['фаст финанс', 'fast finance', 'fastfinance'],
+    'glatsint': ['глацинт', 'glatsint'],
 }
 
 # Отправители, которые умеют маскироваться под банки

@@ -31,6 +31,7 @@ CREDIT_SENDERS = {
     'pochtabank', 'akbars', 'absolut', 'mdm',
     'turbozaim', 'joy_finance', 'nebus',
     'ekvazaim', 'webzaim', 'dengi_srazu',
+    'flashzaim', 'fast_finance', 'glatsint',
 }
 
 # Спам-МФО (не настоящие напоминания, а рекламный спам)

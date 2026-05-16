@@ -64,6 +64,9 @@ CREATE TABLE credit_alerts (
 | `ekvazaim` | Эквазайм | эквазайм, ekvazaim |
 | `webzaim` | Webzaim | webzaim, вебзайм |
 | `dengi_srazu` | Деньги Сразу | деньги сразу, dengisrazu, dengi-srazu |
+| `flashzaim` | ФлэшЗайм | флэшзайм, flashzaim, flash-zaim |
+| `fast_finance` | Фаст Финанс | фаст финанс, fast finance, fastfinance |
+| `glatsint` | Глацинт | глацинт, glatsint |
 
 ## Ключевые файлы
 
