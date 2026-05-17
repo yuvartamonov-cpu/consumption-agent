@@ -19,6 +19,7 @@ import json
 
 from consumption.db import connect as db_connect
 from imap_folders import ScanMetrics, build_message_uid, discover_target_mailboxes
+from repositories import credit as credit_repo
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 
@@ -142,59 +143,10 @@ def _db_connect():
 def init_credit_tables():
     """Создаёт таблицы для хранения кредитных алертов."""
     conn = _db_connect()
-    conn.executescript('''
-        CREATE TABLE IF NOT EXISTS credit_alerts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,  -- 'email' или 'sms'
-            sender TEXT,
-            sender_name TEXT,  -- Название банка/МФО
-            subject TEXT,
-            body TEXT,
-            payment_date TEXT,
-            payment_amount REAL,
-            currency TEXT DEFAULT 'RUB',
-            detected_at TEXT DEFAULT (datetime('now')),
-            notified_at TEXT,
-            days_until_payment INTEGER,
-            raw_message_id TEXT UNIQUE,
-            is_active INTEGER DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS credit_alert_notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            alert_id INTEGER NOT NULL REFERENCES credit_alerts(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL,
-            telegram_chat_id TEXT,
-            telegram_message_id TEXT,
-            is_test INTEGER DEFAULT 0,
-            sent_at TEXT DEFAULT (datetime('now')),
-            UNIQUE(alert_id, kind, is_test)
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_credit_alerts_date 
-        ON credit_alerts(payment_date);
-        
-        CREATE INDEX IF NOT EXISTS idx_credit_alerts_notified 
-        ON credit_alerts(notified_at);
-        
-        CREATE INDEX IF NOT EXISTS idx_credit_alerts_active 
-        ON credit_alerts(is_active);
-    ''')
-
-    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(credit_alerts)").fetchall()}
-    if 'paid_confirmed_at' not in existing_columns:
-        conn.execute('ALTER TABLE credit_alerts ADD COLUMN paid_confirmed_at TEXT')
-    if 'paid_confirmed_via' not in existing_columns:
-        conn.execute('ALTER TABLE credit_alerts ADD COLUMN paid_confirmed_via TEXT')
-    if 'paid_note' not in existing_columns:
-        conn.execute('ALTER TABLE credit_alerts ADD COLUMN paid_note TEXT')
-
-    conn.execute('''
-        CREATE INDEX IF NOT EXISTS idx_credit_alert_notifications_alert
-        ON credit_alert_notifications(alert_id, kind, is_test)
-    ''')
-    conn.commit()
-    conn.close()
+    try:
+        credit_repo.ensure_credit_schema(conn)
+    finally:
+        conn.close()
 
 
 def _compute_days_until(payment_date: Optional[datetime]) -> Optional[int]:
@@ -249,66 +201,54 @@ def get_notification_kind(alert: CreditAlert) -> Optional[str]:
 def record_notification(alert_id: int, kind: str, telegram_chat_id: Optional[str] = None,
                         telegram_message_id: Optional[str] = None, is_test: bool = False):
     conn = _db_connect()
-    conn.execute('''
-        INSERT OR IGNORE INTO credit_alert_notifications
-        (alert_id, kind, telegram_chat_id, telegram_message_id, is_test)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (alert_id, kind, telegram_chat_id, telegram_message_id, 1 if is_test else 0))
-    if not is_test:
-        conn.execute(
-            'UPDATE credit_alerts SET notified_at = datetime("now") WHERE id = ?',
-            (alert_id,)
+    try:
+        credit_repo.record_notification(
+            conn,
+            alert_id,
+            kind,
+            telegram_chat_id=telegram_chat_id,
+            telegram_message_id=telegram_message_id,
+            is_test=is_test,
         )
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def was_notification_sent(alert_id: int, kind: str, is_test: bool = False) -> bool:
     conn = _db_connect()
-    row = conn.execute(
-        'SELECT 1 FROM credit_alert_notifications WHERE alert_id = ? AND kind = ? AND is_test = ? LIMIT 1',
-        (alert_id, kind, 1 if is_test else 0)
-    ).fetchone()
-    conn.close()
-    return bool(row)
+    try:
+        return credit_repo.was_notification_sent(conn, alert_id, kind, is_test=is_test)
+    finally:
+        conn.close()
 
 
 def get_alert_by_id(alert_id: int) -> Optional[CreditAlert]:
     conn = _db_connect()
-    conn.row_factory = sqlite3.Row
-    row = conn.execute('SELECT * FROM credit_alerts WHERE id = ?', (alert_id,)).fetchone()
-    conn.close()
-    return _row_to_alert(row) if row else None
+    try:
+        row = credit_repo.get_alert_by_id(conn, alert_id)
+        return _row_to_alert(row) if row else None
+    finally:
+        conn.close()
 
 
 def confirm_alert_paid(alert_id: int, via: str = 'telegram_button', note: str = '') -> bool:
     conn = _db_connect()
-    cur = conn.execute('''
-        UPDATE credit_alerts
-        SET paid_confirmed_at = datetime('now'),
-            paid_confirmed_via = ?,
-            paid_note = ?,
-            is_active = 0
-        WHERE id = ? AND paid_confirmed_at IS NULL
-    ''', (via, note, alert_id))
-    conn.commit()
-    changed = cur.rowcount > 0
-    conn.close()
-    return changed
+    try:
+        changed = credit_repo.confirm_paid(conn, alert_id, via=via, note=note)
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
 
 
 def get_alerts_ready_for_notification() -> List[Tuple[CreditAlert, str]]:
     init_credit_tables()
     conn = _db_connect()
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute('''
-        SELECT * FROM credit_alerts
-        WHERE is_active = 1
-          AND payment_date IS NOT NULL
-          AND paid_confirmed_at IS NULL
-        ORDER BY payment_date ASC
-    ''').fetchall()
-    conn.close()
+    try:
+        rows = credit_repo.list_active(conn)
+    finally:
+        conn.close()
 
     result: List[Tuple[CreditAlert, str]] = []
     for row in rows:
@@ -325,16 +265,10 @@ def get_alerts_ready_for_notification() -> List[Tuple[CreditAlert, str]]:
 def get_nearest_alerts(limit: int = 3) -> List[CreditAlert]:
     init_credit_tables()
     conn = _db_connect()
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute('''
-        SELECT * FROM credit_alerts
-        WHERE payment_date IS NOT NULL
-          AND is_active = 1
-          AND paid_confirmed_at IS NULL
-        ORDER BY ABS(julianday(payment_date) - julianday('now')) ASC, payment_date ASC
-        LIMIT ?
-    ''', (limit,)).fetchall()
-    conn.close()
+    try:
+        rows = credit_repo.list_nearest(conn, limit=limit)
+    finally:
+        conn.close()
     alerts = [_row_to_alert(row) for row in rows]
     for alert in alerts:
         alert.days_until_payment = _compute_days_until(alert.payment_date)
@@ -671,20 +605,23 @@ def save_alerts(alerts: List[CreditAlert]) -> List[CreditAlert]:
         if alert.payment_date:
             days_until = (alert.payment_date - datetime.now()).days
         
-        conn.execute('''
-            INSERT INTO credit_alerts 
-            (source, sender, sender_name, subject, body, payment_date, 
-             payment_amount, currency, detected_at, days_until_payment, raw_message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)
-        ''', (
-            alert.source, alert.sender, alert.sender_name, alert.subject,
-            alert.body, 
-            alert.payment_date.strftime('%Y-%m-%d') if alert.payment_date else None,
-            alert.payment_amount, alert.currency, days_until, alert.raw_message_id
-        ))
-        
-        alert.days_until_payment = days_until
-        new_alerts.append(alert)
+        new_id = credit_repo.insert_alert(
+            conn,
+            source=alert.source,
+            sender=alert.sender,
+            sender_name=alert.sender_name,
+            subject=alert.subject,
+            body=alert.body,
+            payment_date=alert.payment_date.strftime('%Y-%m-%d') if alert.payment_date else None,
+            payment_amount=alert.payment_amount,
+            currency=alert.currency,
+            days_until_payment=days_until,
+            raw_message_id=alert.raw_message_id,
+        )
+        if new_id:
+            alert.id = new_id
+            alert.days_until_payment = days_until
+            new_alerts.append(alert)
     
     conn.commit()
     conn.close()
@@ -719,13 +656,12 @@ def get_pending_alerts(min_days: int = 3) -> List[CreditAlert]:
 def mark_notified(alert_ids: List[int]):
     """Отмечает алерты как отправленные."""
     conn = _db_connect()
-    for alert_id in alert_ids:
-        conn.execute(
-            'UPDATE credit_alerts SET notified_at = datetime("now") WHERE id = ?',
-            (alert_id,)
-        )
-    conn.commit()
-    conn.close()
+    try:
+        for alert_id in alert_ids:
+            credit_repo.mark_notified(conn, alert_id)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def format_alert_message(alert: CreditAlert) -> str:

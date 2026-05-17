@@ -3,6 +3,7 @@ consumption_agent/venv/
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Базы данных
 *.db
