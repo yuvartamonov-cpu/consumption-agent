@@ -3200,18 +3200,34 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     try:
         import ml_search_v2
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         conn = get_db()
         try:
             result = await ml_search_v2.search_ml_item_v2(conn, ml_id)
         finally:
             conn.close()
-        text = ml_search_v2.format_search_result_telegram(result)
+        pages = ml_search_v2.format_search_pages(result)
         await ctx.bot.delete_message(chat_id=chat_id, message_id=temp.message_id)
+
+        # Отправляем первую страницу
+        reply_markup = None
+        if len(pages) > 1:
+            # Сохраняем остальные страницы в user_data для пагинации
+            page_key = f'ml_pages_{ml_id}'
+            ctx.user_data[page_key] = pages[1:]
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    f'📄 Продолжить вывод ({len(pages) - 1} ещё)',
+                    callback_data=f'ml_page:{ml_id}:1'
+                )
+            ]])
+
         await ctx.bot.send_message(
             chat_id=chat_id,
-            text=text,
+            text=pages[0],
             parse_mode='HTML',
-            disable_web_page_preview=True
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
         )
     except Exception as e:
         log.warning(f'cmd_ml_search failed: {e}')
@@ -3219,6 +3235,66 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             chat_id=chat_id,
             message_id=temp.message_id,
             text=f'⚠️ Ошибка: {str(e)[:200]}'
+        )
+
+
+async def ml_page_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Продолжить вывод' — пагинация результатов /ml_search."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    # Формат: ml_page:<item_id>:<page_index>
+    parts = data.split(':')
+    if len(parts) != 3:
+        return
+    try:
+        ml_id = int(parts[1])
+        page_idx = int(parts[2])
+    except ValueError:
+        return
+
+    page_key = f'ml_pages_{ml_id}'
+    pages = (ctx.user_data or {}).get(page_key, [])
+
+    if page_idx - 1 >= len(pages) or page_idx < 1:
+        await query.answer('⚠️ Страницы закончились', show_alert=True)
+        return
+
+    page_text = pages[page_idx - 1]
+    chat_id = update.effective_chat.id
+
+    # Кнопка для следующей страницы (если есть ещё)
+    reply_markup = None
+    remaining = len(pages) - page_idx
+    if remaining > 0:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                f'📄 Продолжить вывод ({remaining} ещё)',
+                callback_data=f'ml_page:{ml_id}:{page_idx + 1}'
+            )
+        ]])
+
+    try:
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=page_text,
+            parse_mode='HTML',
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+    except Exception as e:
+        log.warning(f'ml_page_callback failed: {e}')
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=f'⚠️ Ошибка вывода: {str(e)[:200]}'
         )
 
 
@@ -3646,6 +3722,7 @@ def main():
     add_authorized_handler(app, CallbackQueryHandler(item_photo_callback, pattern=r'^item_photo:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_delete_callback, pattern=r'^ml_delete:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_search_callback, pattern=r'^ml_search:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(ml_page_callback, pattern=r'^ml_page:\d+:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_remind_callback, pattern=r'^ml_remind:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_remind_set_callback, pattern=r'^ml_remind_set:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
