@@ -5,6 +5,22 @@ description: Доступ ко всем 4 почтовым ящикам (Gmail, 
 
 # Email Access — Доступ к почтам и SMS
 
+## Важно: исходящая рабочая почта
+
+Этот skill — для чтения почты, IMAP-сканирования чеков и SMS. Для отправки писем на рабочую почту **не использовать Gmail API connector как первый путь**: в текущей среде он часто падает с `ACCESS_TOKEN_SCOPE_INSUFFICIENT`.
+
+Для исходящих писем всегда использовать skill `email-send`:
+
+```powershell
+& 'C:\Users\Yuri Artamonov\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' `
+  skills/email-send/scripts/send_email_smtp.py `
+  --to "yu.v.artamonov@gmail.com" `
+  --subject "Subject" `
+  --body "Message body"
+```
+
+Если пользователь говорит "рабочая почта" без адреса, это `yu.v.artamonov@gmail.com`.
+
 ## Доступные почтовые ящики
 
 | # | Ящик | Пароль | IMAP |

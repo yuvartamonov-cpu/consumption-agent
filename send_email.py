@@ -1,55 +1,28 @@
 #!/usr/bin/env python3
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
-import os
+"""Compatibility wrapper for the email-send skill.
 
-# Настройки SMTP
-smtp_server = "smtp.gmail.com"
-smtp_port = 587
-smtp_user = "yu.v.artamonov@gmail.com"
-smtp_password = "[REDACTED_OLD_GMAIL_APP_PASSWORD]"  # App password из TOOLS.md
+This file exists so older agent notes that mention `send_email.py` still use the
+supported SMTP implementation instead of stale hardcoded credentials.
+"""
 
-# Получатель
-to_email = "yu.v.artamonov@gmail.com"
+from __future__ import annotations
 
-# Тема и тело письма
-subject = "Paperclip WSL2 Setup Instructions"
-body = "Инструкции по установке Paperclip в отдельном WSL2 и настройке OpenClaw, Claude и Codex как агентов."
+import importlib.util
+import sys
+from pathlib import Path
 
-# Файл для отправки
-file_path = "/home/yuri_artamonov/.openclaw/workspace/Paperclip_WSL2_Setup.txt"
 
-# Создание письма
-msg = MIMEMultipart()
-msg['From'] = smtp_user
-msg['To'] = to_email
-msg['Subject'] = subject
+SCRIPT = Path(__file__).resolve().parent / "skills" / "email-send" / "scripts" / "send_email_smtp.py"
 
-msg.attach(MIMEText(body, 'plain'))
 
-# Прикрепление файла
-with open(file_path, "rb") as attachment:
-    part = MIMEBase("application", "octet-stream")
-    part.set_payload(attachment.read())
+def main() -> int:
+    spec = importlib.util.spec_from_file_location("send_email_smtp", SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load email-send script: {SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return int(module.main())
 
-encoders.encode_base64(part)
-part.add_header(
-    "Content-Disposition",
-    f"attachment; filename= {os.path.basename(file_path)}",
-)
 
-msg.attach(part)
-
-# Отправка письма
-try:
-    server = smtplib.SMTP(smtp_server, smtp_port)
-    server.starttls()
-    server.login(smtp_user, smtp_password)
-    server.sendmail(smtp_user, to_email, msg.as_string())
-    server.quit()
-    print("Письмо успешно отправлено!")
-except Exception as e:
-    print(f"Ошибка при отправке письма: {e}")
+if __name__ == "__main__":
+    raise SystemExit(main())

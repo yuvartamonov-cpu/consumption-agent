@@ -11,6 +11,8 @@ import ssl
 from email.message import EmailMessage
 from pathlib import Path
 
+DEFAULT_WORK_EMAIL = "yu.v.artamonov@gmail.com"
+
 
 def load_env(paths: list[Path]) -> list[Path]:
     loaded: list[Path] = []
@@ -87,9 +89,21 @@ def send_email(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send email through Gmail SMTP.")
-    parser.add_argument("--to", required=True, help="Comma-separated recipient email addresses.")
+    parser.add_argument(
+        "--to",
+        default=None,
+        help=(
+            "Comma-separated recipient email addresses. "
+            f"Defaults to WORK_EMAIL or {DEFAULT_WORK_EMAIL}."
+        ),
+    )
     parser.add_argument("--subject", required=True)
-    parser.add_argument("--body", required=True)
+    parser.add_argument("--body", default=None)
+    parser.add_argument(
+        "--body-file",
+        default=None,
+        help="Read the message body from a UTF-8 text file. Useful for long messages.",
+    )
     parser.add_argument("--attach", action="append", default=[], help="Attachment path. Can be repeated.")
     parser.add_argument("--sender", default=None, help="Override sender email address.")
     return parser.parse_args()
@@ -97,8 +111,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    to = args.to or os.environ.get("WORK_EMAIL") or DEFAULT_WORK_EMAIL
+    if args.body_file:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+    else:
+        body = args.body
+    if body is None:
+        raise RuntimeError("Missing email body: pass --body or --body-file")
     attachments = [Path(item).expanduser().resolve() for item in args.attach]
-    send_email(args.to, args.subject, args.body, attachments, sender=args.sender)
+    send_email(to, args.subject, body, attachments, sender=args.sender)
     print("sent")
     return 0
 
