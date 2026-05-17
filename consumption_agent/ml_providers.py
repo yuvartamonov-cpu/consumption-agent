@@ -506,13 +506,39 @@ def brand_site_links(
     queries: Sequence[str],
     sources: Sequence[str],
     *,
-    engines_per_brand: int = 2,
+    category: str = '',
 ) -> list[dict]:
-    """Generate web-search links aimed at official brand sites."""
+    """Generate brand entry-point links via ml_official_sites resolver.
+
+    For known brands returns official site / distributor / authorized retailer
+    links in priority order. For unknown brands falls back to web-search.
+    """
     brand_sources = [s for s in sources if s.lower().startswith("brand:")]
     if not brand_sources:
         return []
 
+    try:
+        import ml_official_sites
+    except ImportError:
+        log.warning("ml_providers: ml_official_sites не найден, fallback на web-search")
+        return _brand_site_links_fallback(queries, brand_sources)
+
+    out: list[dict] = []
+    for src in brand_sources:
+        brand = src.split(":", 1)[1].strip()
+        if not brand:
+            continue
+        query = queries[0] if queries else ''
+        links = ml_official_sites.resolve_brand_links(brand, query, category)
+        out.extend(links)
+    return out
+
+
+def _brand_site_links_fallback(
+    queries: Sequence[str],
+    brand_sources: Sequence[str],
+) -> list[dict]:
+    """Fallback если ml_official_sites недоступен."""
     out: list[dict] = []
     for src in brand_sources:
         brand = src.split(":", 1)[1].strip()
@@ -520,7 +546,7 @@ def brand_site_links(
             continue
         for query in list(queries)[:1]:
             official_query = f"{brand} {query} официальный сайт купить"
-            for engine_name, template in WEB_SEARCH_ENGINES[:engines_per_brand]:
+            for engine_name, template in WEB_SEARCH_ENGINES[:2]:
                 encoded = urllib.parse.quote(official_query)
                 out.append({
                     "title": f"🔗 {brand}: {engine_name} официальный поиск",

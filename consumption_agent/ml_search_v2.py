@@ -208,6 +208,22 @@ def _select_provider_queries(
     return [q for q, _ in expanded][:max_n]
 
 
+_TIER_PRIORITY = {
+    'official': 0,
+    'distributor': 1,
+    'authorized': 2,
+    'brand_page': 3,
+    'search_fallback': 9,
+}
+
+
+def _sort_by_tier(candidates: list[dict]) -> list[dict]:
+    """Ставим official/distributor/authorized ссылки выше generic результатов."""
+    def _key(c: dict) -> int:
+        return _TIER_PRIORITY.get(c.get('tier', ''), 5)
+    return sorted(candidates, key=_key)
+
+
 def _candidate_matches_brand(candidate: dict, brand: str) -> bool:
     """Conservative exact brand match; no fuzzy hamington/remington collisions."""
     for field in (
@@ -378,6 +394,13 @@ async def search_ml_item_v2(
     candidates, brand_filter_error = _filter_candidates_for_exact_brand(candidates, attrs)
     if brand_filter_error:
         result['errors'].append(brand_filter_error)
+
+    # 5b. Sort official/distributor links to top by tier priority
+    try:
+        import ml_official_sites
+        candidates = _sort_by_tier(candidates)
+    except ImportError:
+        pass
 
     # 6. Canonicalize
     canonical = ml_canonical.canonicalize(candidates, attrs)
