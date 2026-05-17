@@ -5,6 +5,12 @@ description: "Команда /monthexp — расходы с 1 числа тек
 
 # monthexp — Расходы с 1 числа месяца
 
+> **Обновлено 2026-05-17 (День 1 спринта):** добавлен `ScanMetrics` для
+> наблюдаемости IMAP-сканирования. Лог `[SCAN] scanner=daily_cheque_scan
+> account=Gmail folders=3 msgs_seen=12 deduped=2 parsed=8 elapsed=1.4s`
+> позволяет точно знать, что INBOX + Spam + Receipts реально были
+> просканированы.
+
 ## Использование
 
 ```bash

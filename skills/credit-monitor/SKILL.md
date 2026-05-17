@@ -10,6 +10,11 @@ description: >
 
 # Credit Monitor
 
+> **Обновлено 2026-05-17 (День 1 спринта):** `check_email_account()` теперь
+> ведёт `ScanMetrics` per-folder с метриками folders_scanned, messages_seen,
+> deduped, parsed, errors. Если /debts не нашёл письма от банка — смотри в логе
+> `[SCAN]`, какие папки были обойдены.
+
 ## Overview
 
 Мониторинг кредитных платежей через проверку почты (Gmail, Яндекс, Mail.ru ×2) и SMS через Windows Phone Link. Отправляет предупреждения в Telegram за 3+ дня до платежа.

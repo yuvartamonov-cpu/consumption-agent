@@ -5,8 +5,8 @@ description: Многоэтапный конвейер поиска товаро
 
 # Visual Product Search — Sprint Plan
 
-> Обновлено: 2026-05-16
-> Статус: ядро pipeline работает, retrieval layer переведён в режим seller-link search
+> Обновлено: 2026-05-17 (по итогам 5-дневного спринта 13–17 мая)
+> Статус: pipeline + retrieval + UX полностью рабочие; добавлены price-drop alerts
 
 ---
 
@@ -25,10 +25,14 @@ description: Многоэтапный конвейер поиска товаро
 | 9 | Thompson-Sampling Bandit | `ml_bandit.py` | 19 | ✅ Done |
 | 10 | Telegram Integration | `telegram_bot.py` | — | ✅ Done |
 | 11 | CLIP Visual Gate | — | — | 🔲 Not started |
-| 12 | Retrieval / Seller Links | `ml_providers.py` | partial | 🟡 In progress |
+| 12 | Retrieval / Seller Links | `ml_providers.py` | 25 | ✅ Done (Day 1–3) |
+| 12a | Official/Distributor Resolver | `ml_official_sites.py` | 18 | ✅ Done (Day 2) |
 | 13 | Reverse Image Search | — | — | 🔲 Not started |
-| 14 | Price Drop Alerts | — | — | 🔲 Not started |
+| 14 | Price Drop Alerts | `ml_watchlist.py` | 20 | ✅ Done (Day 5) |
+| 14a | Telegram pagination | `ml_search_v2.py` | 11 | ✅ Done (Day 4) |
 | 15 | OOS Recovery | — | — | 🔲 Not started |
+
+**Итого тестов:** 513 (baseline 421 → +92 за 5-дневный спринт).
 
 ---
 
@@ -139,44 +143,67 @@ description: Многоэтапный конвейер поиска товаро
 - `positive_fingerprints()` / `dismissed_fingerprints()` feed taste refinement
 - `bandit_outcomes_since()` feeds bandit updates
 
-### 9. Current Retrieval Strategy
-- `route_sources()` больше не опирается на Ozon как на основной источник: приоритет у `Lamoda`, `Brandshop`, `DNS`, `Citilink`, `Hoff`, `IKEA`, `Goldapple`, `Иль де Ботэ`, `Wildberries`, `Яндекс.Маркет`, а также `AliExpress`/`Alibaba` как дополнительных площадок.
-- `composite_provider()` в `ml_providers.py` сейчас делает упор на **прямые ссылки продавцов**, а не на парсинг маркетплейсов:
-  - `Wildberries` — единственный live API provider в текущем default-flow;
-  - `Lamoda`, `Brandshop`, `Sneakerhead`, `DNS`, `Citilink`, `М.Видео`, `Hoff`, `Mr.Doors`, `IKEA`, `Золотое Яблоко`, `Иль де Ботэ`, `AliExpress`, `Alibaba` — link-only search URLs;
-  - для `brand:<brand>` добавляются отдельные ссылки на поиск официального сайта через `Google` и `Yandex`.
-- Для точности брендовых запросов:
-  - в `ml_query_expansion.py` бренд в `brand_article`, `brand_model`, `brand_subcat` оборачивается в кавычки;
-  - в `ml_search_v2.py` введён strict brand gating: если бренд распознан, в provider уходит только брендовый query, а выдача с явным чужим брендом отбрасывается;
-  - `link-only` результаты больше не схлопываются в один canonical group.
-- Для иностранных площадок (`AliExpress`, `Alibaba`) запросы автоматически переводятся с русского на английский в `translate_query_for_source()` перед генерацией ссылок.
-- Практический вывод: текущий retrieval layer хорошо подходит для сценария "дай прямые ссылки, где искать товар", но пока не решает задачу полноценного автоматического сбора карточек/цен с официальных сайтов.
+### 9. Current Retrieval Strategy (после Day 1–3 спринта)
+- `route_sources()` приоритет у `Lamoda`, `Brandshop`, `DNS`, `Citilink`, `Hoff`, `IKEA`, `Goldapple`, `Иль де Ботэ`, `Wildberries`, `Яндекс.Маркет`, а также `AliExpress`/`Alibaba` как дополнительных площадок.
+- `composite_provider()` в `ml_providers.py` делает упор на **прямые ссылки продавцов**:
+  - `Wildberries` — единственный live API provider;
+  - 13 ритейлеров (Lamoda, Brandshop, Sneakerhead, DNS, Citilink, М.Видео, Hoff, Mr.Doors, IKEA, Goldapple, Иль де Ботэ, AliExpress, Alibaba) — link-only search URLs;
+  - для `brand:<brand>` теперь подключается `ml_official_sites` resolver (Day 2).
+- **`ml_official_sites.py`** (Day 2): справочник 25+ брендов (Nike, Adidas, Puma, NB, Apple, Samsung, Xiaomi, Sony, Dyson, IKEA, MAC, Estee Lauder и др.).
+  - `resolve_brand_links()` возвращает ссылки в порядке: official > distributor > authorized > brand_page > search_fallback.
+  - `lookup_brand()` поддерживает алиасы и partial match по словам (3+ символа).
+  - Для неизвестных брендов — fallback на Google/Yandex search.
+- **Tier-based sorting** в `ml_search_v2.py` (Day 2): результаты сортируются по tier перед canonicalization.
+- **Strict brand gating** в `ml_search_v2.py`: если бренд распознан, в provider уходит только брендовый query.
+- **Translation layer** для AliExpress / Alibaba (Day 3):
+  - словарь `QUERY_TRANSLATIONS` (200+ слов): одежда, обувь, аксессуары, техника, мебель, косметика, цвета, материалы, fit, сезон, пол, стиль;
+  - стемминг `_stem_lookup()` отрезает окончания русских прилагательных (замшевые → suede, демисезонное → all-season);
+  - служебные слова (купить, цена, недорого) удаляются из foreign queries.
+- **Геолокация источников** (Day 3): `GEO_FOREIGN_SOURCES` по регионам — китайские маркетплейсы доступны в RU/KZ/BY, исключаются в неизвестных регионах. `set_client_geo()` для runtime-config, `_filter_sources_by_geo()` в `route_sources()`.
+
+### 10. Telegram UX — Pagination (Day 4)
+- `format_search_pages()` разбивает результат на страницы (по 5 элементов / 4096 символов).
+- Сквозная нумерация товаров между страницами.
+- Кнопка «📄 Продолжить вывод (N ещё)» — `ml_page_callback()` отправляет следующую страницу.
+- `format_search_result_telegram()` сохранён для backward compatibility — возвращает первую страницу.
+
+### 11. Price-Drop Watchlist (Day 5)
+- **`ml_watchlist.py`** + таблицы `ml_watchlist` и `ml_price_history`.
+- Кнопка «🔔 Следить за ценой (топ-3)» в результатах /ml_search → добавляет до 3 товаров с ценой в watchlist.
+- Команды: `/ml_watch` (список с историей цен и ±%), `/ml_unwatch <id>` (убрать).
+- **Cron-задача** в 10:00 ежедневно (`run_price_drop_check`):
+  1. Достаёт все active watches;
+  2. Для WB-URL запрашивает текущую цену через card v2 API;
+  3. Если падение ≥ threshold_pct (дефолт 10%) — Telegram-уведомление с кнопкой «❌ Больше не следить».
+- Status lifecycle: `active → notified → active` (через add) или `dismissed`.
+- Дедупликация по `(item_id, product_url, profile_id)` + автоматический reactivate из `dismissed`.
+- `format_drop_notification()` с XSS-защитой (html.escape).
 
 ---
 
 ## Задачи кодирования (Sprint Backlog)
 
-### 🔴 P0 — Критический путь
+### ✅ Завершено в спринте 13–17 мая 2026
 
-#### TASK-201: Improve direct seller retrieval
-**Файлы:** `ml_providers.py`, `ml_search_v2.py`
-**Описание:** Усилить seller-link strategy: добавить больше прямых retail sources, нормализацию query по категориям и более умный порядок выдачи для official/retailer links.
-**Acceptance:** `/ml_search <id>` по брендовой вещи стабильно возвращает несколько прямых seller links без мусора от чужих брендов.
+#### TASK-201: Improve direct seller retrieval — ✅ Done (Day 2, commit `f86175c`)
+Tier-based sorting (`_sort_by_tier` в `ml_search_v2.py`) + 13 retail sources в `RETAILER_SEARCH_URLS`.
 
-#### TASK-202: Enrich foreign marketplace translation
-**Файлы:** `ml_providers.py`
-**Описание:** Расширить перевод запросов для `AliExpress`/`Alibaba`: добавить больше категорий, материалов, размеров, пола и устойчивых fashion-терминов.
-**Acceptance:** Запросы на иностранные площадки формируются на понятном английском без русских хвостов.
+#### TASK-202: Enrich foreign marketplace translation — ✅ Done (Day 3, commit `edf5119`)
+`QUERY_TRANSLATIONS` расширен с 70 до 200+ слов, стемминг русских прилагательных, удаление служебных слов, fallback при отсутствии в словаре.
 
-#### TASK-203: Structured official-site search
-**Файлы:** `ml_providers.py`, новый `ml_official_sites.py` (опционально)
-**Описание:** Вместо голых поисковых ссылок научиться строить более точные official-site candidates: брендовый домен, российский дистрибьютор, авторизованные продавцы.
-**Acceptance:** Для известных брендов в выдаче появляются не только generic search links, но и более точные official/distributor entry points.
+#### TASK-203: Structured official-site search — ✅ Done (Day 2, commit `f86175c`)
+Создан `ml_official_sites.py` со справочником 25+ брендов и `resolve_brand_links()`. Tier ordering: official > distributor > authorized > brand_page > search_fallback.
 
-#### TASK-204: Optional marketplace enrichment
-**Файлы:** `ml_providers.py`
-**Описание:** Сохранять `Wildberries` как единственный живой API-source по умолчанию. Интеграции с Ozon или другими жёстко защищёнными площадками считать вторичными и необязательными.
-**Acceptance:** Поисковый пайплайн полезен даже без автоматизации Ozon.
+#### TASK-204: Optional marketplace enrichment — ✅ Done (constant)
+Wildberries — единственный живой API. Ozon отключён, YM — link-only.
+
+#### TASK-303: Price Drop Alert system — ✅ Done (Day 5, commit `ae3c0c2`)
+`ml_watchlist.py` + cron 10:00 + Telegram-уведомления. WB-fetcher через card v2 API.
+
+#### TASK-PAGINATION: Telegram pagination — ✅ Done (Day 4, commit `a2bfa84`)
+`format_search_pages()` + кнопка «Продолжить вывод».
+
+### 🔴 P0 — Critical path (открытое)
 
 ### 🟡 P1 — Улучшение качества
 
@@ -205,24 +232,7 @@ def visual_similarity(img_path_a, img_path_b):
 **Описание:** Использовать Google Lens / Yandex Images / TinEye API для поиска товара по фото. Парсить результаты, извлекать (title, url, price, store), нормализовать и подавать в canonicalize(). Добавить как дополнительный source в `route_sources()`.
 **Acceptance:** Reverse image provider возвращает ≥1 результат для фото товара.
 
-#### TASK-303: Price Drop Alert system (Stage 12)
-**Файлы:** новый `ml_price_tracker.py`
-**Описание:** Таблица `price_history(fingerprint, source, price, ts)`. Cron-job (APScheduler, каждые 6h) повторяет поиск для items с `set_reminder` кликом. Если `current_price < 0.85 × last_price` — Telegram уведомление пользователю.
-**Алгоритм:**
-```python
-def check_price_drops(conn, threshold=0.85):
-    watched = get_watched_items(conn)  # items with ACTION_REMIND clicks
-    for item in watched:
-        attrs = load_attributes(conn, item['id'])
-        queries = expand_queries(attrs)[:1]
-        candidates = await fetch(queries, [item['source']])
-        current = parse_price(candidates[0]['price'])
-        last = get_last_price(conn, item['fingerprint'], item['source'])
-        if current and last and current < threshold * last:
-            send_price_drop_alert(item, last, current)
-        save_price_point(conn, item['fingerprint'], item['source'], current)
-```
-**Acceptance:** Price drop ≥15% triggers Telegram notification.
+#### TASK-303: Price Drop Alert system — см. раздел «11. Price-Drop Watchlist» выше — ✅ Done (Day 5)
 
 #### TASK-304: OOS (Out-of-Stock) Recovery
 **Файлы:** `ml_search_v2.py`
@@ -279,14 +289,27 @@ APScheduler==3.11.2
 
 ---
 
-## Telegram-команды (текущие)
+## Telegram-команды (после спринта 13–17 мая 2026)
 
 | Команда | Описание |
 |---------|----------|
-| `/ml_search <id>` | Запуск visual product search v2 для item из Memory Lane |
+| `/ml_search <id>` | Запуск visual product search v2 для item из Memory Lane. Поддерживает пагинацию (кнопка «Продолжить вывод») и watchlist (кнопка «Следить за ценой») |
 | `/ml_stats` | CTR по источникам + bandit snapshot + последние события |
 | `/ml_last` | Последние 5 ML-обработанных фото |
+| `/ml_watch` | Активные price-drop watches с историей цен (Day 5) |
+| `/ml_unwatch <id>` | Убрать товар из watchlist (Day 5) |
 | `/help` | Полный список команд |
+
+### Inline buttons (callback_data patterns)
+
+| Кнопка | Pattern | Handler |
+|---|---|---|
+| 🔍 Искать | `ml_search:<item_id>` | `ml_search_callback` |
+| 📄 Продолжить вывод | `ml_page:<item_id>:<page>` | `ml_page_callback` |
+| 🔔 Следить за ценой | `ml_watch:<item_id>` | `ml_watch_callback` |
+| ❌ Больше не следить | `ml_unwatch:<watch_id>` | `ml_unwatch_callback` |
+| 🗑 Удалить ML | `ml_delete:<item_id>` | `ml_delete_callback` |
+| 🔔 Напомнить | `ml_remind:<item_id>` | `ml_remind_callback` |
 
 ---
 
