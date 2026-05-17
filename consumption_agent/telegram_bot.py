@@ -2593,9 +2593,12 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '/check — статистика\n'
         '/add_item <название> [| бренд X] [| замена N мес] — добавить вещь в инвентарь\n'
         '/items [all|категория] — инвентарь вещей по категориям\n'
+        '/items_full [all|категория] — с полной инфой (фото, атрибуты)\n'
         '/ml_last [N] — последние записи Memory Lane\n'
         '/ml_search <id> — найти товар (pipeline v2: dedup + anomaly + taste)\n'
         '/ml_stats — CTR по источникам (active learning)\n'
+        '/ml_watch — watchlist цен\n'
+        '/ml_unwatch <id> — убрать из watchlist\n'
         '/topic_set <слово> <тема> — задать тему для слова\n'
         '/topic_list [тема] — показать все правила тем\n'
         '/help — это сообщение'
@@ -3906,6 +3909,43 @@ def main():
         print('   export CONSUMPTION_BOT_TOKEN=...')
         sys.exit(1)
     app = Application.builder().token(TOKEN).build()
+
+    # Telegram bot menu commands
+    from telegram import BotCommand
+    menu = [
+        BotCommand('start', 'Приветствие'),
+        BotCommand('help', 'Помощь'),
+        BotCommand('list', 'Инвентарь по категориям'),
+        BotCommand('items', 'Вещи со сроком замены'),
+        BotCommand('items_full', 'Вещи с полной инфой'),
+        BotCommand('add', 'Добавить товар /add name price category'),
+        BotCommand('add_item', 'Мастер добавления товара'),
+        BotCommand('add_photo', 'Добавить чек по фото'),
+        BotCommand('alerts', 'Активные алерты'),
+        BotCommand('dayexp', 'Расходы за сегодня'),
+        BotCommand('monthexp', 'Расходы за месяц'),
+        BotCommand('check', 'Статистика'),
+        BotCommand('debts', 'Кредитные платежи'),
+        BotCommand('fines', 'Неоплаченные штрафы'),
+        BotCommand('warranties', 'Гарантии'),
+        BotCommand('set_warranty', 'Установить гарантию /set_warranty id YYYY-MM-DD'),
+        BotCommand('last_drives', 'Последние поездки каршеринга'),
+        BotCommand('find_car', 'Подбор тарифа /find_car 3ч 80км'),
+        BotCommand('parse', 'Парсинг последнего фото'),
+        BotCommand('ml_last', 'Последние Memory Lane'),
+        BotCommand('ml_search', 'Поиск в Memory Lane'),
+        BotCommand('ml_stats', 'CTR по источникам'),
+        BotCommand('ml_watch', 'Watchlist цен'),
+        BotCommand('ml_unwatch', 'Убрать из watchlist /ml_unwatch id'),
+        BotCommand('topic_set', 'Ассоциация слово→тема'),
+        BotCommand('topic_list', 'Список правил тем'),
+    ]
+    async def _set_menu(_app):
+        try:
+            await _app.bot.set_my_commands(menu)
+        except Exception as e:
+            pass
+
     add_authorized_handler(app, CommandHandler('start', start))
     add_authorized_handler(app, CommandHandler('list', cmd_list))
     add_authorized_handler(app, CommandHandler('alerts', cmd_alerts))
