@@ -656,11 +656,10 @@ def scan_sms_today(parent_conn):
                 event_time = dt.strftime('%H:%M') if dt else None
 
                 if not is_already_imported(parent_conn, date_str, amount, store, event_time=event_time):
-                    notes_suffix = 'через SMS'
-                    time_suffix = build_time_note(event_time)
-                    if time_suffix:
-                        notes_suffix = f'{notes_suffix}; {time_suffix}'
-                    add_purchase(parent_conn, date_str, amount, store, [(body[:100], '')], 'sms', notes_suffix)
+                    notes_suffix = build_time_note(event_time)  # 'время HH:MM'
+                    # Используем короткое описание, без полного body и без баланса
+                    item_label = f'SMS: {store} {amount:.0f}₽'
+                    add_purchase(parent_conn, date_str, amount, store, [(item_label, '')], 'sms', notes_suffix)
                     added += 1
                 else:
                     event_mark = f' {event_time}' if event_time else ''

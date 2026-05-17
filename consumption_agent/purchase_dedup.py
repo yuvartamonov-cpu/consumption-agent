@@ -18,6 +18,8 @@ STORE_ALIASES = (
     (('гку ампп', 'ампп'), 'ГКУ "АМПП"'),
 )
 
+DUPLICATE_HIDDEN_MARKER = '[duplicate_hidden]'
+
 
 def normalize_purchase_date(date_str: str | None) -> str:
     if not date_str:
@@ -95,6 +97,14 @@ def canonical_store_name(store_name: str | None) -> str:
     return original
 
 
+def build_duplicate_hidden_note(notes: str | None) -> str:
+    """Помечает запись как скрытый дубль, не дублируя маркер."""
+    current = (notes or '').strip()
+    if DUPLICATE_HIDDEN_MARKER in current:
+        return current
+    return f'{current} {DUPLICATE_HIDDEN_MARKER}'.strip()
+
+
 def is_duplicate_purchase(
     conn: sqlite3.Connection,
     date_str: str | None,
@@ -115,7 +125,7 @@ def is_duplicate_purchase(
 
     if email_msg_id:
         row = conn.execute(
-            'SELECT id FROM purchases WHERE email_message_id = ? AND deleted_at IS NULL',
+            'SELECT id FROM purchases WHERE email_message_id = ?',
             (str(email_msg_id).strip(),),
         ).fetchone()
         if row:
@@ -127,7 +137,6 @@ def is_duplicate_purchase(
         FROM purchases
         WHERE purchase_date = ?
           AND store_name = ?
-          AND deleted_at IS NULL
         ''',
         (normalized_date, canonical_store),
     ).fetchall()

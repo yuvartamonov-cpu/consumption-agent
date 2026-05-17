@@ -48,6 +48,91 @@ def esc_md(text):
     return text
 
 
+def markdown_to_plain_text(text: str | None) -> str:
+    """Снимает Markdown-оформление для fallback-ответа без parse_mode."""
+    if not text:
+        return ''
+    plain = re.sub(r'\\([\\`*_\[\]()])', r'\1', str(text))
+    plain = re.sub(r'(?m)^_(.*)_$', r'\1', plain)
+    return plain.replace('*', '').replace('`', '')
+
+
+async def safe_edit_markdown_message(message, text: str):
+    """Редактирует Markdown-сообщение, а при parse error откатывается в plain text."""
+    try:
+        return await message.edit_text(text, parse_mode='Markdown')
+    except Exception as e:
+        if 'parse entities' not in str(e).lower():
+            raise
+        log.warning(f'fallback to plain text after Markdown edit failure: {e}')
+        return await message.edit_text(markdown_to_plain_text(text))
+
+
+async def safe_send_markdown_message(bot, chat_id: int, text: str, *, reply_markup=None):
+    """Отправляет Markdown-сообщение, а при parse error откатывается в plain text."""
+    try:
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup,
+        )
+    except Exception as e:
+        if 'parse entities' not in str(e).lower():
+            raise
+        log.warning(f'fallback to plain text after Markdown send failure: {e}')
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=markdown_to_plain_text(text),
+            reply_markup=reply_markup,
+        )
+
+
+def extract_sms_display_time(notes: str | None) -> str:
+    """Возвращает HH:MM из SMS notes без вывода сырого текста с балансом."""
+    if not notes:
+        return ''
+    for pattern in (r'время\s+(\d{2}:\d{2})', r'\b(\d{2}:\d{2})\b'):
+        match = re.search(pattern, notes)
+        if match:
+            return match.group(1)
+    return ''
+
+
+def append_expense_row(lines, row, source_icons, *, note_limit=80):
+    """Добавляет строку расхода в Markdown-отчёт безопасно для Telegram."""
+    _date_str, amount, store, source, notes = row
+    amt = amount or 0
+    src_icon = source_icons.get(source or '', '📧')
+    notes_clean = (notes or '').replace('\n', ' ').strip()
+
+    lines.append(f'{src_icon} *{esc_md(store or "—")}* — {amt:,.0f} ₽'.replace(',', ' '))
+
+    if source in ('sms', 'sms_sber'):
+        sms_time = extract_sms_display_time(notes_clean)
+        if sms_time:
+            lines.append(f'   🕐 {sms_time}')
+        return
+
+    if notes_clean:
+        lines.append(f'   {esc_md(notes_clean[:note_limit])}')
+
+
+def append_store_totals(lines, rows, heading):
+    """Добавляет блок итогов по магазинам с экранированием Markdown."""
+    by_store = {}
+    for row in rows:
+        store = row[2] or 'Другое'
+        by_store[store] = by_store.get(store, 0) + (row[1] or 0)
+
+    if len(by_store) <= 1:
+        return
+
+    lines.append(f'\n{heading}')
+    for store, amount in sorted(by_store.items(), key=lambda x: -x[1]):
+        lines.append(f'  • {esc_md(store)}: {amount:,.0f} ₽'.replace(',', ' '))
+
+
 def add_months_safe(dt, months):
     """Добавляет месяцы к дате без падения на 29/30/31 числе."""
     months = int(months)
@@ -1755,32 +1840,14 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines = [title]
     lines.append(f'_{len(rows)} покупок, всего {total:,.0f} ₽_\n'.replace(',', ' '))
 
-    for r in rows:
-        date_str, amount, store, source, notes = r
-        amt = amount or 0
-        src_icon = source_icons.get(source or '', '📧')
-        store_clean = store or '—'
-        notes_clean = (notes or '').replace('\n', ' ').strip()
-        if notes_clean:
-            short_note = notes_clean[:80]
-            lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
-            lines.append(f'   {short_note}')
-        else:
-            lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
+    for row in rows:
+        append_expense_row(lines, row, source_icons, note_limit=80)
 
-    # По магазинам
-    by_store = {}
-    for r in rows:
-        s = r[2] or 'Другое'
-        by_store[s] = by_store.get(s, 0) + (r[1] or 0)
-    if len(by_store) > 1:
-        lines.append(f'\n📌 *По магазинам:*')
-        for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
-            lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
+    append_store_totals(lines, rows, '📌 *По магазинам:*')
 
-    await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
+    await safe_edit_markdown_message(msg, '\n'.join(lines))
 
-    # Проверка на подозрительные дубли
+    # Проверка на подозрительные дубли (SMS/Email, близкие суммы)
     try:
         import purchase_duplicate_detector as pdd
         conn = get_db()
@@ -1789,12 +1856,13 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             for group in groups:
                 resolved = pdd.auto_resolve_if_email_dedup(conn, group)
                 if resolved:
+                    resolved['_conn'] = conn  # для format_duplicate_question
                     question = pdd.format_duplicate_question(resolved)
                     kb = pdd.build_duplicate_keyboard(resolved)
-                    await ctx.bot.send_message(
-                        chat_id=update.effective_chat.id,
-                        text=question,
-                        parse_mode='Markdown',
+                    await safe_send_markdown_message(
+                        ctx.bot,
+                        update.effective_chat.id,
+                        question,
                         reply_markup=kb,
                     )
         finally:
@@ -1852,7 +1920,7 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     grand_total = sum(r[1] or 0 for r in rows)
-    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'local': '📝', 'manual': '✏️'}
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'sms_sber': '📱', 'local': '📝', 'manual': '✏️'}
 
     lines = [f'📊 *Расходы с 1 {month_name.lower()} по {today.day} число*']
     lines.append(f'_{len(rows)} покупок, всего {grand_total:,.0f} ₽_\n'.replace(',', ' '))
@@ -1871,28 +1939,12 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         day_label = 'Сегодня' if day == today_str else day
         lines.append(f'\n📅 *{day_label}* — {day_total:,.0f} ₽ ({len(day_rows)} покупок)'.replace(',', ' '))
 
-        for r in day_rows:
-            date_str, amount, store, source, notes = r
-            amt = amount or 0
-            src_icon = source_icons.get(source or '', '📧')
-            store_clean = store or '—'
-            notes_clean = (notes or '').replace('\n', ' ').strip()[:60]
-            if notes_clean:
-                lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽ · {notes_clean}'.replace(',', ' '))
-            else:
-                lines.append(f'{src_icon} *{store_clean}* — {amt:,.0f} ₽'.replace(',', ' '))
+        for row in day_rows:
+            append_expense_row(lines, row, source_icons, note_limit=60)
 
-    # По магазинам
-    by_store = {}
-    for r in rows:
-        s = r[2] or 'Другое'
-        by_store[s] = by_store.get(s, 0) + (r[1] or 0)
-    if len(by_store) > 1:
-        lines.append(f'\n📌 *Всего по магазинам:*')
-        for s, a in sorted(by_store.items(), key=lambda x: -x[1]):
-            lines.append(f'  • {s}: {a:,.0f} ₽'.replace(',', ' '))
+    append_store_totals(lines, rows, '📌 *Всего по магазинам:*')
 
-    await msg.edit_text('\n'.join(lines), parse_mode='Markdown')
+    await safe_edit_markdown_message(msg, '\n'.join(lines))
 
     # Проверка на подозрительные дубли
     try:
@@ -1903,12 +1955,13 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             for group in groups:
                 resolved = pdd.auto_resolve_if_email_dedup(conn, group)
                 if resolved:
+                    resolved['_conn'] = conn
                     question = pdd.format_duplicate_question(resolved)
                     kb = pdd.build_duplicate_keyboard(resolved)
-                    await ctx.bot.send_message(
-                        chat_id=update.effective_chat.id,
-                        text=question,
-                        parse_mode='Markdown',
+                    await safe_send_markdown_message(
+                        ctx.bot,
+                        update.effective_chat.id,
+                        question,
                         reply_markup=kb,
                     )
         finally:
@@ -3438,10 +3491,22 @@ async def dedup_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     try:
+        from purchase_dedup import build_duplicate_hidden_note
+
         for pid in ids:
             conn.execute(
-                'UPDATE purchases SET deleted_at = datetime("now") WHERE id = ? AND deleted_at IS NULL',
-                (pid,),
+                '''
+                UPDATE purchases
+                SET deleted_at = datetime("now"),
+                    notes = ?
+                WHERE id = ? AND deleted_at IS NULL
+                ''',
+                (
+                    build_duplicate_hidden_note(
+                        conn.execute('SELECT notes FROM purchases WHERE id = ?', (pid,)).fetchone()[0]
+                    ),
+                    pid,
+                ),
             )
         conn.commit()
         log.info(f'dedup_delete: deleted {len(ids)} purchases: {ids}')

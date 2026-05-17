@@ -260,9 +260,10 @@ def import_expenses(expenses: List[Dict]) -> tuple:
                 continue
             
             note_suffix = build_time_note(exp.get('event_time'))
-            note = f"SMS: {exp['raw'][:100]}"
+            # Короткая заметка без raw-текста SMS
+            note = f'SMS: {exp["store"]} {exp["amount"]:.0f}₽'
             if note_suffix:
-                note += f" ({note_suffix})"
+                note += f' ({note_suffix})'
             conn.execute('''
                 INSERT INTO purchases (purchase_date, store_name, total_amount, notes, source, data_origin)
                 VALUES (?, ?, ?, ?, ?, ?)
