@@ -8,14 +8,14 @@
 """
 import json
 import os
-import sqlite3
+import re
 import sys
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
+from consumption.db import DB_PATH, connect as db_connect
 
 # Поисковые шаблоны для разных типов товаров
 SEARCH_TEMPLATES = {
@@ -38,8 +38,7 @@ MARKETPLACES = {
 
 def get_ml_item(item_id: int) -> Optional[Dict]:
     """Получает товар из Memory Lane по ID."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = db_connect(DB_PATH)
     try:
         row = conn.execute('''
             SELECT id, name, brand, topic, description, 
@@ -504,7 +503,7 @@ def set_reminder(item_id: int, days: Optional[int] = None, months: Optional[int]
         days: напомнить через N дней
         months: напомнить через N месяцев
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect(DB_PATH)
     try:
         # Создаём таблицу напоминаний если нет
         conn.execute('''
@@ -543,8 +542,7 @@ def set_reminder(item_id: int, days: Optional[int] = None, months: Optional[int]
 
 def check_reminders() -> List[Dict]:
     """Проверяет просроченные напоминания."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = db_connect(DB_PATH)
     try:
         rows = conn.execute('''
             SELECT r.id, r.item_id, r.remind_at, m.name, m.brand, m.photo_path

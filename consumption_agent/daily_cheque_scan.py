@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from bs4 import BeautifulSoup
+from consumption.db import DB_PATH, connect as db_connect
 from imap_folders import ScanMetrics, build_message_uid, discover_target_mailboxes
 from purchase_dedup import (
     build_delivery_note,
@@ -39,7 +40,6 @@ from purchase_dedup import (
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
 
 os.makedirs(os.path.join(SCRIPT_DIR, 'logs'), exist_ok=True)
 
@@ -576,6 +576,7 @@ def scan_sms_today(parent_conn):
         log.info(f"   📱 Phone Link: {db_path}")
         local_db = copy_db_bundle(db_path)
         try:
+            # Allowed raw sqlite3.connect exception: copied Phone Link DB, not consumption.db.
             sms_conn = sqlite3.connect(local_db)
             sms_conn.row_factory = sqlite3.Row
 
@@ -708,7 +709,7 @@ def main():
     log.info(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     log.info("=" * 60)
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect(DB_PATH)
     total = 0
     
     # 1. Почты

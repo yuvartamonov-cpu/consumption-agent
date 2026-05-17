@@ -31,6 +31,7 @@ sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
 import logging
+from consumption.db import connect as db_connect
 from imap_folders import ScanMetrics, build_message_uid, discover_target_mailboxes
 
 _log = logging.getLogger(__name__)
@@ -340,6 +341,7 @@ def check_sms_fines():
         try:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
             shutil.copy2(phone_db_path, tmp.name)
+            # Allowed raw sqlite3.connect exception: copied Phone Link DB, not consumption.db.
             conn = sqlite3.connect(tmp.name)
             rows = conn.execute("""
                 SELECT body, from_address, timestamp FROM message
@@ -374,7 +376,7 @@ def check_sms_fines():
 
 def check_new_fines(days: int = 7) -> list[dict]:
     db_path = os.path.join(PROJECT_DIR, 'consumption.db')
-    conn = sqlite3.connect(db_path)
+    conn = db_connect(db_path)
     c = conn.cursor()
 
     c.execute('''CREATE TABLE IF NOT EXISTS fines (
@@ -566,7 +568,7 @@ def _mark_notified(uid: str):
         return
     db_path = os.path.join(PROJECT_DIR, 'consumption.db')
     try:
-        conn = sqlite3.connect(db_path)
+        conn = db_connect(db_path)
         conn.execute('UPDATE fines SET notified_at = datetime(\'now\') WHERE uid = ?', (uid,))
         conn.commit()
         conn.close()
@@ -636,7 +638,7 @@ def main():
         all_in_db = []
         db_path = os.path.join(PROJECT_DIR, 'consumption.db')
         try:
-            conn = sqlite3.connect(db_path)
+            conn = db_connect(db_path)
             rows = conn.execute('SELECT type,number,amount,description,mailbox,fine_date,raw_date FROM fines ORDER BY detected_at DESC').fetchall()
             for r in rows:
                 all_in_db.append(dict(zip(['type','number','amount','description','mailbox','fine_date','raw_date'], r)))

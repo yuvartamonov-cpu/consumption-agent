@@ -13,6 +13,15 @@ def ensure_delivery_column(conn) -> None:
             raise
 
 
+def ensure_warranty_columns(conn) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
+    if "warranty_until" not in existing:
+        conn.execute("ALTER TABLE items ADD COLUMN warranty_until TEXT")
+    if "min_quantity" not in existing:
+        conn.execute("ALTER TABLE items ADD COLUMN min_quantity INTEGER DEFAULT 0")
+    conn.commit()
+
+
 def get_category_id(conn, slug: str, fallback_slug: str | None = "other") -> Any:
     row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (slug,)).fetchone()
     if row:

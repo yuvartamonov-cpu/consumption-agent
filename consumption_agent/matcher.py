@@ -22,11 +22,9 @@ import argparse
 import json
 import re
 import sys
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "consumption.db"
+from consumption.db import DB_PATH, connect as db_connect
 
 try:
     from rapidfuzz import fuzz as _rapidfuzz_fuzz
@@ -249,8 +247,7 @@ def get_all_items(db):
 def run_matcher(db_path, dry_run=False, limit=None,
                 threshold_high=85, threshold_medium=90,
                 include_screen_ocr=False):
-    db = sqlite3.connect(str(db_path))
-    db.row_factory = sqlite3.Row
+    db = db_connect(db_path)
     items = get_all_items(db)
     records, garbage_skipped = get_unmatched(db, include_screen_ocr)
 
