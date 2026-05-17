@@ -43,6 +43,8 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Source routing (text-only mirror of SKILL.md §3 brand authority cascade)
 # ---------------------------------------------------------------------------
+# Источники по категориям. Иностранные маркетплейсы помечены тегом _foreign_
+# и фильтруются по геолокации клиента в route_sources().
 CATEGORY_SOURCES: dict[str, list[str]] = {
     'одежда':    ['lamoda', 'brandshop', 'wildberries', 'yandex_market', 'aliexpress', 'alibaba'],
     'обувь':     ['lamoda', 'brandshop', 'sneakerhead', 'wildberries', 'yandex_market', 'aliexpress'],
@@ -53,6 +55,19 @@ CATEGORY_SOURCES: dict[str, list[str]] = {
     'аксессуары':['lamoda', 'brandshop', 'wildberries', 'yandex_market', 'aliexpress', 'alibaba'],
 }
 DEFAULT_SOURCES = ['wildberries', 'yandex_market', 'lamoda', 'aliexpress', 'alibaba']
+
+
+def _filter_sources_by_geo(sources: list[str]) -> list[str]:
+    """Убирает иностранные источники, недоступные в текущем регионе."""
+    try:
+        import ml_providers
+        allowed_foreign = set(ml_providers.foreign_sources_for_geo())
+        return [
+            s for s in sources
+            if not ml_providers.is_foreign_source(s) or s in allowed_foreign
+        ]
+    except ImportError:
+        return sources
 
 # How many query variants we ask each source to try (most-specific first)
 QUERIES_PER_SOURCE = 3
@@ -76,6 +91,8 @@ def route_sources(
     """
     cat = (attrs.get('category') or '').lower()
     base = list(CATEGORY_SOURCES.get(cat, DEFAULT_SOURCES))
+    # Фильтруем иностранные маркетплейсы по геолокации клиента
+    base = _filter_sources_by_geo(base)
     if conn is not None:
         try:
             base = ml_bandit.sample_sources(conn, cat, base, k=len(base))
@@ -462,8 +479,14 @@ def _fmt_anomaly(a: Optional[dict]) -> str:
     return f"{icon} {_esc(a['reason'])}"
 
 
-def format_search_result_telegram(result: dict, *, max_groups: int = 5) -> str:
-    """Render a Telegram HTML reply for the /ml_search command."""
+# Лимит Telegram для одного сообщения
+TG_MESSAGE_LIMIT = 4096
+# Сколько групп на одну страницу (если результат не помещается)
+GROUPS_PER_PAGE = 5
+
+
+def _format_header(result: dict) -> str:
+    """Формирует заголовок результата поиска (общий для всех страниц)."""
     attrs = result.get('attributes', {})
     groups = result.get('canonical_groups', [])
 
@@ -485,7 +508,6 @@ def format_search_result_telegram(result: dict, *, max_groups: int = 5) -> str:
     if bits:
         lines.append('· '.join(bits))
 
-    # Collision warning first — user should see it before considering buying
     if result.get('collision_warning'):
         lines.append('')
         lines.append(_esc(result['collision_warning']))
@@ -505,30 +527,89 @@ def format_search_result_telegram(result: dict, *, max_groups: int = 5) -> str:
             f"<b>Найдено</b>: {summary['groups']} товаров "
             f"в {summary['total_listings']} листингах"
         )
-
-    lines.append('')
-    for i, g in enumerate(groups[:max_groups], 1):
-        store = _esc(g.get('store', '?'))
-        url = g.get('url')
-        title_txt = _esc((g.get('title') or g.get('name') or '—')[:80])
-        price_str = _fmt_price_range(g)
-        n_sources = g.get('sources_count', 1)
-        n_sources_label = f" · {n_sources} площадки" if n_sources > 1 else ''
-
-        line = (f"<b>{i}.</b> {title_txt}\n"
-                f"   🛒 <b>{store}</b>{n_sources_label} · {price_str}")
-        anomaly_line = _fmt_anomaly(g.get('anomaly'))
-        if anomaly_line:
-            line += f"\n   {anomaly_line}"
-        if url:
-            line += f"\n   <a href=\"{_esc(url)}\">🔗 открыть</a>"
-        lines.append(line)
-
-    if len(groups) > max_groups:
-        lines.append('')
-        lines.append(f"… ещё {len(groups) - max_groups} вариантов")
-
     return '\n'.join(lines)
+
+
+def _format_group(i: int, g: dict) -> str:
+    """Форматирует один элемент результата (один товар/ссылка)."""
+    store = _esc(g.get('store', '?'))
+    url = g.get('url')
+    title_txt = _esc((g.get('title') or g.get('name') or '—')[:80])
+    price_str = _fmt_price_range(g)
+    n_sources = g.get('sources_count', 1)
+    n_sources_label = f" · {n_sources} площадки" if n_sources > 1 else ''
+
+    line = (f"<b>{i}.</b> {title_txt}\n"
+            f"   🛒 <b>{store}</b>{n_sources_label} · {price_str}")
+    anomaly_line = _fmt_anomaly(g.get('anomaly'))
+    if anomaly_line:
+        line += f"\n   {anomaly_line}"
+    if url:
+        line += f"\n   <a href=\"{_esc(url)}\">🔗 открыть</a>"
+    return line
+
+
+def format_search_result_telegram(result: dict, *, max_groups: int = 5) -> str:
+    """Render a Telegram HTML reply for the /ml_search command.
+
+    Для обратной совместимости — возвращает одну строку (первую страницу).
+    """
+    pages = format_search_pages(result, groups_per_page=max_groups)
+    return pages[0] if pages else ''
+
+
+def format_search_pages(
+    result: dict,
+    *,
+    groups_per_page: int = GROUPS_PER_PAGE,
+    char_limit: int = TG_MESSAGE_LIMIT,
+) -> list[str]:
+    """Разбивает результат поиска на страницы, каждая ≤ char_limit.
+
+    Возвращает list[str] — одна строка на страницу.
+    Первая страница содержит заголовок + первые N групп.
+    Последующие — только группы с нумерацией.
+    """
+    groups = result.get('canonical_groups', [])
+    header = _format_header(result)
+
+    if not groups:
+        return [header]
+
+    pages: list[str] = []
+    page_lines: list[str] = [header, '']
+    page_len = len(header) + 1
+    groups_on_page = 0
+    total_remaining = len(groups)
+
+    for i, g in enumerate(groups, 1):
+        group_text = _format_group(i, g)
+        total_remaining -= 1
+
+        # Проверяем, влезет ли этот элемент на текущую страницу
+        new_len = page_len + len(group_text) + 2  # +2 для \n
+        page_full = (groups_on_page >= groups_per_page or
+                     new_len > char_limit - 100)  # запас 100 для footer
+
+        if page_full and groups_on_page > 0:
+            # Завершаем текущую страницу
+            if total_remaining + 1 > 0:
+                page_lines.append('')
+                page_lines.append(f'… ещё {total_remaining + 1} вариантов')
+            pages.append('\n'.join(page_lines))
+            # Начинаем новую страницу
+            page_lines = [f'🔍 <b>Продолжение</b> (с {i}):']
+            page_len = len(page_lines[0]) + 1
+            groups_on_page = 0
+
+        page_lines.append(group_text)
+        page_len += len(group_text) + 1
+        groups_on_page += 1
+
+    if page_lines:
+        pages.append('\n'.join(page_lines))
+
+    return pages
 
 
 # ---------------------------------------------------------------------------

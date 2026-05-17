@@ -90,89 +90,208 @@ WEB_SEARCH_ENGINES = [
 
 FOREIGN_RETAILERS = frozenset({'aliexpress', 'alibaba'})
 
+# ---------------------------------------------------------------------------
+# Геолокация: какие иностранные ритейлеры доступны в каком регионе
+# ---------------------------------------------------------------------------
+GEO_FOREIGN_SOURCES: dict[str, list[str]] = {
+    'RU': ['aliexpress', 'alibaba'],          # Китайские маркетплейсы доступны в РФ
+    'KZ': ['aliexpress', 'alibaba'],
+    'BY': ['aliexpress', 'alibaba'],
+    'EU': ['amazon_de', 'aliexpress'],        # Заготовка на будущее
+    'US': ['amazon', 'aliexpress', 'alibaba'],
+}
+# Текущий регион клиента (по умолчанию RU)
+_CLIENT_GEO: str = os.environ.get('CLIENT_GEO', 'RU').upper()
+
+
+def get_client_geo() -> str:
+    """Текущий регион клиента."""
+    return _CLIENT_GEO
+
+
+def set_client_geo(geo: str) -> None:
+    """Изменить регион клиента (для тестов и runtime-config)."""
+    global _CLIENT_GEO
+    _CLIENT_GEO = geo.upper()
+
+
+def foreign_sources_for_geo(geo: str | None = None) -> list[str]:
+    """Иностранные ритейлеры, доступные в регионе клиента."""
+    region = (geo or _CLIENT_GEO).upper()
+    return GEO_FOREIGN_SOURCES.get(region, [])
+
+
+def is_foreign_source(source: str) -> bool:
+    """Проверяет, является ли источник иностранным для текущего региона."""
+    return source.lower() in FOREIGN_RETAILERS
+
+
+# ---------------------------------------------------------------------------
+# Словарь перевода RU → EN для иностранных маркетплейсов
+# ---------------------------------------------------------------------------
 QUERY_TRANSLATIONS = {
-    'джемпер': 'sweater',
-    'свитер': 'sweater',
-    'пуловер': 'pullover',
-    'кардиган': 'cardigan',
-    'худи': 'hoodie',
-    'толстовка': 'sweatshirt',
-    'футболка': 't-shirt',
-    'майка': 'tank top',
-    'рубашка': 'shirt',
-    'поло': 'polo',
-    'пальто': 'coat',
-    'куртка': 'jacket',
-    'ветровка': 'windbreaker',
-    'парка': 'parka',
-    'пиджак': 'blazer',
-    'костюм': 'suit',
-    'брюки': 'pants',
-    'джинсы': 'jeans',
-    'юбка': 'skirt',
-    'платье': 'dress',
-    'кроссовки': 'sneakers',
-    'кеды': 'trainers',
-    'ботинки': 'boots',
-    'туфли': 'shoes',
-    'сумка': 'bag',
-    'рюкзак': 'backpack',
-    'часы': 'watch',
-    'очки': 'glasses',
-    'наушники': 'headphones',
-    'ноутбук': 'laptop',
-    'смартфон': 'smartphone',
-    'телефон': 'phone',
-    'планшет': 'tablet',
-    'диван': 'sofa',
-    'кресло': 'armchair',
-    'стол': 'table',
-    'стул': 'chair',
-    'шкаф': 'wardrobe',
-    'серый': 'gray',
-    'серая': 'gray',
-    'серое': 'gray',
-    'серые': 'gray',
-    'черный': 'black',
-    'черная': 'black',
-    'черное': 'black',
-    'белый': 'white',
-    'белая': 'white',
-    'белое': 'white',
-    'синий': 'blue',
-    'синяя': 'blue',
-    'синее': 'blue',
-    'красный': 'red',
-    'красная': 'red',
-    'красное': 'red',
-    'зеленый': 'green',
-    'зеленая': 'green',
-    'зеленое': 'green',
-    'желтый': 'yellow',
-    'желтая': 'yellow',
-    'желтое': 'yellow',
-    'коричневый': 'brown',
-    'коричневая': 'brown',
-    'бежевый': 'beige',
-    'бежевая': 'beige',
-    'кожаный': 'leather',
-    'кожаная': 'leather',
-    'шерстяной': 'wool',
-    'шерстяная': 'wool',
-    'хлопковый': 'cotton',
-    'хлопковая': 'cotton',
-    'льняной': 'linen',
-    'льняная': 'linen',
-    'casual': 'casual',
-    'sport': 'sport',
-    'sporty': 'sport',
+    # ── Одежда: верх ──
+    'джемпер': 'sweater', 'свитер': 'sweater', 'пуловер': 'pullover',
+    'кардиган': 'cardigan', 'худи': 'hoodie', 'толстовка': 'sweatshirt',
+    'футболка': 't-shirt', 'майка': 'tank top', 'рубашка': 'shirt',
+    'поло': 'polo', 'блузка': 'blouse', 'топ': 'top',
+    'водолазка': 'turtleneck', 'жилет': 'vest', 'жилетка': 'vest',
+    'свитшот': 'sweatshirt', 'лонгслив': 'long sleeve',
+    # ── Одежда: верхняя ──
+    'пальто': 'coat', 'куртка': 'jacket', 'ветровка': 'windbreaker',
+    'парка': 'parka', 'пиджак': 'blazer', 'костюм': 'suit',
+    'пуховик': 'down jacket', 'шуба': 'fur coat', 'дублёнка': 'sheepskin coat',
+    'плащ': 'trench coat', 'бомбер': 'bomber jacket', 'тренч': 'trench',
+    'анорак': 'anorak',
+    # ── Одежда: низ ──
+    'брюки': 'pants', 'джинсы': 'jeans', 'юбка': 'skirt',
+    'платье': 'dress', 'шорты': 'shorts', 'леггинсы': 'leggings',
+    'чиносы': 'chinos', 'джоггеры': 'joggers', 'карго': 'cargo pants',
+    # ── Обувь ──
+    'кроссовки': 'sneakers', 'кеды': 'trainers', 'ботинки': 'boots',
+    'туфли': 'shoes', 'сандалии': 'sandals', 'босоножки': 'sandals',
+    'сланцы': 'flip flops', 'мокасины': 'loafers', 'лоферы': 'loafers',
+    'слипоны': 'slip-on', 'угги': 'ugg boots', 'сапоги': 'boots',
+    'полуботинки': 'ankle boots', 'эспадрильи': 'espadrilles',
+    # ── Аксессуары ──
+    'сумка': 'bag', 'рюкзак': 'backpack', 'часы': 'watch', 'очки': 'glasses',
+    'кошелёк': 'wallet', 'кошелек': 'wallet', 'ремень': 'belt',
+    'шарф': 'scarf', 'шапка': 'beanie', 'перчатки': 'gloves',
+    'зонт': 'umbrella', 'платок': 'scarf', 'галстук': 'tie',
+    'браслет': 'bracelet', 'кольцо': 'ring', 'серьги': 'earrings',
+    'цепочка': 'chain', 'подвеска': 'pendant', 'бижутерия': 'jewelry',
+    # ── Техника ──
+    'наушники': 'headphones', 'ноутбук': 'laptop', 'смартфон': 'smartphone',
+    'телефон': 'phone', 'планшет': 'tablet', 'колонка': 'speaker',
+    'клавиатура': 'keyboard', 'мышь': 'mouse', 'мышка': 'mouse',
+    'монитор': 'monitor', 'зарядка': 'charger', 'кабель': 'cable',
+    'чехол': 'case', 'адаптер': 'adapter', 'флешка': 'flash drive',
+    'проектор': 'projector', 'принтер': 'printer', 'роутер': 'router',
+    'камера': 'camera', 'объектив': 'lens', 'штатив': 'tripod',
+    'микрофон': 'microphone', 'веб-камера': 'webcam',
+    # ── Мебель / интерьер ──
+    'диван': 'sofa', 'кресло': 'armchair', 'стол': 'table', 'стул': 'chair',
+    'шкаф': 'wardrobe', 'комод': 'dresser', 'полка': 'shelf',
+    'кровать': 'bed', 'матрас': 'mattress', 'тумба': 'nightstand',
+    'зеркало': 'mirror', 'светильник': 'lamp', 'люстра': 'chandelier',
+    'ковёр': 'carpet', 'ковер': 'carpet', 'штора': 'curtain',
+    'шторы': 'curtains', 'подушка': 'pillow', 'одеяло': 'blanket',
+    'плед': 'throw blanket', 'ваза': 'vase', 'картина': 'painting',
+    # ── Косметика / уход ──
+    'крем': 'cream', 'сыворотка': 'serum', 'тоник': 'toner',
+    'маска': 'mask', 'шампунь': 'shampoo', 'бальзам': 'conditioner',
+    'помада': 'lipstick', 'тушь': 'mascara', 'пудра': 'powder',
+    'тени': 'eyeshadow', 'румяна': 'blush', 'консилер': 'concealer',
+    'тональный': 'foundation', 'духи': 'perfume', 'парфюм': 'perfume',
+    'дезодорант': 'deodorant', 'лосьон': 'lotion',
+    # ── Цвета ──
+    'серый': 'gray', 'серая': 'gray', 'серое': 'gray', 'серые': 'gray',
+    'черный': 'black', 'черная': 'black', 'черное': 'black', 'чёрный': 'black',
+    'белый': 'white', 'белая': 'white', 'белое': 'white',
+    'синий': 'blue', 'синяя': 'blue', 'синее': 'blue', 'голубой': 'light blue',
+    'красный': 'red', 'красная': 'red', 'красное': 'red',
+    'зеленый': 'green', 'зеленая': 'green', 'зеленое': 'green', 'зелёный': 'green',
+    'желтый': 'yellow', 'желтая': 'yellow', 'желтое': 'yellow', 'жёлтый': 'yellow',
+    'коричневый': 'brown', 'коричневая': 'brown',
+    'бежевый': 'beige', 'бежевая': 'beige',
+    'розовый': 'pink', 'розовая': 'pink',
+    'фиолетовый': 'purple', 'фиолетовая': 'purple', 'сиреневый': 'lilac',
+    'оранжевый': 'orange', 'оранжевая': 'orange',
+    'бордовый': 'burgundy', 'бордовая': 'burgundy', 'марсала': 'marsala',
+    'хаки': 'khaki', 'оливковый': 'olive',
+    'серебристый': 'silver', 'золотистый': 'gold', 'золотой': 'gold',
+    # ── Материалы ──
+    'кожаный': 'leather', 'кожаная': 'leather', 'кожа': 'leather',
+    'замшевый': 'suede', 'замшевая': 'suede', 'замша': 'suede',
+    'шерстяной': 'wool', 'шерстяная': 'wool', 'шерсть': 'wool',
+    'хлопковый': 'cotton', 'хлопковая': 'cotton', 'хлопок': 'cotton',
+    'льняной': 'linen', 'льняная': 'linen', 'лён': 'linen',
+    'шёлковый': 'silk', 'шелковый': 'silk', 'шёлк': 'silk', 'шелк': 'silk',
+    'синтетический': 'synthetic', 'полиэстер': 'polyester',
+    'нейлон': 'nylon', 'вискоза': 'viscose', 'кашемир': 'cashmere',
+    'деним': 'denim', 'велюр': 'velvet', 'бархат': 'velvet',
+    'трикотаж': 'knit', 'трикотажный': 'knit',
+    'металлический': 'metal', 'деревянный': 'wood', 'пластиковый': 'plastic',
+    'стеклянный': 'glass', 'керамический': 'ceramic',
+    # ── Fit / крой ──
+    'облегающий': 'slim fit', 'свободный': 'loose fit', 'прямой': 'straight',
+    'приталенный': 'fitted', 'оверсайз': 'oversize', 'удлинённый': 'longline',
+    'укороченный': 'cropped', 'широкий': 'wide', 'узкий': 'slim',
+    'зауженный': 'tapered',
+    # ── Рукав / длина ──
+    'короткий': 'short', 'длинный': 'long', 'средний': 'medium',
+    'без рукавов': 'sleeveless', 'миди': 'midi', 'макси': 'maxi', 'мини': 'mini',
+    # ── Сезон ──
+    'зимний': 'winter', 'зимняя': 'winter', 'летний': 'summer', 'летняя': 'summer',
+    'осенний': 'autumn', 'осенняя': 'autumn', 'весенний': 'spring', 'весенняя': 'spring',
+    'демисезонный': 'all-season', 'демисезонная': 'all-season',
+    'утеплённый': 'insulated', 'утепленный': 'insulated',
+    # ── Пол / возраст ──
+    'мужской': 'men', 'мужская': 'men', 'мужское': 'men', 'мужские': 'men',
+    'женский': 'women', 'женская': 'women', 'женское': 'women', 'женские': 'women',
+    'детский': 'kids', 'детская': 'kids', 'детское': 'kids', 'детские': 'kids',
+    'унисекс': 'unisex',
+    # ── Стиль ──
+    'casual': 'casual', 'sport': 'sport', 'sporty': 'sport',
+    'классический': 'classic', 'классическая': 'classic',
+    'спортивный': 'sporty', 'спортивная': 'sporty',
+    'деловой': 'business', 'деловая': 'business',
+    'повседневный': 'casual', 'повседневная': 'casual',
+    'винтажный': 'vintage', 'винтажная': 'vintage',
+    'минимализм': 'minimalist',
+    # ── Служебные слова (убираем из foreign запроса) ──
+    'купить': '', 'цена': '', 'недорого': '', 'дёшево': '', 'дешево': '',
+    'доставка': '', 'заказать': '', 'интернет': '', 'магазин': '',
 }
 
-_QUERY_WORD_RX = re.compile(r"[\wА-Яа-яЁё]+", re.UNICODE)
+# Regex: слово из кириллицы/латиницы/цифр. Дефис внутри слова сохраняем.
+_QUERY_WORD_RX = re.compile(r"[\wА-Яа-яЁё][\wА-Яа-яЁё-]*", re.UNICODE)
+
+# Regex: обнаружить оставшуюся кириллицу (после перевода)
+_CYRILLIC_RX = re.compile(r'[А-Яа-яЁё]')
+
+# Суффиксы русских прилагательных для стемминга (убираем окончание, ищем основу)
+_RU_ADJ_SUFFIXES = (
+    'ые', 'ие', 'ый', 'ий', 'ой', 'ая', 'яя', 'ое', 'ее',  # основные
+    'ых', 'их', 'ым', 'им', 'ую', 'юю', 'ого', 'его',       # косвенные падежи
+    'ому', 'ему', 'ой', 'ей',
+    'ённый', 'енный', 'ённая', 'ённое', 'ённые',
+    'нный', 'нная', 'нное', 'нные',
+)
+
+
+def _stem_lookup(word: str) -> str | None:
+    """Простой стемминг: ищем слово в словаре, потом пробуем отрезать суффиксы."""
+    w = word.lower()
+    # Точное совпадение
+    val = QUERY_TRANSLATIONS.get(w)
+    if val is not None:
+        return val
+    # Пробуем убрать окончание прилагательного
+    for suf in _RU_ADJ_SUFFIXES:
+        if w.endswith(suf) and len(w) > len(suf) + 2:
+            stem = w[:-len(suf)]
+            # Ищем stem + типовые формы
+            for try_suf in ('ый', 'ий', 'ой', 'ая', 'ое', 'ая', ''):
+                val = QUERY_TRANSLATIONS.get(stem + try_suf)
+                if val is not None:
+                    return val
+            # Попробуем с ё→е и наоборот
+            stem_alt = stem.replace('ё', 'е')
+            for try_suf in ('ый', 'ий', 'ой', 'ая', 'ое', ''):
+                val = QUERY_TRANSLATIONS.get(stem_alt + try_suf)
+                if val is not None:
+                    return val
+    return None
 
 
 def translate_query_for_source(query: str, source: str) -> str:
-    """Translate Russian product terms to English for foreign marketplaces."""
+    """Переводит русские товарные термины в английские для foreign маркетплейсов.
+
+    Бренды (латиница) и неизвестные слова сохраняются как есть.
+    Служебные слова (купить, цена, недорого) удаляются.
+    Поддерживает стемминг русских прилагательных (замшевые → suede).
+    """
     if not query:
         return query
     src = (source or "").strip().lower()
@@ -181,11 +300,20 @@ def translate_query_for_source(query: str, source: str) -> str:
 
     def repl(match: re.Match[str]) -> str:
         word = match.group(0)
-        return QUERY_TRANSLATIONS.get(word.lower(), word)
+        translation = _stem_lookup(word)
+        if translation is not None:
+            return translation  # может быть '' для служебных слов
+        return word
 
     translated = _QUERY_WORD_RX.sub(repl, query)
+    # Убираем множественные пробелы и мусорные символы после удаления слов
     translated = re.sub(r"\s+", " ", translated).strip()
     return translated or query
+
+
+def has_untranslated_cyrillic(text: str) -> bool:
+    """Проверяет, остались ли непереведённые кириллические слова (кроме брендов)."""
+    return bool(_CYRILLIC_RX.search(text))
 
 
 # ---------------------------------------------------------------------------
