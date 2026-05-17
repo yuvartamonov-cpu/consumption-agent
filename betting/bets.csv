@@ -7,3 +7,4 @@ date,sport,league,match,market,selection,odds,stake,bookmaker,status,return,roi_
 2026-05-04,football,UCL,Арсенал — Атлетико Мадрид,winner,Арсенал,4.60,300,fon.bet,won,1380,"+1080 ₽, Арсенал 1:0",high,manual,
 2026-05-04,football,UCL,Арсенал — Атлетико Мадрид,winner,Ничья,1.90,100,fon.bet,lost,0,-100 ₽,low,manual,
 2026-05-05,football,UCL,Арсенал — Атлетико Мадрид,exact_score,3:1,9.00,100,fon.bet,lost,0,"-100 ₽, ожидался 3:1",high,manual,
+2026-05-17,football,La Liga,Барселона — Бетис,1st_half_result,Ничья 1-й тайм,2.45,100,fon.bet,pending,0,"0:0 на 19 мин, ставка на ничью первого тайма",medium,agent-pick,

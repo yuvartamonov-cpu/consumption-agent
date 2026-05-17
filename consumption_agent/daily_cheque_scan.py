@@ -788,7 +788,7 @@ def build_report(conn, new_count):
         WHERE purchase_date >= ? 
           AND total_amount IS NOT NULL
           AND total_amount > 0
-          AND source NOT IN ('rusconcert', 'yandex_plus', 'yandex_sp')
+          AND source NOT IN ('rusconcert', 'yandex_plus', 'yandex_sp', 'pult', 'element14')
     """, (month_start,)).fetchone()[0]
     
     # По магазинам за месяц
@@ -798,10 +798,42 @@ def build_report(conn, new_count):
         WHERE purchase_date >= ?
           AND total_amount IS NOT NULL
           AND total_amount > 0
-          AND source NOT IN ('rusconcert', 'yandex_plus', 'yandex_sp')
+          AND source NOT IN ('rusconcert', 'yandex_plus', 'yandex_sp', 'pult', 'element14')
         GROUP BY store_name
         ORDER BY SUM(total_amount) DESC
     """, (month_start,)).fetchall()
+    
+    # Детализация прочих/других (без магазина или магазин = Прочее/другое)
+    _other_names = {None, '', 'прочее', 'другое', 'other', 'прочие расходы'}
+    other_store_names = [s[0] for s in by_store if s[0] is None or s[0] == '' or s[0].lower() in _other_names]
+    other_has_data = False
+    other_details_by_store = {}
+    for osn in other_store_names:
+        if osn is None or osn == '':
+            details = conn.execute("""
+                SELECT purchase_date, total_amount, source, notes
+                FROM purchases
+                WHERE purchase_date >= ?
+                  AND total_amount IS NOT NULL AND total_amount > 0
+                  AND (store_name IS NULL OR store_name = '')
+                  AND source NOT IN ('rusconcert', 'yandex_plus', 'yandex_sp', 'pult', 'element14')
+                ORDER BY purchase_date DESC, total_amount DESC
+                LIMIT 50
+            """, (month_start,)).fetchall()
+        else:
+            details = conn.execute("""
+                SELECT purchase_date, total_amount, source, notes
+                FROM purchases
+                WHERE purchase_date >= ?
+                  AND total_amount IS NOT NULL AND total_amount > 0
+                  AND LOWER(store_name) = ?
+                  AND source NOT IN ('rusconcert', 'yandex_plus', 'yandex_sp', 'pult', 'element14')
+                ORDER BY purchase_date DESC, total_amount DESC
+                LIMIT 50
+            """, (month_start, osn.lower())).fetchall()
+        if details:
+            other_details_by_store[osn or '📦 Прочее'] = details
+            other_has_data = True
     
     # Формируем HTML
     html = f"""<html><body style="font-family:sans-serif;padding:20px;">
@@ -827,8 +859,52 @@ def build_report(conn, new_count):
         html += '<h3>По магазинам</h3><table border="1" cellpadding="6" style="border-collapse:collapse;">'
         html += '<tr><th>Магазин</th><th>Кол-во</th><th>Сумма</th></tr>'
         for s in by_store:
-            html += f'<tr><td>{s[0] or "другое"}</td><td align="center">{s[1]}</td><td align="right">{s[2]:.0f} ₽</td></tr>'
+            label = s[0] or '📦 Прочее'
+            html += f'<tr><td>{label}</td><td align="center">{s[1]}</td><td align="right">{s[2]:.0f} ₽</td></tr>'
         html += '</table>'
+    
+    # Таблицы расшифровки для каждой строки "Прочее" / "другое"
+    _src_labels = {
+        'sber_statement': 'Выписка Сбер', 'gmail': 'Gmail', 'yandex': 'Яндекс',
+        'samokat_ofd': 'Самокат ОФД', 'telegram_photo': 'Фото чека',
+        'pult': 'Pult.ru', 'google_play': 'Google Play', 'element14': 'Element14',
+        'sms': 'SMS', 'sms_sber': 'SMS Сбер', 'manual': 'Вручную',
+    }
+    if other_has_data:
+        from collections import defaultdict
+        for label, details in other_details_by_store.items():
+            is_sber = all(od[2] == 'sber_statement' for od in details)
+            
+            # Группировка: для sber_statement по подкатегории из notes, для остальных по источнику
+            subcats = defaultdict(lambda: {'count': 0, 'total': 0})
+            for od in details:
+                if is_sber:
+                    notes_raw = (od[3] or '').strip()
+                    subcat = notes_raw.split(' | ')[-1].strip() if ' | ' in notes_raw else (notes_raw[:60] or 'без описания')
+                else:
+                    subcat = _src_labels.get(od[2], od[2])
+                subcats[subcat]['count'] += 1
+                subcats[subcat]['total'] += od[1]
+            
+            html += f'<h4>📄 Расшифровка «{label}»</h4>'
+            html += '<table border="1" cellpadding="6" style="border-collapse:collapse;">'
+            if is_sber:
+                html += '<tr><th>Категория Сбер</th><th>Кол-во</th><th>Сумма</th></tr>'
+            else:
+                html += '<tr><th>Источник</th><th>Кол-во</th><th>Сумма</th></tr>'
+            for sc_name, sc_data in sorted(subcats.items(), key=lambda x: -x[1]['total']):
+                html += f'<tr><td>{sc_name}</td><td align="center">{sc_data["count"]}</td><td align="right">{sc_data["total"]:.0f} ₽</td></tr>'
+            html += '</table>'
+            
+            # Детальная таблица
+            html += '<details><summary>Показать все записи (' + str(len(details)) + ')</summary>'
+            html += '<table border="1" cellpadding="6" style="border-collapse:collapse;">'
+            html += '<tr><th>Дата</th><th>Сумма</th><th>Источник</th><th>Описание</th></tr>'
+            for od in details:
+                notes = (od[3] or '')[:200]
+                src = _src_labels.get(od[2], od[2])
+                html += f'<tr><td>{od[0]}</td><td align="right">{od[1]:.0f} ₽</td><td>{src}</td><td>{notes}</td></tr>'
+            html += '</table></details>'
     
     html += '<hr><p style="color:#888;font-size:small;">Сформировано Consumption Agent</p></body></html>'
     return html
