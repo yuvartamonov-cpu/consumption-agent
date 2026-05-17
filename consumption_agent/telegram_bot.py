@@ -3209,18 +3209,29 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pages = ml_search_v2.format_search_pages(result)
         await ctx.bot.delete_message(chat_id=chat_id, message_id=temp.message_id)
 
-        # Отправляем первую страницу
-        reply_markup = None
+        # Сохраняем результат в user_data для watchlist (нужен URL и цена)
+        ctx.user_data[f'ml_result_{ml_id}'] = result
+
+        # Собираем кнопки: пагинация + «следить за ценой»
+        buttons = []
         if len(pages) > 1:
-            # Сохраняем остальные страницы в user_data для пагинации
             page_key = f'ml_pages_{ml_id}'
             ctx.user_data[page_key] = pages[1:]
-            reply_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    f'📄 Продолжить вывод ({len(pages) - 1} ещё)',
-                    callback_data=f'ml_page:{ml_id}:1'
-                )
-            ]])
+            buttons.append([InlineKeyboardButton(
+                f'📄 Продолжить вывод ({len(pages) - 1} ещё)',
+                callback_data=f'ml_page:{ml_id}:1'
+            )])
+
+        # Кнопка «следить» если есть товары с ценой
+        groups = result.get('canonical_groups', [])
+        has_priced = any(g.get('price_min') for g in groups[:3])
+        if has_priced:
+            buttons.append([InlineKeyboardButton(
+                '🔔 Следить за ценой (топ-3)',
+                callback_data=f'ml_watch:{ml_id}'
+            )])
+
+        reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
 
         await ctx.bot.send_message(
             chat_id=chat_id,
@@ -3236,6 +3247,212 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             message_id=temp.message_id,
             text=f'⚠️ Ошибка: {str(e)[:200]}'
         )
+
+
+async def ml_watch_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки «🔔 Следить за ценой» — добавляет топ-3 товара в watchlist."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+
+    data = query.data or ''
+    if not data.startswith('ml_watch:'):
+        return
+    try:
+        ml_id = int(data.split(':', 1)[1])
+    except ValueError:
+        return
+
+    result = (ctx.user_data or {}).get(f'ml_result_{ml_id}')
+    if not result:
+        await query.answer('⚠️ Результат поиска устарел, запустите /ml_search заново',
+                           show_alert=True)
+        return
+
+    chat_id = update.effective_chat.id
+    import ml_watchlist as mw
+    conn = get_db()
+    try:
+        mw.ensure_watchlist_schema(conn)
+        groups = result.get('canonical_groups', [])
+        added = []
+        for g in groups[:3]:
+            url = g.get('url')
+            price = g.get('price_min')
+            if not url or not price:
+                continue
+            watch_id = mw.add_to_watchlist(
+                conn,
+                item_id=ml_id,
+                product_url=url,
+                product_title=(g.get('title') or g.get('name') or '')[:200],
+                store=g.get('store') or '',
+                source=g.get('source') or '',
+                initial_price=int(price),
+                chat_id=chat_id,
+            )
+            added.append((watch_id, g.get('store'), int(price)))
+    finally:
+        conn.close()
+
+    if not added:
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text='⚠️ В результатах нет товаров с ценой — нечего отслеживать.\n'
+                 'Попробуйте на других категориях (одежда, техника).'
+        )
+        return
+
+    lines = [f'🔔 <b>Добавлено в watchlist:</b> {len(added)} товаров']
+    for wid, store, price in added:
+        lines.append(f'  · {html.escape(store or "?")}: {price:,} ₽ (#{wid})'.replace(',', ' '))
+    lines.append('')
+    lines.append('Я проверю цены завтра в 10:00 и сообщу, если упадут на 10%+.')
+    lines.append('Команды: /ml_watch — список, /ml_unwatch &lt;id&gt; — убрать.')
+
+    await ctx.bot.send_message(
+        chat_id=chat_id,
+        text='\n'.join(lines),
+        parse_mode='HTML',
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_ml_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/ml_watch — показать активный watchlist."""
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+    import ml_watchlist as mw
+    conn = get_db()
+    try:
+        mw.ensure_watchlist_schema(conn)
+        rows = mw.list_watchlist(conn)
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text(
+            '🔔 Watchlist пуст.\n'
+            'Запустите /ml_search <id>, нажмите «Следить за ценой» в результатах.'
+        )
+        return
+
+    lines = [f'🔔 <b>Watchlist:</b> {len(rows)} активных']
+    for r in rows:
+        title = html.escape((r.get('product_title') or '?')[:60])
+        store = html.escape(r.get('store') or '?')
+        ip = r.get('initial_price') or 0
+        lp = r.get('last_price') or 0
+        change = ''
+        if ip and lp and lp != ip:
+            pct = round((ip - lp) / ip * 100.0, 1)
+            change = f'  ({pct:+.1f}%)'
+        lines.append(f"<b>#{r['id']}</b> · {store} · {ip:,} ₽{change}".replace(',', ' '))
+        lines.append(f'   {title}')
+        if r.get('last_checked_at'):
+            lines.append(f'   проверено: {r["last_checked_at"][:16]}')
+    lines.append('')
+    lines.append('Убрать: <code>/ml_unwatch &lt;id&gt;</code>')
+
+    await update.message.reply_text(
+        '\n'.join(lines),
+        parse_mode='HTML',
+        disable_web_page_preview=True,
+    )
+
+
+async def cmd_ml_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/ml_unwatch <id> — убрать товар из watchlist."""
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+    args = ctx.args if hasattr(ctx, 'args') else []
+    if not args:
+        await update.message.reply_text('Usage: /ml_unwatch <watch_id>\n'
+                                        'Посмотреть id: /ml_watch')
+        return
+    try:
+        watch_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text('⚠️ id должен быть числом')
+        return
+
+    import ml_watchlist as mw
+    conn = get_db()
+    try:
+        ok = mw.remove_from_watchlist(conn, watch_id)
+    finally:
+        conn.close()
+
+    if ok:
+        await update.message.reply_text(f'✅ Watch #{watch_id} убран из watchlist')
+    else:
+        await update.message.reply_text(f'⚠️ Watch #{watch_id} не найден или уже убран')
+
+
+async def run_price_drop_check(ctx: ContextTypes.DEFAULT_TYPE):
+    """Cron-задача: проверяет цены и шлёт уведомления о падениях."""
+    import ml_watchlist as mw
+    log.info('[watchlist] запуск проверки цен')
+    conn = get_db()
+    try:
+        drops = await mw.check_price_drops(conn)
+        for drop in drops:
+            chat_id = drop.get('chat_id')
+            if not chat_id:
+                # Fallback: первый allowed chat
+                chat_id = next(iter(ALLOWED_CHAT_IDS), None)
+                if not chat_id:
+                    continue
+            text = mw.format_drop_notification(drop)
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton('❌ Больше не следить',
+                                         callback_data=f'ml_unwatch:{drop["watch_id"]}')
+                ]])
+                await ctx.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode='HTML',
+                    disable_web_page_preview=True,
+                    reply_markup=kb,
+                )
+                mw.mark_notified(conn, drop['watch_id'])
+            except Exception as e:
+                log.warning(f'[watchlist] не удалось отправить уведомление: {e}')
+        log.info(f'[watchlist] завершено: {len(drops)} уведомлений')
+    finally:
+        conn.close()
+
+
+async def ml_unwatch_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Callback кнопки «Больше не следить» в уведомлении о падении."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    data = query.data or ''
+    if not data.startswith('ml_unwatch:'):
+        return
+    try:
+        watch_id = int(data.split(':', 1)[1])
+    except ValueError:
+        return
+    import ml_watchlist as mw
+    conn = get_db()
+    try:
+        mw.remove_from_watchlist(conn, watch_id)
+    finally:
+        conn.close()
+    await query.answer(f'❌ Watch #{watch_id} убран', show_alert=False)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
 
 async def ml_page_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3710,6 +3927,8 @@ def main():
     add_authorized_handler(app, CommandHandler('ml_last', cmd_ml_last))
     add_authorized_handler(app, CommandHandler('ml_search', cmd_ml_search))
     add_authorized_handler(app, CommandHandler('ml_stats', cmd_ml_stats))
+    add_authorized_handler(app, CommandHandler('ml_watch', cmd_ml_watch))
+    add_authorized_handler(app, CommandHandler('ml_unwatch', cmd_ml_unwatch))
     add_authorized_handler(app, CommandHandler('topic_set', cmd_topic_set))
     add_authorized_handler(app, CommandHandler('topic_list', cmd_topic_list))
     add_authorized_handler(app, CommandHandler('help', cmd_help))
@@ -3723,6 +3942,8 @@ def main():
     add_authorized_handler(app, CallbackQueryHandler(ml_delete_callback, pattern=r'^ml_delete:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_search_callback, pattern=r'^ml_search:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_page_callback, pattern=r'^ml_page:\d+:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(ml_watch_callback, pattern=r'^ml_watch:\d+$'))
+    add_authorized_handler(app, CallbackQueryHandler(ml_unwatch_callback, pattern=r'^ml_unwatch:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_remind_callback, pattern=r'^ml_remind:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(ml_remind_set_callback, pattern=r'^ml_remind_set:\d+$'))
     add_authorized_handler(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
@@ -3740,6 +3961,12 @@ def main():
             run_daily_alert_job,
             time=dt_time(hour=9, minute=0, second=0),
             name='daily_alert_checks'
+        )
+        # Memory Lane price-drop проверка ежедневно в 10:00
+        app.job_queue.run_daily(
+            run_price_drop_check,
+            time=dt_time(hour=10, minute=0, second=0),
+            name='ml_price_drop_check'
         )
     else:
         log.warning('JobQueue is unavailable; skipping in-process daily schedule')
