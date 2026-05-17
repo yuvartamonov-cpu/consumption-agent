@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from bs4 import BeautifulSoup
-from imap_folders import build_message_uid, discover_target_mailboxes
+from imap_folders import ScanMetrics, build_message_uid, discover_target_mailboxes
 from purchase_dedup import (
     build_delivery_note,
     build_time_note,
@@ -281,15 +281,15 @@ def scan_mailbox(config, conn):
     if not password:
         log.warning(f"   ⚠️ Нет пароля для {config['name']}")
         return 0
-    
+
     added = 0
+    metrics = ScanMetrics(scanner='daily_cheque_scan', account=config['name']).start()
     log.info(f"📧 {config['name']} ({config['user']})...")
-    
+
     try:
         imap = imaplib.IMAP4_SSL(config['host'], timeout=30)
         imap.login(config['user'], password)
-        mailboxes = discover_target_mailboxes(imap)
-        log.info(f"   Папки: {', '.join(mailboxes)}")
+        mailboxes = discover_target_mailboxes(imap, account_label=config['name'])
         seen_ids = set()
 
         today_str = datetime.now().strftime('%d-%b-%Y')
@@ -297,13 +297,22 @@ def scan_mailbox(config, conn):
         scanned_any = False
 
         for mailbox_name in mailboxes:
+            folder_seen = 0
+            folder_deduped = 0
+            folder_parsed = 0
+            folder_error = None
+
             try:
                 status, _ = imap.select(f'"{mailbox_name}"', readonly=True)
                 if status != 'OK':
+                    folder_error = f'SELECT failed: {status}'
                     log.warning(f"   ⚠️ Не удалось открыть папку {mailbox_name}")
+                    metrics.record_folder(mailbox_name, error=folder_error)
                     continue
             except Exception as e:
+                folder_error = str(e)
                 log.warning(f"   ⚠️ Не удалось открыть папку {mailbox_name}: {e}")
+                metrics.record_folder(mailbox_name, error=folder_error)
                 continue
 
             result, data = imap.search(None, f'(ON {today_str})')
@@ -314,8 +323,10 @@ def scan_mailbox(config, conn):
                 ids = data[0].split() if data and data[0] else []
 
             if not ids:
+                metrics.record_folder(mailbox_name, seen=0)
                 continue
 
+            folder_seen = len(ids)
             scanned_any = True
             log.info(f"   {mailbox_name}: {len(ids)} писем")
 
@@ -325,6 +336,7 @@ def scan_mailbox(config, conn):
                     msg = email.message_from_bytes(msg_data[0][1])
                     dedup_key = build_message_uid(msg.get('Message-ID', ''), config['name'], mailbox_name, num)
                     if dedup_key in seen_ids:
+                        folder_deduped += 1
                         continue
                     seen_ids.add(dedup_key)
                 
@@ -456,6 +468,7 @@ def scan_mailbox(config, conn):
                             notes_suffix = '; '.join(note_parts)
                             add_purchase(conn, normalized_date, total, store_name, items_data, config['name'], notes_suffix, email_msg_id=email_id)
                             added += 1
+                            folder_parsed += 1
                         else:
                             event_mark = f' {event_time}' if event_time else ''
                             log.info(f"   ⏭ Уже есть: {normalized_date}{event_mark} {total:.0f} ₽ {store_name}")
@@ -466,18 +479,25 @@ def scan_mailbox(config, conn):
                     log.error(f"   ❌ Ошибка письма {num} в папке {mailbox_name}: {e}")
                     continue
 
+            metrics.record_folder(mailbox_name, seen=folder_seen,
+                                  deduped=folder_deduped, parsed=folder_parsed)
+
         if not scanned_any:
             log.info(f"   Нет писем за последние 2 дня")
+            metrics.stop().log_summary(log)
             imap.logout()
             return 0
-        
+
         imap.logout()
         conn.commit()
     except imaplib.IMAP4.error as e:
         log.error(f"   ❌ IMAP: {e}")
+        metrics.errors += 1
     except Exception as e:
         log.error(f"   ❌ {e}")
-    
+        metrics.errors += 1
+
+    metrics.stop().log_summary(log)
     return added
 
 

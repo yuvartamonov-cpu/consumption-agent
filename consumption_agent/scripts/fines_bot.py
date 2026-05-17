@@ -30,7 +30,10 @@ PROJECT_DIR = os.path.join(SCRIPT_DIR, '..') if os.path.basename(SCRIPT_DIR) == 
 sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
-from imap_folders import build_message_uid, discover_target_mailboxes
+import logging
+from imap_folders import ScanMetrics, build_message_uid, discover_target_mailboxes
+
+_log = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────
 # Config
@@ -226,26 +229,38 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
             print(f'  -- {label}: нет пароля')
             continue
 
+        metrics = ScanMetrics(scanner='fines_bot', account=label).start()
+
         imap_host = watcher.get('imap', 'imap.mail.ru')
         try:
             imap = imaplib.IMAP4_SSL(imap_host, timeout=15)
             imap.login(watcher['user'], password)
         except Exception as e:
             print(f'  XX {label}: IMAP failed: {e}')
+            metrics.errors += 1
+            metrics.stop().log_summary(_log)
             continue
 
-        mailboxes = discover_target_mailboxes(imap)
-        print(f'  {label}: папки {", ".join(mailboxes)}')
+        mailboxes = discover_target_mailboxes(imap, account_label=label)
         seen_ids = set()
 
         for mailbox_name in mailboxes:
+            folder_seen = 0
+            folder_deduped = 0
+            folder_parsed = 0
+            folder_error = None
+
             try:
                 status, _ = imap.select(f'"{mailbox_name}"', readonly=True)
                 if status != 'OK':
+                    folder_error = f'SELECT failed: {status}'
                     print(f'  XX {label}: cannot open {mailbox_name}')
+                    metrics.record_folder(mailbox_name, error=folder_error)
                     continue
             except Exception as e:
+                folder_error = str(e)
                 print(f'  XX {label}: cannot open {mailbox_name}: {e}')
+                metrics.record_folder(mailbox_name, error=folder_error)
                 continue
 
             for sender in FINE_SENDERS:
@@ -258,6 +273,8 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
 
                 if not all_ids:
                     continue
+
+                folder_seen += len(all_ids)
 
                 headers = _fetch_headers_batch(imap, all_ids)
                 fine_uids = []
@@ -281,6 +298,7 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
                         msg = email.message_from_bytes(fd[0][1])
                         dedup_key = build_message_uid(msg.get('Message-ID', ''), label, mailbox_name, uid)
                         if dedup_key in seen_ids:
+                            folder_deduped += 1
                             continue
                         seen_ids.add(dedup_key)
 
@@ -292,11 +310,16 @@ def fetch_fine_emails(days: int = 7) -> list[dict]:
                         details['mailbox'] = f'{label}/{mailbox_name}'
                         details['uid'] = dedup_key
                         all_fines.append(details)
+                        folder_parsed += 1
                     except Exception as e:
                         print(f'    ошибка письма {label}/{mailbox_name}: {e}')
                         continue
 
+            metrics.record_folder(mailbox_name, seen=folder_seen,
+                                  deduped=folder_deduped, parsed=folder_parsed)
+
         imap.logout()
+        metrics.stop().log_summary(_log)
 
     return all_fines
 

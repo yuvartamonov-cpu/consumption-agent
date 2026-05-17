@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 import json
 
 from consumption.db import connect as db_connect
-from imap_folders import build_message_uid, discover_target_mailboxes
+from imap_folders import ScanMetrics, build_message_uid, discover_target_mailboxes
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 
@@ -544,36 +544,43 @@ def is_credit_message(subject: str, body: str) -> bool:
 
 def check_email_account(config: dict, days_back: int = 1) -> List[CreditAlert]:
     """Проверяет почтовый ящик на кредитные сообщения."""
+    _log = logging.getLogger(__name__)
     alerts = []
-    
+    metrics = ScanMetrics(scanner='credit_monitor', account=config['name']).start()
+
     if not config.get('password'):
         print(f"⚠️ Нет пароля для {config['name']}")
         return alerts
-    
+
     try:
         import socket
-        # Устанавливаем таймаут на сокет
         socket.setdefaulttimeout(15)
-        
+
         mail = imaplib.IMAP4_SSL(config['host'], config['port'])
-        # Для Gmail нужно использовать полный email как логин
         login_user = config['user']
-        # Убираем пробелы из пароля (для app password)
         password_clean = config['password'].replace(' ', '')
         mail.login(login_user, password_clean)
-        mailboxes = discover_target_mailboxes(mail)
-        print(f"   Папки: {', '.join(mailboxes)}")
+        mailboxes = discover_target_mailboxes(mail, account_label=config['name'])
         seen_ids = set()
         on_date = datetime.now().strftime('%d-%b-%Y')
 
         for mailbox_name in mailboxes:
+            folder_seen = 0
+            folder_deduped = 0
+            folder_parsed = 0
+            folder_error = None
+
             try:
                 status, _ = mail.select(f'"{mailbox_name}"', readonly=True)
                 if status != 'OK':
+                    folder_error = f'SELECT failed: {status}'
                     print(f"   ⚠️ Не удалось открыть папку {mailbox_name}")
+                    metrics.record_folder(mailbox_name, error=folder_error)
                     continue
             except Exception as e:
+                folder_error = str(e)
                 print(f"   ⚠️ Не удалось открыть папку {mailbox_name}: {e}")
+                metrics.record_folder(mailbox_name, error=folder_error)
                 continue
 
             _, message_numbers = mail.search(None, f'(ON {on_date} UNSEEN)')
@@ -586,25 +593,28 @@ def check_email_account(config: dict, days_back: int = 1) -> List[CreditAlert]:
             else:
                 print(f"   {mailbox_name}: писем за сегодня (непрочитанных): {len(nums)}")
 
+            folder_seen = len(nums)
+
             for num in nums[:100]:
                 try:
                     _, msg_data = mail.fetch(num, '(RFC822)')
                     msg = email.message_from_bytes(msg_data[0][1])
                     dedup_key = build_message_uid(msg.get('Message-ID', ''), config['name'], mailbox_name, num)
                     if dedup_key in seen_ids:
+                        folder_deduped += 1
                         continue
                     seen_ids.add(dedup_key)
-                    
+
                     subject = decode_subject(msg)
                     body = get_email_body(msg)
                     sender = msg.get('From', '')
                     message_id = msg.get('Message-ID', '')
-                    
+
                     if is_credit_message(subject, body):
                         bank_id, bank_name = detect_sender_name(subject + ' ' + body)
                         payment_date = extract_payment_date(subject + ' ' + body)
                         payment_amount = extract_payment_amount(subject + ' ' + body)
-                        
+
                         alert = CreditAlert(
                             source='email',
                             sender=sender,
@@ -616,20 +626,27 @@ def check_email_account(config: dict, days_back: int = 1) -> List[CreditAlert]:
                             raw_message_id=message_id or dedup_key,
                         )
                         alerts.append(alert)
+                        folder_parsed += 1
                 except Exception as e:
                     print(f"⚠️ Ошибка обработки письма в {mailbox_name}: {e}")
                     continue
-        
+
+            metrics.record_folder(mailbox_name, seen=folder_seen,
+                                  deduped=folder_deduped, parsed=folder_parsed)
+
         mail.close()
         mail.logout()
-        
+
     except socket.timeout:
         print(f"⏱️ Таймаут подключения к {config['name']}")
+        metrics.errors += 1
     except Exception as e:
         print(f"❌ Ошибка подключения к {config['name']}: {e}")
+        metrics.errors += 1
     finally:
         socket.setdefaulttimeout(None)
-    
+
+    metrics.stop().log_summary(_log)
     return alerts
 
 
