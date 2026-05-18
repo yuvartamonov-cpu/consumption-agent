@@ -1,6 +1,9 @@
 # План кодирования consumption_agent на неделю 18-23 мая 2026
 
 Дата подготовки: 17.05.2026
+Обновлено: 18.05.2026, 20:30 — Days 1–4 закрыты досрочно (Codex прошёл Day 3+4 за один день), Days 5–6 заменены на трёхдневный план 19–21.05.
+
+Актуальный коммит: `6278ba8 feat: LLM-translate, source matcher, smart source routing`.
 
 Актуальная база:
 
@@ -58,7 +61,7 @@
 
 ---
 
-## День 1 - Понедельник 18.05 - DB Access Baseline
+## ✅ День 1 - Понедельник 18.05 - DB Access Baseline (ЗАКРЫТ)
 
 Цель: убрать хаос с SQLite до большого Telegram split.
 
@@ -101,7 +104,7 @@ refactor: centralize core db access
 
 ---
 
-## День 2 - Вторник 19.05 - DB Access Completion
+## ✅ День 2 - Вторник 19.05 - DB Access Completion (ЗАКРЫТ ДОСРОЧНО, commit `4d14a6d`)
 
 Цель: довести DB Access Sprint до измеримого состояния.
 
@@ -143,7 +146,7 @@ refactor: complete db access migration
 
 ---
 
-## День 3 - Среда 20.05 - Telegram Split Safe Start
+## ✅ День 3 - Среда 20.05 - Telegram Split Safe Start (ЗАКРЫТ ДОСРОЧНО, commit `f72c3ef` + `4fc25b6`)
 
 Цель: начать decomposition без big bang и без поломки бота.
 
@@ -185,7 +188,7 @@ refactor: extract basic telegram handlers
 
 ---
 
-## День 4 - Четверг 21.05 - Telegram Commands And Callbacks
+## ✅ День 4 - Четверг 21.05 - Telegram Commands And Callbacks (ЗАКРЫТ ДОСРОЧНО, commit `1d72232`)
 
 Цель: вынести основную массу handlers/callbacks и оставить `telegram_bot.py` тоньше.
 
@@ -234,134 +237,154 @@ refactor: split telegram commands and callbacks
 
 ---
 
-## День 5 - Пятница 22.05 - Photo/OCR Pipeline Integration
+## 🔄 Обновлённый план 19–21 мая (Days 5/6 заменены)
 
-Цель: связать уже созданный receipt pipeline с Telegram и убрать дубли логики из `photo_handler`.
+После того как Codex закрыл Days 3–4 одним коммитом (`f72c3ef` + `1d72232`), а также шипнут бонусный `6278ba8` с LLM-translate / source matcher, реальный список задач на оставшиеся три дня переписан так:
+
+---
+
+## День 1 нового плана — Вторник 19.05 — Photo Pipeline + Extraction
+
+Цель: вынести `photo_handler` (≈543 строки, последний крупный кусок `telegram_bot.py`) и завести независимый pipeline.
 
 Задачи:
 
 1. Создать `services/photo_pipeline.py`:
-   - classify;
-   - QR;
-   - OCR;
-   - Vision receipt;
-   - fallback parser;
-   - persistence.
-2. Подключить `photo_handler` к pipeline через `asyncio.to_thread`.
-3. Вынести стратегии:
-   - `receipt_ocr`;
-   - `vision_receipt`;
-   - `vision_item`;
-   - tag parsing.
-4. Добавить lightweight `ocr_attempts` или логируемый helper:
-   - engine;
-   - input path;
-   - parse status;
-   - elapsed ms;
-   - failure reason.
-5. Собрать sanitized fixtures:
-   - Ozon;
-   - Samokat OFD;
-   - Yandex;
-   - SMS-derived;
-   - blurry photo.
-6. Delivery/service fee держать first-class output: item vs delivery.
+   - `classify(image_path, caption) → 'memory_lane' | 'receipt' | 'tag' | 'item'`
+   - `extract_receipt(image_path)` → items / total / store / delivery_fee через OCR + QR + Vision fallback
+   - `extract_memory_lane(image_path, caption)` → vision_info (name/brand/description/style_tags/topic)
+   - `extract_item(image_path)` → vision_item.recognize_item
+   - `persist(result, profile_id, conn)` → распределение по таблицам (items, purchases, memory_lane_items, media_assets)
+2. Перенести из `telegram_bot.py` в `bot/handlers/photos.py` (сейчас 10-строчная заглушка):
+   - `photo_handler` (line 592 → ~1135)
+   - `add_photo` (line 551–555)
+   - `text_handler` со state-машиной `vision_awaiting_notes` (line 558–590)
+3. Pipeline зовётся через `asyncio.to_thread`, чтобы не блокировать event loop.
+4. Добавить таблицу `ocr_attempts` (id, image_sha, engine, status, elapsed_ms, error) + helper `log_ocr_attempt(...)`.
+5. Sanitized fixtures для тестов: Ozon, Samokat OFD, Yandex, SMS-derived, blurry photo.
+6. Delivery/service fee — first-class output, отделён от items.
 
 Acceptance:
 
-- Pipeline тестируется без Telegram.
-- Vision/Tesseract мокируются.
+- `telegram_bot.py` ≤ 700 строк.
+- `services/photo_pipeline.py` тестируется без Telegram (Vision и Tesseract — моки).
 - Плохой OCR уходит в Vision fallback.
-- Telegram photo path не блокирует event loop.
+- `bot/handlers/photos.py` ≈ 300–400 строк (thin orchestrator).
 
 Коммит:
 
 ```text
-refactor: route telegram photos through photo pipeline
+refactor: extract photo handler into services/photo_pipeline
 ```
 
 ---
 
-## День 6 - Суббота 23.05 - Memory Lane Completion And Governance Seed
+## День 2 нового плана — Среда 20.05 — Memory Lane Find/Profile + ML DB Cleanup
 
-Цель: дать пользователю новые Memory Lane команды и заложить безопасный proposal-first фундамент.
+Цель: дать команды `/ml_find` и `/ml_profile`, добить `sqlite3.connect` в ML-модулях, инструментировать новый source_matcher.
 
-Задачи Memory Lane:
+Задачи:
 
-1. Реализовать `/ml_find <query>`:
-   - SQL LIKE;
-   - topic/style/brand/color filters;
-   - deleted rows excluded;
-   - кнопка запуска `/ml_search` для найденной записи.
-2. Реализовать `/ml_profile <topic>`:
-   - liked features;
-   - disliked features;
-   - style tags;
-   - brands;
-   - colors/materials;
-   - последние 5 примеров.
-3. Не добавлять embeddings, пока простой SQL/text search не доказан.
-4. Покрыть тестами поиск, профиль, пустую базу и deleted records.
-
-Задачи Governance seed:
-
-1. Добавить таблицы:
-   - `action_proposals`;
-   - `approvals`;
-   - `audit_events`.
-2. Создать `governance/proposals.py`:
-   - create;
-   - approve;
-   - reject;
-   - explain.
-3. Добавить минимальный policy enum:
-   - low;
-   - medium;
-   - high;
-   - critical.
-4. Пока без внешних side effects: только proposal-first contract.
+1. `/ml_find <query>`:
+   - SQL LIKE по `caption`, `name`, `description`, `brand`, `style_tags`
+   - Опциональные флаги `--topic`, `--brand`, `--color`
+   - Исключать строки с `deleted_at IS NOT NULL`
+   - Inline-кнопка «🔍 Искать» рядом с каждым результатом → запуск `/ml_search` для найденной записи
+2. `/ml_profile [topic]`:
+   - Агрегация: top-5 liked features, top-5 disliked, top brands, top colors/materials, top style_tags
+   - Последние 5 примеров с фото
+   - Без LLM, чистая SQL-агрегация
+3. Расширить `/ml_stats` — добавить разбивку по `source_matcher` (tier × geo × CTR за 30 дней), чтобы видеть качество новой системы выбора источников.
+4. Перевести оставшиеся ML-модули на `consumption.db.connect`:
+   - `ml_source_matcher.py` (1 случай `sqlite3.connect`)
+   - `ml_search_v2.py` (1 случай)
+5. Тесты:
+   - `/ml_find` empty DB, with filters, deleted excluded;
+   - `/ml_profile` со всеми темами и без них;
+   - Пустая база, профиль с одним примером.
 
 Acceptance:
 
-- `/ml_find` и `/ml_profile` работают без LLM.
-- Governance schema создаётся idempotently.
-- Tests на create/approve/reject зелёные.
+- Обе команды работают без LLM.
+- `rg sqlite3.connect ml_*.py` пусто.
+- 540+ tests зелёные.
 
 Коммит:
 
 ```text
-feat: add memory lane find/profile and governance seed
+feat: add /ml_find and /ml_profile, finish ML db migration
 ```
 
 ---
 
-## Метрики успеха недели
+## День 3 нового плана — Четверг 21.05 — Governance Seed + Final DB Cleanup
 
-| Метрика | Сейчас | Цель к 23.05 |
-|---|---:|---:|
-| `telegram_bot.py` | ~3 485 строк | <= 1 500 строк |
-| Прямые `sqlite3.connect` в production | много | только documented exceptions |
-| Repository modules | items/purchases/media | + alerts/credit |
-| `/ml_find` | нет | есть |
-| `/ml_profile` | нет | есть |
-| Governance tables | нет | есть |
-| Photo pipeline без Telegram | частично | тестируемый service |
-| Dependency/test baseline | нет | есть |
+Цель: заложить proposal-first фундамент и закрыть остатки прямых `sqlite3.connect`.
+
+Задачи:
+
+1. Idempotent миграции:
+   - `action_proposals(id, proposal_type, risk_level, status, evidence_json, created_at, ...)`;
+   - `approvals(id, proposal_id, channel, confirmation_hash, approved_at, ...)`;
+   - `audit_events(id, event_type, actor_type, input_hash, output_hash, ts, ...)`.
+2. `governance/proposals.py`:
+   - `create(proposal_type, evidence, risk_level) → proposal_id`;
+   - `approve(proposal_id, channel='telegram')`;
+   - `reject(proposal_id, reason)`;
+   - `explain(proposal_id) → str` (human-readable);
+   - Policy enum: `low | medium | high | critical`;
+   - Без внешних side effects — только proposal-first contract.
+3. `repositories/proposals.py` — query helpers поверх трёх таблиц.
+4. Пример wiring: научить `run_price_drop_check` создавать `action_proposal` типа `notify_price_drop` с `risk_level=low` (пока с автоматическим approve, чтобы протестировать контракт).
+5. Перевести на `consumption.db.connect`:
+   - `daily_cheque_scan.py` (2);
+   - `scripts/fines_bot.py` (2);
+   - `sms_monitor.py` (1).
+6. Тесты: create / approve / reject / explain, idempotent schema, risk_level enum constraint.
+
+Acceptance:
+
+- Governance schema создаётся idempotently.
+- 4 функции `governance/proposals.py` зелёные в тестах.
+- `rg "sqlite3.connect" --type py` показывает только tests и legacy backup.
+
+Коммит:
+
+```text
+feat: governance seed (action_proposals, approvals, audit_events)
+```
+
+---
+
+## Метрики успеха недели (обновлено)
+
+| Метрика | На утро 18.05 | Сейчас (вечер 18.05) | Цель к 21.05 |
+|---|---:|---:|---:|
+| `telegram_bot.py` | ~3 485 строк | 1 274 | ≤ 700 |
+| Прямые `sqlite3.connect` в production | много | 5 файлов | только tests + legacy |
+| Repository modules | items/purchases/media | + alerts/credit | + proposals |
+| `/ml_find`, `/ml_profile` | нет | нет | есть |
+| Governance tables | нет | нет | есть |
+| `services/photo_pipeline.py` | нет | нет | ≈ 400–500 строк, тестируемый |
+| `bot/handlers/photos.py` | нет | 10 (placeholder) | 300–400 строк |
+| Dependency/test baseline | есть | есть | есть |
+| Тесты | 517 | 529 | ≥ 565 |
 
 ## Что не делать на этой неделе
 
-- Не начинать Needs + Recommendation MVP до Governance seed.
-- Не делать полный Legacy Retirement `consumption_agent_full_030526.py`, только подготовить переносы и documented exceptions.
+- Не начинать Needs + Recommendation MVP до стабильного Governance.
+- Не делать полный Legacy Retirement `consumption_agent_full_030526.py`.
 - Не переезжать на PostgreSQL.
 - Не делать web UI.
-- Не делать большой Markdown V2/config rewrite в тот же момент, что и handler split.
+- Не добавлять embeddings для `/ml_find` — сначала SQL/LIKE должен доказать.
+- Не делать большой Markdown V2/config rewrite одновременно с handler split.
 
-## Главный порядок
+## Главный порядок (актуальный)
 
-1. DB Access.
-2. Telegram split.
-3. Photo/OCR integration.
-4. Memory Lane UX.
-5. Governance seed.
+1. ✅ DB Access (Days 1–2 закрыты).
+2. ✅ Telegram split (Days 3–4 закрыты).
+3. 🔄 Photo/OCR integration (Tue 19.05).
+4. 🔄 Memory Lane UX + ML cleanup (Wed 20.05).
+5. 🔄 Governance seed + final DB cleanup (Thu 21.05).
 
-Каждый день заканчивается маленьким проверяемым slice, targeted tests, коммитом и sync GitHub <-> bare repo.
+Каждый день заканчивается маленьким проверяемым slice, targeted tests, коммитом и sync WSL ↔ bare-repo ↔ GitHub.

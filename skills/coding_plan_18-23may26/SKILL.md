@@ -15,13 +15,32 @@ skills/coding_plan_18-23may26/references/week_plan.md
 
 ## Current Baseline
 
-- Current synchronized commit after Day 1: `0648ad0`.
-- `master`, `origin/master`, and `paperclip/master` were in sync before Day 2 started.
-- `telegram_bot.py` is still large, around 3.5k lines.
-- `consumption.db.connect` exists and should be the default production DB access path.
-- `services/receipt_pipeline.py` exists and already uses the current matcher API.
-- `bot/access.py`, `services/ocr.py`, `services/images.py`, and initial repositories exist.
-- `repositories/alerts.py` and `repositories/credit.py` were added on Day 1.
+**Updated 18.05.2026 evening — Days 1–4 ahead of schedule.**
+
+- Current synchronized commit: `6278ba8 feat: LLM-translate, source matcher, smart source routing`.
+- `master`, `origin/master`, `github/master`, `gh-consumption/master`, `github-consumption/master` in sync.
+- `telegram_bot.py` shrunk from ~3 485 → **1 274 lines** (target ≤1500 already met).
+- `bot/` module structure complete: `app.py`, `callbacks.py` (865), `markdown.py`, `ui.py`, and `bot/handlers/{help,finance,items,memory_lane,carsharing}.py`.
+- `bot/handlers/photos.py` is **still a 10-line placeholder** — `photo_handler` (~543 lines) lives in `telegram_bot.py`.
+- `services/photo_pipeline.py` does **not exist yet** — receipt_pipeline, ocr, images are in place.
+- `repositories/`: `alerts.py`, `credit.py`, `items.py`, `purchases.py`, `media.py` exist.
+- `consumption.db.connect` is the default. Remaining direct `sqlite3.connect` in production code: `ml_source_matcher.py`, `ml_search_v2.py`, `daily_cheque_scan.py`, `scripts/fines_bot.py`, `sms_monitor.py`.
+- `/ml_find`, `/ml_profile` — not implemented.
+- Governance tables (`action_proposals`, `approvals`, `audit_events`) — not implemented.
+- Bonus shipped today: `ml_translate.py` (LLM-перевод GPT-4o-mini) + `ml_source_matcher.py` (49 источников, learned ranking).
+- Tests: **529 passed.**
+
+## Status of Days 1–4 (closed today, Mon 18.05)
+
+| Day | Plan | Status | Commit |
+|---|---|---|---|
+| 1 | DB Access Baseline | ✅ | `0648ad0`, `4d14a6d` |
+| 2 | DB Access Completion | ✅ (closed ahead) | `4d14a6d` |
+| 3 | Telegram Split Safe Start | ✅ | `f72c3ef` + `4fc25b6` |
+| 4 | Telegram Commands & Callbacks | ✅ | `1d72232` |
+| — | Bonus: LLM-translate + source matcher | ✅ | `6278ba8` |
+
+The plan for Tue 19.05 → Thu 21.05 was rewritten — see `references/week_plan.md`.
 
 ## Execution Rules
 

@@ -366,6 +366,88 @@ CREATE TABLE search_sources (
 3. Bandit периодически пересчитывает источники по типам товаров
 4. Со временем для `циклинг` исчезнут `leform` и `brandshop`, а появятся `velosipedov.ru`, `chainreactioncycles.com`
 
+## Telegram Voice Input (Спринт 19.05.2026 — Новая задача)
+
+### Проблема
+Пользователь может отправлять голосовые сообщения в Telegram, но consumption bot их не обрабатывает — голосовые падают в OpenClaw main session, где расшифровываются через Whisper API, но не попадают в бота.
+
+### Цель
+Добавить поддержку аудиосообщений (voice/audio) в consumption bot для команд `/add`, `/ml_search` и `Memory Lane` через голосовой ввод.
+
+### Архитектура
+
+**Вариант A: Whisper API в боте (рекомендуемый)**
+- В consumption bot добавить обработчик `voice_handler` и `audio_handler`
+- При получении голосового/аудио → скачать файл через `bot.get_file(file_id)`
+- Отправить в OpenAI Whisper API (`/v1/audio/transcriptions`)
+- Полученный текст прогнать через существующие хендлеры:
+  - Если содержит хэштеги/«нравится» → Memory Lane (`photo_handler`-подобная логика, но без фото)
+  - Если содержит «найди», «ищи», «поиск» → `/ml_search`
+  - Если содержит «добавь» → `/add_item`
+- Результат распознавания и ответ бота — в том же сообщении
+
+**Вариант B: OpenClaw как прокси (альтернативный)**
+- OpenClaw main session получает голосовое от Telegram
+- Расшифровывает через Whisper API
+- Отправляет текст в consumption bot через `sessions_send`
+- Бот обрабатывает как обычное текстовое сообщение
+
+**Выбор: Вариант A**, т.к.:
+- Меньше зависимостей от OpenClaw runtime
+- Прямая интеграция, быстрее
+- Whisper API уже есть (openai-whisper-api skill)
+
+### План реализации
+
+1. **Создать `bot/handlers/voice.py`**:
+   - `voice_handler(update, context)` — принимает `Message.voice`
+   - `audio_handler(update, context)` — принимает `Message.audio` (если пользователь шлёт файл)
+   - `_transcribe_voice(file_path)` — вызывает Whisper API через curl/openai
+     - Получает `file_id` → `bot.get_file(file_id).download()` → сохраняет временно
+     - Вызывает `curl https://api.openai.com/v1/audio/transcriptions ...` или использует `openai` Python SDK
+     - Возвращает текст распознавания
+   - `_route_voice_to_handler(text, update, context)` — определяет интент:
+     - Memory Lane (хэштеги/нравится/не нравится) → переиспользует `photo_handler` (без фото)
+     - `/ml_search` (найди/ищи/поиск) → вызывает `cmd_ml_search` или `_ml_search_force`
+     - `/add_item` (добавь/запиши/сохрани) → вызывает `cmd_add`
+     - Fallback: просто вернуть текст распознавания + вопрос «Что с этим делать?»
+
+2. **Зарегистрировать хендлеры в `bot/main.py`**:
+   ```python
+   from bot.handlers.voice import voice_handler, audio_handler
+   dp.add_handler(MessageHandler(filters.VOICE, voice_handler))
+   dp.add_handler(MessageHandler(filters.AUDIO, audio_handler))
+   ```
+
+3. **Создать `bot/transcriber.py`**:
+   - Изолированный модуль для вызова Whisper API
+   - `transcribe(file_path: str, language: str = 'ru') -> str`
+   - Использует `openai.OpenAI().audio.transcriptions.create()`
+   - Поддержка форматов: ogg, m4a, mp3, wav
+   - Логирование длительности и размера файла
+
+4. **Интеграция с Memory Lane**:
+   - Если голосовое содержит хэштеги → сохранить в `memory_lane_items` как текстовую запись (без фото)
+   - Поле `media_asset_id = NULL` — допустимо для voice-only entry
+   - Ответ бота: «🧠 Сохранено в Memory Lane: {текст}»
+
+5. **Интеграция с `/ml_search`**:
+   - Если голосовое содержит «найди/ищи/поиск» + описание товара → запустить поиск
+   - Разобрать описание: «найди кроссовки Nike» → brand=Nike, name=кроссовки
+   - Вызвать `cmd_ml_search` с распознанным текстом как caption
+   - Если фото нет — поиск по текстовому описанию без Vision attributes
+
+6. **Обработка ошибок**:
+   - Если Whisper API недоступен — ответ: «Не удалось распознать голос. Попробуй написать текстом.»
+   - Если текст пустой — ответ: «Голосовое распознано, но текст пустой. Попробуй ещё раз.»
+   - Таймаут 30 секунд на распознавание
+
+### Зависимости
+- `openai` Python SDK (уже есть в consumption_agent)
+- Права на чтение файлов Telegram (file download)
+- `OPENAI_API_KEY` в `.env` (для Whisper API)
+
+
 ## Ключевые файлы
 
 | Файл | Назначение |
