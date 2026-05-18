@@ -16,8 +16,10 @@ log = logging.getLogger(__name__)
 _get_db: Callable[..., Any] | None = None
 
 
-def configure(*, get_db: Callable[..., Any] | None = None, logger: Any | None = None) -> None:
+def configure(*, get_db: Callable[..., Any] | None = None, logger: Any | None = None, shared: dict[str, Any] | None = None) -> None:
     global _get_db, log
+    if shared:
+        globals().update(shared)
     if get_db is not None:
         _get_db = get_db
     if logger is not None:
@@ -170,10 +172,367 @@ async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'❌ Ошибка генерации отчёта: {e}')
 
 
+async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /debts — принудительная проверка кредитов и займов.
+    Сканирует почты + SMS, показывает ближайшие платежи."""
+    await update.message.reply_text('🔍 Проверяю почты и SMS на предмет кредитных уведомлений...')
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, 'credit_alerts.py'],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        log = result.stdout + result.stderr
+        print(f'[debts] scan result:\n{log[:500]}')
+    except Exception as e:
+        print(f'[debts] scan error: {e}')
+
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT id, sender_name, payment_amount, payment_date,
+                   CAST(julianday(payment_date) - julianday('now') AS INTEGER) as days_left
+            FROM credit_alerts
+            WHERE is_active = 1 AND paid_confirmed_at IS NULL
+              AND payment_date NOT NULL AND payment_date != ''
+              AND julianday(payment_date) - julianday('now') <= 30
+            ORDER BY payment_date
+        """).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text('✅ Нет активных кредитных платежей на ближайшие 30 дней.')
+        return
+
+    lines = ['💳 *Кредиты к оплате (30 дней):*']
+    total = 0.0
+    urgent_count = 0
+    for r in rows:
+        rid, sender, amount, pay_date, days = r
+        if days < 0:
+            prefix = '🔴 ПРОСРОЧЕН'
+            urgent_count += 1
+        elif days <= 3:
+            prefix = '🟡 СРОЧНО'
+            urgent_count += 1
+        elif days <= 7:
+            prefix = '🟢 На этой неделе'
+        else:
+            prefix = '⚪'
+
+        amount_str = f'{amount:.2f} ₽' if amount else '—'
+        date_str = pay_date or '—'
+        days_str = f'(через {days} дн.)' if days >= 0 else f'(просрочено {-days} дн.)'
+        lines.append(f'\n{prefix} *{esc_md(sender)}* — {amount_str}')
+        lines.append(f'   📅 {date_str} {days_str}')
+
+        if amount:
+            total += amount
+
+    lines.append(f'\n💰 *Итого: {total:.2f} ₽*')
+    if urgent_count:
+        lines.append(f'⚠️ {urgent_count} платеж(а/ей) требуют внимания!')
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+
+async def cmd_fines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /fines — принудительная проверка штрафов на всех почтах + SMS.
+    Показывает неоплаченные с кнопкой ✅ Оплачено."""
+    await update.message.reply_text('🔍 Проверяю почты и SMS на предмет штрафов...')
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, 'scripts/fines_bot.py', '--days', '7', '--check-sms'],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        log = result.stdout + result.stderr
+        print(f'[fines] scan result:\n{log[:500]}')
+    except Exception as e:
+        print(f'[fines] scan error: {e}')
+
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT id, type, number, amount, description, vehicle, fine_date, vendor, paid_confirmed_at
+            FROM fines
+            WHERE paid_confirmed_at IS NULL
+            ORDER BY fine_date DESC
+        """).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text('✅ Нет неоплаченных штрафов.')
+        return
+
+    # Группируем по номеру — берём последний статус (DESC по дате)
+    by_number = {}
+    for r in rows:
+        num = r[2] or str(r[0])
+        by_number[num] = r
+
+    # Берём только те, где нет paid_confirmed_at (по номеру штрафа дедуплицируем)
+    active = []
+    for r in by_number.values():
+        if r[1] == 'new' or (r[1] in ('paid', 'fined') and r[8] is None):
+            active.append(r)
+
+    if not active:
+        await update.message.reply_text('✅ Нет неоплаченных штрафов.')
+        return
+
+    # Сводка
+    total = sum(r[3] or 0 for r in active)
+    summary_lines = [f'🚨 *Штрафы: {len(active)} шт., всего {total:.0f} ₽*']
+    for r in active:
+        amount = r[3] or 0
+        desc = (r[4] or '').strip()[:60]
+        date_str = r[6] or '—'
+        summary_lines.append(f'  🔴 {amount:.0f} ₽ — {esc_md(desc) or "Штраф"} ({date_str})')
+    summary_lines.append(f'\n⬇️ Отправляю детали с кнопками...')
+    await update.message.reply_text('\n'.join(summary_lines), parse_mode='Markdown')
+
+    # Каждый штраф отдельным сообщением с кнопкой
+    for r in active:
+        fine_id = r[0]
+        amount = r[3] or 0
+        desc = (r[4] or '').strip()
+        date_str = r[6] or '—'
+        vendor = (r[7] or '').strip()[:60]
+        veh = (r[5] or '').strip()[:15]
+        num_str = (r[2] or '')[:20]
+
+        detail_lines = [f'🚨 *Штраф: {amount:.0f} ₽*']
+        if desc:
+            detail_lines.append(f'📋 {esc_md(desc)}')
+        detail_lines.append(f'📅 {date_str}')
+        if veh:
+            detail_lines.append(f'🚗 {veh}')
+        if vendor:
+            detail_lines.append(f'🏛 {vendor}')
+        if num_str:
+            detail_lines.append(f'№ {num_str}')
+
+        keyboard = {
+            'inline_keyboard': [[
+                {'text': '✅ Оплачено', 'callback_data': f'fine_paid:{fine_id}'}
+            ]]
+        }
+
+        await update.message.reply_text(
+            '\n'.join(detail_lines),
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+
+async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /dayexp [N] — чеки за N дней (включая сегодня) с принудительным сканированием.
+    По умолчанию N=1 — только сегодня."""
+    n_days = 1
+    if ctx.args and len(ctx.args) > 0:
+        try:
+            n_days = int(ctx.args[0])
+            if n_days < 1:
+                n_days = 1
+        except ValueError:
+            pass
+
+    day_label = f'последние {n_days} дн.' if n_days > 1 else 'сегодня'
+    msg = await update.message.reply_text(f'🔍 Сканирую почты и SMS за {day_label}...')
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, 'daily_cheque_scan.py',
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
+        print(f'[dayexp] scan result:\n{log_text}')
+    except asyncio.TimeoutError:
+        print('[dayexp] scan timeout')
+    except Exception as e:
+        print(f'[dayexp] scan error: {e}')
+        await msg.edit_text('⚠️ Ошибка сканирования почт.')
+        return
+
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT purchase_date, total_amount, store_name, source, notes
+            FROM purchases
+            WHERE purchase_date >= date('now', ?)
+              AND purchase_date <= date('now')
+              AND (deleted_at IS NULL OR deleted_at = '')
+            ORDER BY purchase_date DESC, total_amount DESC
+        """, (f'-{n_days - 1} days',)).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        date_range = f'{datetime.now().strftime("%d.%m.%Y")}' if n_days == 1 else f'за последние {n_days} дн. (по {datetime.now().strftime("%d.%m.%Y")})'
+        await msg.edit_text(f'📭 {date_range} покупок не найдено.')
+        return
+
+    total = sum(r[1] or 0 for r in rows)
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'sms_sber': '📱', 'sber_statement': '🏦', 'local': '📝', 'manual': '✏️'}
+
+    today_str = datetime.now().strftime('%d.%m.%Y')
+    title = f'📊 *Расходы за сегодня ({today_str})*' if n_days == 1 else f'📊 *Расходы за последние {n_days} дн. (по {today_str})*'
+    lines = [title]
+    lines.append(f'_{len(rows)} покупок, всего {total:,.0f} ₽_\n'.replace(',', ' '))
+
+    for row in rows:
+        append_expense_row(lines, row, source_icons, note_limit=80)
+
+    append_store_totals(lines, rows, '📌 *По магазинам:*')
+
+    await safe_edit_markdown_message(msg, '\n'.join(lines))
+
+    # Проверка на подозрительные дубли (SMS/Email, близкие суммы)
+    try:
+        import purchase_duplicate_detector as pdd
+        conn = get_db()
+        try:
+            groups = pdd.find_suspected_duplicates(conn, days_back=n_days)
+            for group in groups:
+                resolved = pdd.auto_resolve_if_email_dedup(conn, group)
+                if resolved:
+                    resolved['_conn'] = conn  # для format_duplicate_question
+                    question = pdd.format_duplicate_question(resolved)
+                    kb = pdd.build_duplicate_keyboard(resolved)
+                    await safe_send_markdown_message(
+                        ctx.bot,
+                        update.effective_chat.id,
+                        question,
+                        reply_markup=kb,
+                    )
+        finally:
+            conn.close()
+    except ImportError:
+        pass
+    except Exception as e:
+        log.warning(f'dayexp duplicate check failed: {e}')
+
+async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /monthexp — расходы с начала месяца с расшифровкой по дням.
+    За текущий день — принудительное сканирование почт + SMS (фоново)."""
+    msg = await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за месяц...')
+
+    # Фоновое сканирование
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, 'daily_cheque_scan.py',
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
+        print(f'[monthexp] scan result:\n{log_text}')
+    except asyncio.TimeoutError:
+        print('[monthexp] scan timeout')
+    except Exception as e:
+        print(f'[monthexp] scan error: {e}')
+
+    today = datetime.now()
+    month_start = today.strftime('%Y-%m-01')
+    today_str = today.strftime('%Y-%m-%d')
+    month_names = {
+        1:'Январь', 2:'Февраль', 3:'Март', 4:'Апрель',
+        5:'Май', 6:'Июнь', 7:'Июль', 8:'Август',
+        9:'Сентябрь', 10:'Октябрь', 11:'Ноябрь', 12:'Декабрь'
+    }
+    month_name = f'{month_names.get(today.month, "")} {today.year}'
+
+    conn = get_db()
+    try:
+        rows = conn.execute("""
+            SELECT purchase_date, total_amount, store_name, source, notes
+            FROM purchases
+            WHERE purchase_date >= ? AND purchase_date <= ?
+              AND (deleted_at IS NULL OR deleted_at = '')
+            ORDER BY purchase_date, total_amount DESC
+        """, (month_start, today_str)).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await msg.edit_text(f'📭 За {month_name} (с 1 по {today.day}) покупок не найдено.')
+        return
+
+    grand_total = sum(r[1] or 0 for r in rows)
+    source_icons = {'gmail': '📧', 'yandex': '📧', 'yandex_food': '🍽', 'sms': '📱', 'sms_sber': '📱', 'local': '📝', 'manual': '✏️'}
+
+    lines = [f'📊 *Расходы с 1 {month_name.lower()} по {today.day} число*']
+    lines.append(f'_{len(rows)} покупок, всего {grand_total:,.0f} ₽_\n'.replace(',', ' '))
+
+    # Группировка по дням
+    by_day = {}
+    for r in rows:
+        d = r[0]
+        if d not in by_day:
+            by_day[d] = []
+        by_day[d].append(r)
+
+    for day in sorted(by_day.keys(), reverse=True):
+        day_rows = by_day[day]
+        day_total = sum(r[1] or 0 for r in day_rows)
+        day_label = 'Сегодня' if day == today_str else day
+        lines.append(f'\n📅 *{day_label}* — {day_total:,.0f} ₽ ({len(day_rows)} покупок)'.replace(',', ' '))
+
+        for row in day_rows:
+            append_expense_row(lines, row, source_icons, note_limit=60)
+
+    append_store_totals(lines, rows, '📌 *Всего по магазинам:*')
+
+    await safe_edit_markdown_message(msg, '\n'.join(lines))
+
+    # Проверка на подозрительные дубли
+    try:
+        import purchase_duplicate_detector as pdd
+        conn = get_db()
+        try:
+            groups = pdd.find_suspected_duplicates(conn)
+            for group in groups:
+                resolved = pdd.auto_resolve_if_email_dedup(conn, group)
+                if resolved:
+                    resolved['_conn'] = conn
+                    question = pdd.format_duplicate_question(resolved)
+                    kb = pdd.build_duplicate_keyboard(resolved)
+                    await safe_send_markdown_message(
+                        ctx.bot,
+                        update.effective_chat.id,
+                        question,
+                        reply_markup=kb,
+                    )
+        finally:
+            conn.close()
+    except ImportError:
+        pass
+    except Exception as e:
+        log.warning(f'monthexp duplicate check failed: {e}')
+
+
 def register_handlers(app: Any, deps: Any = None) -> None:
     from bot.app import _add_command
 
     if deps is not None:
-        configure(get_db=getattr(deps, 'get_db', None), logger=getattr(deps, 'log', None))
-    _add_command(app, deps, 'alerts', cmd_alerts)
-    _add_command(app, deps, 'check', cmd_check)
+        configure(
+            get_db=getattr(deps, 'get_db', None),
+            logger=getattr(deps, 'log', None),
+            shared=getattr(deps, 'shared', None),
+        )
+    for name, callback in (
+        ('alerts', cmd_alerts),
+        ('check', cmd_check),
+        ('debts', cmd_debts),
+        ('fines', cmd_fines),
+        ('dayexp', cmd_dayexp),
+        ('monthexp', cmd_monthexp),
+    ):
+        _add_command(app, deps, name, callback)
