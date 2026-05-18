@@ -39,53 +39,12 @@ def db_execute_with_retry(conn, query, params=(), max_retries=3, backoff_base=0.
     return db_execute_shared(conn, query, params, max_retries=max_retries, delay=backoff_base)
 
 
-def esc_md(text):
-    """Escape Markdown V1 special characters for Telegram."""
-    if not text:
-        return text
-    for ch in ('\\', '`', '*', '_', '[', ']', '(', ')'):
-        text = str(text).replace(ch, '\\' + ch)
-    return text
-
-
-def markdown_to_plain_text(text: str | None) -> str:
-    """Снимает Markdown-оформление для fallback-ответа без parse_mode."""
-    if not text:
-        return ''
-    plain = re.sub(r'\\([\\`*_\[\]()])', r'\1', str(text))
-    plain = re.sub(r'(?m)^_(.*)_$', r'\1', plain)
-    return plain.replace('*', '').replace('`', '')
-
-
-async def safe_edit_markdown_message(message, text: str):
-    """Редактирует Markdown-сообщение, а при parse error откатывается в plain text."""
-    try:
-        return await message.edit_text(text, parse_mode='Markdown')
-    except Exception as e:
-        if 'parse entities' not in str(e).lower():
-            raise
-        log.warning(f'fallback to plain text after Markdown edit failure: {e}')
-        return await message.edit_text(markdown_to_plain_text(text))
-
-
-async def safe_send_markdown_message(bot, chat_id: int, text: str, *, reply_markup=None):
-    """Отправляет Markdown-сообщение, а при parse error откатывается в plain text."""
-    try:
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup,
-        )
-    except Exception as e:
-        if 'parse entities' not in str(e).lower():
-            raise
-        log.warning(f'fallback to plain text after Markdown send failure: {e}')
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=markdown_to_plain_text(text),
-            reply_markup=reply_markup,
-        )
+from bot.markdown import (
+    esc_md,
+    markdown_to_plain_text,
+    safe_edit_markdown_message,
+    safe_send_markdown_message,
+)
 
 
 def extract_sms_display_time(notes: str | None) -> str:
@@ -222,6 +181,7 @@ from bot.access import (
     parse_allowed_chat_ids as _parse_allowed_chat_ids,
     register_authorized_handler,
 )
+from bot.app import HandlerDeps, register_basic_handlers
 
 # Новый модуль категоризации (Шаг 5 рефакторинга)
 try:
@@ -585,11 +545,21 @@ def get_db(max_retries=3, delay=1):
         check_same_thread=False,
     )
 
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        '🛒 Привет, это Consumption Agent.\n'
-        'Для списка команд: /help'
-    )
+
+
+from bot.handlers.finance import (
+    cmd_alerts,
+    cmd_check,
+    configure as configure_finance_handlers,
+)
+from bot.handlers.help import (
+    cmd_help,
+    start,
+    configure as configure_help_handlers,
+)
+
+configure_help_handlers(docs_dir=os.path.join(SCRIPT_DIR, 'docs'))
+configure_finance_handlers(get_db=get_db, logger=log)
 
 async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -1185,23 +1155,6 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.error(f"Ошибка в cmd_list: {e}")
         await update.message.reply_text(f'❌ Ошибка: {e}')
 
-async def cmd_alerts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    conn = get_db()
-    rows = conn.execute("SELECT alert_type,title,message FROM alerts WHERE status='pending' ORDER BY created_at").fetchall()
-    conn.close()
-    if not rows:
-        await update.message.reply_text('✅ Нет активных алертов')
-        return
-    icons = {'warranty_expiring':'⚠️','warranty_expired':'❌','expiry_approaching':'⏳','expired':'🚫','low_stock':'📉','price_drop':'💰'}
-    lines = ['🔔 Активные алерты:\n']
-    for r in rows:
-        icon = icons.get(r['alert_type'], '🔔')
-        lines.append(f'{icon} {r["title"]}')
-        if r['message']:
-            lines.append(f'   {r["message"]}')
-    await update.message.reply_text('\n'.join(lines))
-
-
 def _extract_drive_field(patterns: list[str], text: str | None) -> str | None:
     if not text:
         return None
@@ -1386,128 +1339,6 @@ async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines.append("\n(реальная стоимость может отличаться)")
     await update.message.reply_text("\n".join(lines))
 
-
-async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /check — расширенный PDF-отчёт."""
-    try:
-        from fpdf import FPDF
-        pdf = FPDF()
-        dp = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-        if not os.path.exists(dp):
-            dp = 'DejaVuSans'
-        pdf.add_font('DejaVu', '', dp, uni=True)
-        pdf.add_font('DejaVu', 'B', dp.replace('.ttf', '-Bold.ttf'), uni=True)
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-
-        conn = get_db()
-        c = conn.cursor()
-
-        # Заголовок
-        pdf.set_font('DejaVu', 'B', 16)
-        pdf.cell(0, 10, 'Consumption Agent — Отчёт', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        pdf.cell(0, 6, f'Дата: {date.today().isoformat()}', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-
-        # Статистика
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Общая статистика', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        stats = [
-            ('Товаров', c.execute("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL").fetchone()[0]),
-            ('Покупок', c.execute("SELECT COUNT(*) FROM purchases WHERE deleted_at IS NULL").fetchone()[0]),
-            ('Категорий', c.execute("SELECT COUNT(*) FROM categories").fetchone()[0]),
-            ('С гарантией', c.execute("SELECT COUNT(*) FROM items WHERE warranty_months>0 AND deleted_at IS NULL").fetchone()[0]),
-            ('Алертов', c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]),
-        ]
-        for k, v in stats:
-            pdf.cell(0, 6, f'  {k}: {v}', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-
-        # Топ-10 категорий по сумме
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Топ-10 категорий по сумме', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        cats = conn.execute('''
-            SELECT c.name, COUNT(i.id) as cnt, COALESCE(ROUND(SUM(i.purchase_price),0),0) as total
-            FROM items i JOIN categories c ON i.category_id = c.id
-            WHERE i.deleted_at IS NULL
-            GROUP BY c.id ORDER BY total DESC LIMIT 10
-        ''').fetchall()
-        for r in cats:
-            pdf.cell(0, 6, f'  {r["name"]:25s} {r["cnt"]:4d} шт.  {r["total"]:>8.0f} ₽', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-
-        # График трат по месяцам (прямоугольники)
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Траты по месяцам', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        months = conn.execute('''
-            SELECT substr(purchase_date,1,7) as m, ROUND(SUM(purchase_price),0) as total
-            FROM items WHERE deleted_at IS NULL AND purchase_price>0 AND purchase_price NOTNULL
-            GROUP BY m HAVING m NOTNULL AND GLOB('[0-9][0-9][0-9][0-9]-[0-9][0-9]', m)
-            ORDER BY m
-        ''').fetchall()
-        if months:
-            max_total = max(r['total'] for r in months)
-            bar_w = 160 / max(len(months), 1)
-            pdf.set_font('DejaVu', '', 7)
-            for r in months:
-                h = (r['total'] / max_total) * 40 if max_total > 0 else 0
-                x = pdf.get_x()
-                y = pdf.get_y()
-                pdf.set_fill_color(100, 150, 255)
-                pdf.rect(x, y, bar_w, h, 'F')
-                pdf.set_fill_color(0, 0, 0)
-                pdf.set_xy(x, y + h + 1)
-                if pdf.get_y() > 270:
-                    pdf.set_xy(x, y - 1)
-                pdf.cell(bar_w, 4, r['m'][-2:] if len(r['m'])==7 else r['m'], align='C')
-                pdf.set_xy(x + bar_w, y)
-            pdf.ln(6)
-        pdf.ln(4)
-
-        # Активные алерты
-        pdf.set_font('DejaVu', 'B', 12)
-        a_cnt = c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]
-        pdf.cell(0, 8, f'Активные алерты ({a_cnt})', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        if a_cnt:
-            for r in conn.execute("SELECT alert_type, title, message FROM alerts WHERE status='pending' ORDER BY alert_type LIMIT 10").fetchall():
-                pdf.cell(0, 6, f'  [{r["alert_type"][:15]:15s}] {r["title"][:50]}', new_x='LMARGIN', new_y='NEXT')
-        else:
-            pdf.cell(0, 6, '  Нет активных алертов', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-
-        # Топ-20 товаров по цене (без дублей)
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Топ-20 товаров по цене', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        top_items = conn.execute('''
-            SELECT name, purchase_price, category_id FROM items
-            WHERE deleted_at IS NULL AND purchase_price > 0 AND purchase_price NOTNULL
-            GROUP BY ROUND(purchase_price,-2), name HAVING MIN(id)
-            ORDER BY purchase_price DESC LIMIT 20
-        ''').fetchall()
-        for r in top_items:
-            price_str = f'{r["purchase_price"]:>8.0f} ₽' if r["purchase_price"] else ''
-            cat_str = (r["category_id"] or '')[:10]
-            pdf.cell(0, 6, f'  {price_str}  {r["name"][:45]:45s} [{cat_str}]', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-
-        # Сохраняем и шлём
-        pdf_path = '/tmp/consumption_agent_report.pdf'
-        pdf.output(pdf_path)
-        conn.close()
-
-        await update.message.reply_text('📊 Отчёт готов:', reply_to_message_id=update.message.message_id)
-        await update.message.reply_document(open(pdf_path, 'rb'), filename='report.pdf')
-
-    except Exception as e:
-        log.warning(f'cmd_check error: {e}')
-        print(traceback.format_exc())
-        await update.message.reply_text(f'❌ Ошибка генерации отчёта: {e}')
 
 async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = ' '.join(ctx.args)
@@ -2573,83 +2404,6 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([buttons]) if buttons else None
 
         await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
-
-
-async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Вывод справки: /help — список, /help <команда> — подробно."""
-    if not ctx.args:
-        await update.message.reply_text(
-            '🛒 Consumption Agent\n\n'
-            'Команды:\n'
-            '/list — инвентарь по категориям\n'
-            '/alerts — алерты (гарантии, сроки)\n'
-            '/find_car 3ч 80км — подбор тарифа каршеринга\n'
-            '/last_drives — последние поездки каршеринга (все провайдеры)\n'
-            '/debts — проверка кредитов и займов по почтам + SMS\n'
-            '/fines — неоплаченные штрафы\n'
-            '/dayexp — расходы за сегодня с расшифровкой\n'
-            '/monthexp — расходы за месяц с расшифровкой по дням\n'
-            '/warranties — отчёт по гарантиям\n'
-            '/add <название> [<цена>] [<категория>] — добавить товар\n'
-            '/add_photo — загрузить фото чека (OCR)\n'
-            '/check — статистика\n'
-            '/add_item <название> [| бренд X] [| замена N мес] — добавить вещь в инвентарь\n'
-            '/items [all|категория] — инвентарь вещей по категориям\n'
-            '/items_full [all|категория] — с полной инфой (фото, атрибуты)\n'
-            '/ml_last [N] — последние записи Memory Lane\n'
-            '/ml_search <id> — найти товар\n'
-            '/ml_stats — CTR по источникам (active learning)\n'
-            '/ml_watch — watchlist цен\n'
-            '/ml_unwatch <id> — убрать из watchlist\n'
-            '/topic_set <слово> <тема> — задать тему для слова\n'
-            '/topic_list [тема] — показать все правила тем\n'
-            '/help — это сообщение\n\n'
-            'Подробнее: /help <команда>\n'
-            'Например: /help ml_search'
-        )
-        return
-
-    cmd = ctx.args[0].lower().lstrip('/')
-    import os
-    help_path = os.path.join(os.path.dirname(__file__), 'docs', 'bot_commands.md')
-    if not os.path.exists(help_path):
-        await update.message.reply_text('Файл справки не найден.')
-        return
-
-    # Простой парсер: ищем заголовок ### `/command`, собираем текст до следующего ### или ##
-    found = []
-    capture = False
-    capture_depth = 0
-    with open(help_path, encoding='utf-8') as f:
-        for line in f:
-            stripped = line.rstrip()
-            if stripped.startswith('### `/'):
-                c = stripped.replace('### ', '').replace('`', '')
-                c_name = c.split()[0].lstrip('/').lower() if c.split() else ''
-                if c_name == cmd:
-                    capture = True
-                    capture_depth = 0
-                    continue
-                elif capture:
-                    break  # дошли до следующей команды
-            if capture:
-                if stripped.startswith('## '):
-                    break
-                if stripped.startswith('---'):
-                    capture_depth += 1
-                    if capture_depth >= 2:
-                        break
-                found.append(stripped)
-
-    if not found:
-        await update.message.reply_text(f'Описание для /{cmd} не найдено в bot_commands.md.')
-        return
-
-    text = f'📘 /{cmd}\n\n' + '\n'.join(found).strip()
-    # Telegram 4096
-    if len(text) > 4000:
-        text = text[:3997] + '...'
-    await update.message.reply_text(text)
 
 
 async def cmd_topic_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3993,11 +3747,17 @@ def main():
         except Exception as e:
             pass
 
-    add_authorized_handler(app, CommandHandler('start', start))
+    register_basic_handlers(
+        app,
+        HandlerDeps(
+            add_authorized_handler=add_authorized_handler,
+            get_db=get_db,
+            docs_dir=os.path.join(SCRIPT_DIR, 'docs'),
+            log=log,
+        ),
+    )
     add_authorized_handler(app, CommandHandler('list', cmd_list))
-    add_authorized_handler(app, CommandHandler('alerts', cmd_alerts))
     add_authorized_handler(app, CommandHandler('parse', cmd_parse))
-    add_authorized_handler(app, CommandHandler('check', cmd_check))
     add_authorized_handler(app, CommandHandler('last_drives', cmd_last_drives))
     add_authorized_handler(app, CommandHandler('find_car', cmd_find_car))
     add_authorized_handler(app, CommandHandler('add', cmd_add))
@@ -4018,7 +3778,6 @@ def main():
     add_authorized_handler(app, CommandHandler('ml_unwatch', cmd_ml_unwatch))
     add_authorized_handler(app, CommandHandler('topic_set', cmd_topic_set))
     add_authorized_handler(app, CommandHandler('topic_list', cmd_topic_list))
-    add_authorized_handler(app, CommandHandler('help', cmd_help))
     add_authorized_handler(app, MessageHandler(filters.PHOTO, photo_handler))
     add_authorized_handler(app, MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     add_authorized_handler(app, CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
