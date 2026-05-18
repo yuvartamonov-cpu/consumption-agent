@@ -33,6 +33,81 @@ def test_retailer_links_use_translated_query_for_aliexpress():
     assert "gray" in unquote(rows[0]["url"])
 
 
+def test_retailer_links_use_translated_query_for_amazon():
+    rows = mp.retailer_links(['hamington джемпер серый'], ["amazon"])
+    assert rows
+    assert rows[0]["store"] == "Amazon"
+    assert "sweater" in rows[0]["title"]
+    assert "gray" in unquote(rows[0]["url"])
+
+
+def test_retailer_links_use_translated_query_for_ebay():
+    rows = mp.retailer_links(['hamington джемпер серый'], ["ebay"])
+    assert rows
+    assert rows[0]["store"] == "eBay"
+    assert "sweater" in rows[0]["title"]
+    assert "gray" in unquote(rows[0]["url"])
+
+
+def test_localized_sources_for_geo_eu():
+    sources = mp.localized_sources_for_geo('EU')
+    assert 'idealo' in sources
+    assert 'billiger' in sources
+
+
+def test_idealo_uses_german_local_query_and_preserves_ru_en():
+    rows = mp.retailer_links(['hamington джемпер серый хлопок'], ['idealo'])
+    assert rows
+    row = rows[0]
+    assert row['store'] == 'Idealo'
+    assert row['query_ru'] == 'hamington джемпер серый хлопок'
+    assert 'sweater' in row['query_en'] or 'sweat' in row['query_en']
+    assert 'gray' in row['query_en'] or 'grey' in row['query_en'] \
+        or 'gray' in row['query_ru']
+    assert row['query_lang'] == 'de'
+    # Пульсовер/grau должны быть в query_local
+    assert 'Pullover' in row['query_local']
+    assert 'grau' in row['query_local']
+    assert 'hamington' in row['query_local'].lower()  # бренд не переводится
+
+
+def test_oskelly_uses_site_search_and_preserves_ru_query():
+    rows = mp.retailer_links(['gucci сумка черная'], ['oskelly'])
+    assert rows
+    row = rows[0]
+    assert row['store'] == 'Oskelly'
+    assert 'site:oskelly.ru' in unquote(row['url'])
+    assert row['query_ru'] == 'gucci сумка черная'
+    assert row['query_local'] == row['query_ru']
+
+
+def test_thecultt_uses_site_search():
+    rows = mp.retailer_links(['chanel сумка'], ['thecultt'])
+    assert rows
+    assert 'site:thecultt.com' in unquote(rows[0]['url'])
+
+
+def test_build_source_query_merges_context_for_foreign_sources():
+    out = mp.build_source_query(
+        ['hamington джемпер', 'серый хлопок casual'],
+        'aliexpress',
+    )
+    assert 'hamington' in out
+    assert 'sweater' in out
+    assert 'gray' in out
+    assert 'cotton' in out
+
+
+def test_build_source_query_drops_untranslated_cyrillic_tail():
+    out = mp.build_source_query(
+        ['сыворотка для лица vitamin c'],
+        'aliexpress',
+    )
+    assert 'serum' in out
+    assert 'vitamin' in out
+    assert not mp.has_untranslated_cyrillic(out)
+
+
 def test_retailer_links_keep_russian_query_for_lamoda():
     rows = mp.retailer_links(['hamington джемпер серый'], ["lamoda"])
     assert rows
@@ -145,6 +220,8 @@ class TestGeoLocation:
 
     def test_foreign_sources_for_ru(self):
         sources = mp.foreign_sources_for_geo('RU')
+        assert 'amazon' in sources
+        assert 'ebay' in sources
         assert 'aliexpress' in sources
         assert 'alibaba' in sources
 
@@ -159,10 +236,14 @@ class TestGeoLocation:
             assert mp.get_client_geo() == 'EU'
             sources = mp.foreign_sources_for_geo()
             assert 'aliexpress' in sources
+            assert 'idealo' in mp.localized_sources_for_geo()
         finally:
             mp.set_client_geo(original)
 
     def test_is_foreign_source(self):
+        assert mp.is_foreign_source('idealo')
+        assert mp.is_foreign_source('amazon')
+        assert mp.is_foreign_source('ebay')
         assert mp.is_foreign_source('aliexpress')
         assert mp.is_foreign_source('alibaba')
         assert not mp.is_foreign_source('wildberries')
@@ -180,10 +261,13 @@ class TestGeoFilterInRouting:
         try:
             mp.set_client_geo('RU')
             filtered = ms._filter_sources_by_geo(
-                ['wildberries', 'lamoda', 'aliexpress', 'alibaba']
+                ['wildberries', 'lamoda', 'amazon', 'ebay', 'aliexpress', 'alibaba', 'idealo']
             )
+            assert 'amazon' in filtered
+            assert 'ebay' in filtered
             assert 'aliexpress' in filtered
             assert 'alibaba' in filtered
+            assert 'idealo' not in filtered
         finally:
             mp.set_client_geo(original)
 
@@ -194,10 +278,13 @@ class TestGeoFilterInRouting:
         try:
             mp.set_client_geo('XX')
             filtered = ms._filter_sources_by_geo(
-                ['wildberries', 'lamoda', 'aliexpress', 'alibaba']
+                ['wildberries', 'lamoda', 'amazon', 'ebay', 'aliexpress', 'alibaba', 'idealo']
             )
+            assert 'amazon' not in filtered
+            assert 'ebay' not in filtered
             assert 'aliexpress' not in filtered
             assert 'alibaba' not in filtered
+            assert 'idealo' not in filtered
             assert 'wildberries' in filtered
             assert 'lamoda' in filtered
         finally:

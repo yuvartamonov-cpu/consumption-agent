@@ -284,6 +284,88 @@ with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
 - Уведомление о снижении цены
 - Интеграция с сервисами типа Price.ru
 
+## План рефакторинга поиска (18.05.2026)
+
+### Проблемы
+1. **Некорректный перевод на английский** — словарный QUERY_TRANSLATIONS теряет контекст и смысл
+2. **Поиск велосипеда на luxury-сайтах** — нет классификации источников по типу товара
+3. **Нет обучения** — система не запоминает, какие источники релевантны для данного типа товара
+
+### План изменений
+
+#### 1. ml_translate.py (новый)
+- Перевод запросов через LLM (GPT-4o-mini) с полным контекстом Memory Lane:
+  - name, description, style_tags, caption, brand, subcategory, category, material, color
+- Fallback на словарный перевод если LLM недоступен
+- Поддержка языков: en, de, kk/kz
+
+#### 2. search_sources — таблица в consumption.db
+- Структура:
+```sql
+CREATE TABLE search_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT UNIQUE NOT NULL,            -- 'lamoda', 'brandshop', 'oskelly', 'kaspi', 'amazon'
+  name TEXT NOT NULL,                  -- 'Lamoda', 'Oskelly', 'Amazon'
+  url_template TEXT,                   -- 'https://...{query}'
+  site_domain TEXT,                    -- 'lamoda.ru' (для site: поиска)
+  category_tags TEXT,                  -- JSON: ['одежда', 'обувь', 'аксессуары']
+  item_types TEXT,                     -- JSON: ['luxury_clothing', 'streetwear', 'footwear', 'cycling', 'electronics', ...]
+  geo TEXT DEFAULT 'RU',               -- 'RU', 'KZ', 'BY', 'EU', 'US', 'ALL'
+  tier TEXT DEFAULT 'aggregator',      -- 'manufacturer' | 'distributor' | 'aggregator' | 'marketplace'
+  score REAL DEFAULT 1.0,              -- обучаемый вес источника
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+```
+
+#### 3. ml_source_matcher.py (новый)
+- Заменяет жёсткие CATEGORY_SOURCES в ml_search_v2.py
+- `get_sources(item_type, geo, tier_filter=None, top_n=12)` — динамический подбор
+- `record_click(source_key, item_type)` — повышает score для пары (source, item_type)
+- `record_skip(source_key, item_type)` — понижает score
+- `get_item_type(attrs)` — определяет тип товара по Vision атрибутам
+  - (бренд люксовый → luxury, спортивный → sport, еда → grocery, техника → electronics)
+
+#### 4. ml_bandit.py — дообучение
+- Уже есть `ml_bandit.sample_sources()`, но он работает по категории, не по типу
+- Расширить: добавить `train_source_pair(source_key, item_type, reward)`
+- Reward = +1 при клике, -0.5 при игнорировании (пользователь выбрал другой источник)
+
+#### 5. ml_providers.py — новый build_source_query_bundle
+- Вместо слияния первых 12 токенов — собирать осмысленный запрос:
+  1. brand + name + model + article + primary_color + material + fit + gender
+  2. Если есть description — добавить ключевые слова из него
+  3. Перевести через ml_translate.translate_query() с контекстом
+- Убрать очистку кириллицы после брендов (Soulux не должен теряться)
+
+#### 6. route_sources() — динамический подбор
+- Жёсткий CATEGORY_SOURCES заменить на вызов ml_source_matcher.get_sources()
+- Фильтрация по гео (оставить)
+- Bandit-сортировка (оставить)
+- Подмешивать brand-site pinned
+
+### Приоритеты источников (tier)
+1. **manufacturer** — официальный сайт бренда (nike.com, apple.com)
+2. **distributor** — дистрибьютор/ритейлер (brandshop, sneakerhead, lamoda для одежды)
+3. **aggregator** — агрегатор (Яндекс.Маркет, Price.ru, Idealо)
+4. **marketplace** — маркетплейс (Ozon, Wildberries, Amazon) — в последнюю очередь
+
+### Примеры item_types
+- `luxury_clothing`, `streetwear`, `footwear`, `sportswear`, `formal_wear`
+- `electronics`, `computers`, `audio`, `kitchen_appliances`
+- `furniture`, `lighting`, `home_decor`
+- `cosmetics`, `skincare`, `perfume`
+- `cycling`, `sports_equipment`, `fitness`
+- `books`, `toys`, `pet_supplies`
+- `auto_parts`, `hardware`
+
+### Обучение системы
+1. При каждом клике пользователя на результат → `record_click(source_key, item_type)`
+2. При выборе другого результата → `record_skip(source_key, item_type)`
+3. Bandit периодически пересчитывает источники по типам товаров
+4. Со временем для `циклинг` исчезнут `leform` и `brandshop`, а появятся `velosipedov.ru`, `chainreactioncycles.com`
+
 ## Ключевые файлы
 
 | Файл | Назначение |
@@ -293,6 +375,11 @@ with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
 | `ml_search.py` | Поиск товаров из Memory Lane на маркетплейсах |
 | `telegram_bot.py` | Интеграция: photo_handler, /ml_last, /topic_set, /topic_list, кнопки |
 | `consumption.db` | SQLite: таблицы `memory_lane_items`, `media_assets`, `topic_rules`, `ml_reminders` |
+| `ml_translate.py` | **(новый)** LLM-перевод запросов с контекстом Memory Lane |
+| `ml_source_matcher.py` | **(новый)** Динамический подбор источников по типу товара + обучение |
+| `ml_providers.py` | API-провайдеры и link-only источники (обновляется) |
+| `ml_search_v2.py` | Оркестратор поиска (обновляется: route_sources → ml_source_matcher) |
+| `ml_bandit.py` | Thompson-sampling сортировка источников (обновляется: обучение пар source↔item_type) |
 
 ## Диагностика
 

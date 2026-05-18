@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import html as _html
+import json
 import logging
 import re
 import sqlite3
@@ -46,22 +47,54 @@ log = logging.getLogger(__name__)
 # Источники по категориям. Иностранные маркетплейсы помечены тегом _foreign_
 # и фильтруются по геолокации клиента в route_sources().
 CATEGORY_SOURCES: dict[str, list[str]] = {
-    'одежда':    ['lamoda', 'brandshop', 'wildberries', 'yandex_market', 'aliexpress', 'alibaba'],
-    'обувь':     ['lamoda', 'brandshop', 'sneakerhead', 'wildberries', 'yandex_market', 'aliexpress'],
-    'техника':   ['dns', 'citilink', 'mvideo', 'yandex_market', 'wildberries', 'aliexpress', 'alibaba'],
-    'мебель':    ['hoff', 'mrdoors', 'ikea', 'yandex_market', 'wildberries', 'alibaba'],
-    'интерьер':  ['hoff', 'ikea', 'yandex_market', 'wildberries', 'aliexpress', 'alibaba'],
-    'косметика': ['goldapple', 'iledebeaute', 'wildberries', 'yandex_market', 'aliexpress'],
-    'аксессуары':['lamoda', 'brandshop', 'wildberries', 'yandex_market', 'aliexpress', 'alibaba'],
+    'одежда': [
+        'lamoda', 'brandshop', 'leform', 'peakstore',
+        'tsum', 'farfetch', 'mytheresa', 'luisaviaroma', 'netaporter',
+        'oskelly', 'vestiairecollective', 'thecultt',
+        'yandex_market', 'wildberries', 'amazon', 'ebay', 'aliexpress', 'alibaba',
+    ],
+    'обувь': [
+        'sneakerhead', 'rendezvous', 'brandshop', 'lamoda',
+        'tsum', 'farfetch', 'mytheresa', 'luisaviaroma',
+        'stockx', 'goat', 'oskelly', 'vestiairecollective',
+        'yandex_market', 'wildberries', 'amazon', 'ebay', 'aliexpress',
+    ],
+    'техника': [
+        'dns', 'citilink', 'mvideo', 'restore',
+        'yandex_market', 'wildberries', 'amazon', 'ebay', 'aliexpress', 'alibaba',
+    ],
+    'мебель': [
+        'hoff', 'mrdoors', 'ikea', 'inmyroom', 'divan_ru',
+        'yandex_market', 'wildberries', 'amazon', 'ebay', 'alibaba',
+    ],
+    'интерьер': [
+        'hoff', 'ikea', 'inmyroom', 'divan_ru',
+        'yandex_market', 'wildberries', 'amazon', 'ebay', 'aliexpress', 'alibaba',
+    ],
+    'косметика': [
+        'goldapple', 'iledebeaute', 'rivegauche',
+        'cultbeauty', 'lookfantastic', 'sephora',
+        'yandex_market', 'wildberries', 'amazon', 'ebay', 'aliexpress',
+    ],
+    'аксессуары': [
+        'tsum', 'oskelly', 'thecultt', 'poisondrop', 'rendezvous',
+        'farfetch', 'mytheresa', 'luisaviaroma', 'netaporter',
+        'vestiairecollective', 'grailed', 'stockx', 'goat',
+        'lamoda', 'brandshop',
+        'yandex_market', 'wildberries', 'amazon', 'ebay', 'aliexpress', 'alibaba',
+    ],
 }
-DEFAULT_SOURCES = ['wildberries', 'yandex_market', 'lamoda', 'aliexpress', 'alibaba']
+DEFAULT_SOURCES = ['lamoda', 'brandshop', 'yandex_market', 'wildberries', 'amazon', 'ebay', 'aliexpress', 'alibaba']
 
 
 def _filter_sources_by_geo(sources: list[str]) -> list[str]:
-    """Убирает иностранные источники, недоступные в текущем регионе."""
+    """Убирает foreign-источники, недоступные в текущем регионе."""
     try:
         import ml_providers
-        allowed_foreign = set(ml_providers.foreign_sources_for_geo())
+        allowed_foreign = (
+            set(ml_providers.foreign_sources_for_geo()) |
+            set(ml_providers.localized_sources_for_geo())
+        )
         return [
             s for s in sources
             if not ml_providers.is_foreign_source(s) or s in allowed_foreign
@@ -69,29 +102,93 @@ def _filter_sources_by_geo(sources: list[str]) -> list[str]:
     except ImportError:
         return sources
 
+
+def _append_local_sources_by_geo(sources: list[str]) -> list[str]:
+    """Добавляет локальные агрегаторы для текущего региона."""
+    try:
+        import ml_providers
+        extras = ml_providers.localized_sources_for_geo()
+    except ImportError:
+        extras = []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for source in list(extras) + list(sources):
+        key = (source or '').strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(source)
+    return out
+
 # How many query variants we ask each source to try (most-specific first)
-QUERIES_PER_SOURCE = 3
+QUERIES_PER_SOURCE = 5
 
 _NONWORD_RX = re.compile(r'[^\w]+', flags=re.UNICODE)
+_CONTEXT_WORD_RX = re.compile(r"[\wА-Яа-яЁё][\wА-Яа-яЁё-]*", flags=re.UNICODE)
+_CONTEXT_STOPWORDS = {
+    'и', 'или', 'для', 'под', 'над', 'без', 'при', 'как', 'что', 'это',
+    'этот', 'эта', 'эти', 'того', 'такой', 'такая', 'такое', 'очень',
+    'также', 'имеет', 'имеются', 'несколько', 'подходит', 'идеально',
+    'предназначен', 'предназначена', 'предназначенный', 'предназначенное',
+    'подходит', 'подходит', 'помогает', 'снятия', 'расслабления', 'работы',
+    'можно', 'может', 'есть', 'the', 'and', 'with', 'for', 'from',
+    'нравится', 'запомни', 'найди', 'похожее',
+}
 
 
 def route_sources(
     attrs: dict,
     *,
-    top_n: int = 7,
+    top_n: int = 12,
     conn: Optional[sqlite3.Connection] = None,
 ) -> list[str]:
     """Pick marketplaces appropriate for the item's category, plus the
     brand site if a brand was recognised.
+
+    Использует ml_source_matcher для динамического подбора источников
+    по типу/категории товара с учётом tier-приоритета и истории кликов.
 
     When `conn` is provided, the bandit (Stage 6) reorders the candidate
     list by Thompson sampling — sources that historically led to user
     clicks for this category float to the top. Brand site stays pinned
     at position 0.
     """
+    # Пробуем ml_source_matcher (динамический подбор)
+    try:
+        from ml_source_matcher import (
+            ensure_schema, seed_sources, get_sources
+        )
+        try:
+            geo = ml_providers.get_client_geo()
+        except Exception:
+            geo = 'RU'
+        if conn is not None:
+            try:
+                ensure_schema(conn)
+                seed_sources(conn)
+                matched = get_sources(attrs, conn=conn, geo=geo, top_n=top_n)
+                base = [s['key'] for s in matched]
+                if base:
+                    if attrs.get('brand'):
+                        base.insert(0, f"brand:{attrs['brand']}")
+                    log.info(
+                        "ml_search_v2: route_sources via matcher: %d sources",
+                        len(base),
+                    )
+                    return base
+            except Exception as e:
+                log.warning(
+                    "ml_search_v2: ml_source_matcher failed, "
+                    "falling back to static categories: %s", e)
+    except ImportError:
+        log.debug("ml_search_v2: ml_source_matcher not available, "
+                   "falling back to static categories")
+
+    # Fallback: статический список
     cat = (attrs.get('category') or '').lower()
     base = list(CATEGORY_SOURCES.get(cat, DEFAULT_SOURCES))
-    # Фильтруем иностранные маркетплейсы по геолокации клиента
+    base = _append_local_sources_by_geo(base)
     base = _filter_sources_by_geo(base)
     if conn is not None:
         try:
@@ -123,6 +220,15 @@ async def _default_attribute_extractor(photo_path: Optional[str], caption: str) 
     return await ml_attributes.extract_attributes_async(photo_path, caption)
 
 
+_CANDIDATES_CONTEXT: dict | None = None
+
+
+def set_candidates_context(ctx: dict | None) -> None:
+    """Устанавливает контекст для LLM-перевода в composite_provider."""
+    global _CANDIDATES_CONTEXT
+    _CANDIDATES_CONTEXT = ctx
+
+
 async def _default_candidates_provider(
     queries: list[str],
     sources: list[str],
@@ -132,9 +238,15 @@ async def _default_candidates_provider(
 
     Fetches real candidates from Wildberries (public API), Ozon (if
     cookies available), and Yandex Market (link-only fallback).
+
+    Передаёт _CANDIDATES_CONTEXT в composite_provider.
     """
     try:
         import ml_providers
+        ctx = _CANDIDATES_CONTEXT
+        if ctx:
+            return await ml_providers.composite_provider(
+                queries, sources, photo_path, context=ctx)
         return await ml_providers.composite_provider(queries, sources, photo_path)
     except ImportError:
         log.warning("ml_search_v2: ml_providers not available, returning empty")
@@ -205,6 +317,103 @@ def _contains_normalized_phrase(haystack: Any, needle: Any) -> bool:
     if not h:
         return False
     return f' {n} ' in f' {h} '
+
+
+def _json_list(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        return [str(v).strip() for v in raw if str(v).strip()]
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(v).strip() for v in data if str(v).strip()]
+
+
+def _extract_context_keywords(text: Any, *, limit: int = 8) -> list[str]:
+    if not text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in _CONTEXT_WORD_RX.findall(str(text).replace('#', ' ')):
+        normalized = _normalize_for_match(token)
+        if not normalized or normalized in seen:
+            continue
+        if normalized in _CONTEXT_STOPWORDS:
+            continue
+        if len(normalized) < 3 and not normalized.isdigit():
+            continue
+        seen.add(normalized)
+        out.append(token.strip())
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _merge_query_tokens(*groups: list[str], max_tokens: int = 12) -> str:
+    out: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for token in group:
+            normalized = _normalize_for_match(token)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(str(token).strip())
+            if len(out) >= max_tokens:
+                return ' '.join(out)
+    return ' '.join(out)
+
+
+def _build_item_context_queries(item: dict, attrs: dict) -> list[tuple[str, str]]:
+    """Build extra search queries from Memory Lane text fields.
+
+    Vision attributes stay primary for marketplace APIs, but description/style
+    context helps foreign link-only sources align with the stored item text.
+    """
+    brand = (attrs.get('brand') or item.get('brand') or '').strip()
+    base_name = (
+        (item.get('name') or '').strip()
+        or (attrs.get('subcategory') or '').strip()
+        or (attrs.get('category') or '').strip()
+    )
+    core = [v for v in (
+        brand,
+        base_name,
+        attrs.get('model'),
+        attrs.get('article'),
+        attrs.get('primary_color'),
+        attrs.get('material'),
+    ) if v]
+    style_tags = _json_list(item.get('style_tags'))
+    description_tokens = _extract_context_keywords(item.get('description'), limit=8)
+    caption_tokens = _extract_context_keywords(item.get('caption'), limit=4)
+    style_tokens = _extract_context_keywords(' '.join(style_tags), limit=4)
+
+    queries: list[tuple[str, str]] = []
+    rich_context = _merge_query_tokens(
+        core,
+        description_tokens,
+        style_tokens,
+        caption_tokens,
+        max_tokens=12,
+    )
+    if rich_context:
+        queries.append((rich_context, 'memory_lane_context'))
+
+    description_context = _merge_query_tokens(
+        [v for v in (brand, base_name) if v],
+        description_tokens,
+        style_tokens,
+        max_tokens=10,
+    )
+    if description_context and description_context != rich_context:
+        queries.append((description_context, 'description_context'))
+
+    return queries
 
 
 def _select_provider_queries(
@@ -391,6 +600,11 @@ async def search_ml_item_v2(
         existing_texts = {q for q, _ in expanded}
         if item_name not in existing_texts:
             expanded.insert(0, (item_name, 'item_name'))
+    existing_texts = {q for q, _ in expanded}
+    for query, tag in _build_item_context_queries(item, attrs):
+        if query not in existing_texts:
+            expanded.append((query, tag))
+            existing_texts.add(query)
     result['queries'] = expanded
     sources = route_sources(attrs, conn=conn)
     result['sources_used'] = sources
@@ -401,6 +615,21 @@ async def search_ml_item_v2(
 
     # 5. Federated search
     queries = _select_provider_queries(expanded, attrs)
+    # Устанавливаем контекст для LLM-перевода запросов в composite_provider
+    set_candidates_context({
+        'name': item.get('name') or attrs.get('subcategory'),
+        'brand': attrs.get('brand') or item.get('brand'),
+        'category': attrs.get('category'),
+        'subcategory': attrs.get('subcategory'),
+        'description': item.get('description'),
+        'style_tags': item.get('style_tags'),
+        'caption': item.get('caption'),
+        'primary_color': attrs.get('primary_color'),
+        'material': attrs.get('material'),
+        'fit': attrs.get('fit'),
+        'gender': attrs.get('gender'),
+        'season': attrs.get('season'),
+    })
     try:
         candidates = await fetcher(queries, sources, item.get('file_path'))
     except Exception as e:
@@ -544,6 +773,14 @@ def _format_group(i: int, g: dict) -> str:
     anomaly_line = _fmt_anomaly(g.get('anomaly'))
     if anomaly_line:
         line += f"\n   {anomaly_line}"
+    if g.get('_link_only') and g.get('query_ru'):
+        line += f"\n   🔎 RU: {_esc(g['query_ru'][:80])}"
+    if g.get('_link_only') and g.get('query_en') and g.get('query_en') != g.get('query_ru'):
+        line += f"\n   🔎 EN: {_esc(g['query_en'][:80])}"
+    if (g.get('_link_only') and g.get('query_local')
+            and g.get('query_local') not in {g.get('query_ru'), g.get('query_en')}):
+        lang = (g.get('query_lang') or 'local').upper()
+        line += f"\n   🔎 {lang}: {_esc(g['query_local'][:80])}"
     if url:
         line += f"\n   <a href=\"{_esc(url)}\">🔗 открыть</a>"
     return line

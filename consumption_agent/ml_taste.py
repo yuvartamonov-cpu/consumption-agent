@@ -48,10 +48,17 @@ SOURCE_TRUST: dict[str, float] = {
     'brand_site': 1.00,
     # Tier 2 — authorized retailers
     'lamoda': 0.90, 'brandshop': 0.90, 'sneakerhead': 0.90,
+    'leform': 0.90, 'peakstore': 0.90, 'tsum': 0.90,
+    'rendezvous': 0.88, 'poisondrop': 0.88,
+    'farfetch': 0.88, 'mytheresa': 0.88, 'luisaviaroma': 0.88,
+    'netaporter': 0.88, 'rivegauche': 0.86,
     # Tier 4 — category specialists (medium-high)
     'dns': 0.85, 'citilink': 0.85, 'mvideo': 0.85,
+    'restore': 0.85,
     'hoff': 0.85, 'mrdoors': 0.85, 'ikea': 0.85,
+    'inmyroom': 0.85, 'divanru': 0.85, 'divan_ru': 0.85,
     'goldapple': 0.85, 'iledebeaute': 0.85,
+    'cultbeauty': 0.82, 'lookfantastic': 0.82, 'sephora': 0.82,
     # Tier 3 — generalist marketplaces
     'ozon': 0.70, 'wildberries': 0.70, 'wb': 0.70,
     'yandex_market': 0.70, 'yandex market': 0.70, 'ym': 0.70,
@@ -59,6 +66,8 @@ SOURCE_TRUST: dict[str, float] = {
     'aliexpress': 0.60, 'ali express': 0.60,
     'alibaba': 0.55,
     # Tier 5 — C2C / grey market
+    'oskelly': 0.62, 'thecultt': 0.62, 'vestiairecollective': 0.60,
+    'grailed': 0.55, 'stockx': 0.65, 'goat': 0.65,
     'avito': 0.40, 'юла': 0.40, 'youla': 0.40,
 }
 

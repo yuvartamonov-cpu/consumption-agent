@@ -245,7 +245,10 @@ def canonicalize(candidates: list[dict], attrs: dict | None = None) -> list[dict
                 sources.append(src)
 
         group_row: dict[str, Any] = {
-            **{k: primary.get(k) for k in ('title', 'name', 'url', 'image_url')},
+            **{k: primary.get(k) for k in (
+                'title', 'name', 'url', 'image_url',
+                'query_ru', 'query_en', 'query_local', 'query_lang', '_link_only',
+            )},
             'store': primary.get('store'),
             'price': primary.get('price'),
             'fingerprint': fp,

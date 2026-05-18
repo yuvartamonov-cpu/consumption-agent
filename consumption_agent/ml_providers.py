@@ -55,32 +55,97 @@ RETAILER_SEARCH_URLS = {
     'lamoda': 'https://www.lamoda.ru/catalogsearch/result/?q={query}',
     'brandshop': 'https://brandshop.ru/search/?q={query}',
     'sneakerhead': 'https://sneakerhead.ru/search/?q={query}',
+    'leform': 'https://leform.ru/search/?q={query}',
+    'peakstore': 'https://peakstore.ru/search/?q={query}',
     'dns': 'https://www.dns-shop.ru/search/?q={query}',
     'citilink': 'https://www.citilink.ru/search/?text={query}',
     'mvideo': 'https://www.mvideo.ru/search?text={query}',
+    'restore': 'https://www.restore.ru/search/?q={query}',
     'hoff': 'https://hoff.ru/search/?q={query}',
     'mrdoors': 'https://www.mrdoors.ru/search/?q={query}',
     'ikea': 'https://www.ikea.com/ru/ru/search/?q={query}',
+    'inmyroom': 'https://www.inmyroom.ru/search?query={query}',
+    'divan_ru': 'https://www.divan.ru/search?query={query}',
     'goldapple': 'https://goldapple.ru/catalogsearch/result/?q={query}',
     'iledebeaute': 'https://iledebeaute.ru/search/?q={query}',
+    'rivegauche': 'https://rivegauche.ru/search?text={query}',
+    'kaspi': 'https://kaspi.kz/shop/search/?text={query}',
+    'satu_kz': 'https://satu.kz/search?search_term={query}',
+    'onliner': 'https://catalog.onliner.by/search?query={query}',
+    'idealo': 'https://www.idealo.de/preisvergleich/MainSearchProductCategory.html?q={query}',
+    'billiger': 'https://www.billiger.de/search?searchterm={query}',
+    'google_shopping_us': 'https://www.google.com/search?tbm=shop&gl=us&hl=en&q={query}',
+    'shopzilla': 'https://www.shopzilla.com/search?keyword={query}',
+    'amazon': 'https://www.amazon.com/s?k={query}',
+    'ebay': 'https://www.ebay.com/sch/i.html?_nkw={query}',
     'aliexpress': 'https://www.aliexpress.com/wholesale?SearchText={query}',
     'alibaba': 'https://www.alibaba.com/trade/search?SearchText={query}',
+}
+
+RETAILER_SITE_SEARCH_DOMAINS = {
+    'oskelly': 'oskelly.ru',
+    'thecultt': 'thecultt.com',
+    'tsum': 'tsum.ru',
+    'farfetch': 'farfetch.com',
+    'mytheresa': 'mytheresa.com',
+    'luisaviaroma': 'luisaviaroma.com',
+    'netaporter': 'net-a-porter.com',
+    'vestiairecollective': 'vestiairecollective.com',
+    'grailed': 'grailed.com',
+    'stockx': 'stockx.com',
+    'goat': 'goat.com',
+    'poisondrop': 'poisondrop.ru',
+    'rendezvous': 'rendez-vous.ru',
+    'cultbeauty': 'cultbeauty.com',
+    'lookfantastic': 'lookfantastic.com',
+    'sephora': 'sephora.com',
 }
 
 RETAILER_TITLES = {
     'lamoda': 'Lamoda',
     'brandshop': 'Brandshop',
     'sneakerhead': 'Sneakerhead',
+    'leform': 'Leform',
+    'peakstore': 'Peak Store',
     'dns': 'DNS',
     'citilink': 'Citilink',
     'mvideo': 'М.Видео',
+    'restore': 'restore:',
     'hoff': 'Hoff',
     'mrdoors': 'Mr.Doors',
     'ikea': 'IKEA',
+    'inmyroom': 'InMyRoom',
+    'divan_ru': 'Divan.ru',
     'goldapple': 'Золотое Яблоко',
     'iledebeaute': 'Иль де Ботэ',
+    'rivegauche': 'Рив Гош',
+    'kaspi': 'Kaspi',
+    'satu_kz': 'Satu.kz',
+    'onliner': 'Onliner',
+    'idealo': 'Idealo',
+    'billiger': 'Billiger',
+    'google_shopping_us': 'Google Shopping US',
+    'shopzilla': 'Shopzilla',
+    'amazon': 'Amazon',
+    'ebay': 'eBay',
     'aliexpress': 'AliExpress',
     'alibaba': 'Alibaba',
+    'oskelly': 'Oskelly',
+    'thecultt': 'The Cultt',
+    'tsum': 'ЦУМ',
+    'farfetch': 'Farfetch',
+    'mytheresa': 'Mytheresa',
+    'luisaviaroma': 'Luisaviaroma',
+    'netaporter': 'Net-a-Porter',
+    'vestiairecollective': 'Vestiaire Collective',
+    'grailed': 'Grailed',
+    'stockx': 'StockX',
+    'goat': 'GOAT',
+    'poisondrop': 'Poison Drop',
+    'rendezvous': 'Rendez-Vous',
+    'cultbeauty': 'Cult Beauty',
+    'lookfantastic': 'Lookfantastic',
+    'sephora': 'Sephora',
 }
 
 WEB_SEARCH_ENGINES = [
@@ -88,17 +153,83 @@ WEB_SEARCH_ENGINES = [
     ('Yandex', 'https://yandex.ru/search/?text={query}'),
 ]
 
-FOREIGN_RETAILERS = frozenset({'aliexpress', 'alibaba'})
+NON_RU_QUERY_SOURCES = frozenset({
+    'amazon', 'ebay', 'aliexpress', 'alibaba',
+    'idealo', 'billiger', 'google_shopping_us', 'shopzilla',
+    'farfetch', 'mytheresa', 'luisaviaroma', 'netaporter',
+    'vestiairecollective', 'grailed', 'stockx', 'goat',
+    'cultbeauty', 'lookfantastic', 'sephora',
+})
+FOREIGN_RETAILERS = frozenset({
+    'amazon', 'ebay', 'aliexpress', 'alibaba',
+    'idealo', 'billiger', 'google_shopping_us', 'shopzilla',
+    'kaspi', 'satu_kz', 'onliner',
+    'farfetch', 'mytheresa', 'luisaviaroma', 'netaporter',
+    'vestiairecollective', 'grailed', 'stockx', 'goat',
+    'cultbeauty', 'lookfantastic', 'sephora',
+})
 
 # ---------------------------------------------------------------------------
 # Геолокация: какие иностранные ритейлеры доступны в каком регионе
 # ---------------------------------------------------------------------------
 GEO_FOREIGN_SOURCES: dict[str, list[str]] = {
-    'RU': ['aliexpress', 'alibaba'],          # Китайские маркетплейсы доступны в РФ
-    'KZ': ['aliexpress', 'alibaba'],
-    'BY': ['aliexpress', 'alibaba'],
-    'EU': ['amazon_de', 'aliexpress'],        # Заготовка на будущее
-    'US': ['amazon', 'aliexpress', 'alibaba'],
+    'RU': ['amazon', 'ebay', 'aliexpress', 'alibaba', 'farfetch', 'mytheresa',
+           'luisaviaroma', 'netaporter', 'vestiairecollective', 'grailed',
+           'stockx', 'goat', 'cultbeauty', 'lookfantastic', 'sephora'],
+    'KZ': ['amazon', 'ebay', 'aliexpress', 'alibaba', 'farfetch', 'mytheresa',
+           'luisaviaroma', 'netaporter', 'vestiairecollective', 'grailed',
+           'stockx', 'goat', 'cultbeauty', 'lookfantastic', 'sephora'],
+    'BY': ['amazon', 'ebay', 'aliexpress', 'alibaba', 'farfetch', 'mytheresa',
+           'luisaviaroma', 'netaporter', 'vestiairecollective', 'grailed',
+           'stockx', 'goat', 'cultbeauty', 'lookfantastic', 'sephora'],
+    'EU': ['amazon', 'ebay', 'aliexpress', 'farfetch', 'mytheresa',
+           'luisaviaroma', 'netaporter', 'vestiairecollective', 'grailed',
+           'stockx', 'goat', 'cultbeauty', 'lookfantastic', 'sephora'],
+    'US': ['amazon', 'ebay', 'aliexpress', 'alibaba', 'farfetch', 'mytheresa',
+           'luisaviaroma', 'netaporter', 'vestiairecollective', 'grailed',
+           'stockx', 'goat', 'cultbeauty', 'lookfantastic', 'sephora'],
+}
+GEO_LOCAL_AGGREGATORS: dict[str, list[str]] = {
+    'RU': [],
+    'KZ': ['kaspi', 'satu_kz'],
+    'BY': ['onliner'],
+    'EU': ['idealo', 'billiger'],
+    'US': ['google_shopping_us', 'shopzilla'],
+}
+SOURCE_QUERY_LANGUAGE: dict[str, str] = {
+    'amazon': 'en',
+    'ebay': 'en',
+    'aliexpress': 'en',
+    'alibaba': 'en',
+    'google_shopping_us': 'en',
+    'shopzilla': 'en',
+    'idealo': 'de',
+    'billiger': 'de',
+    'kaspi': 'ru',
+    'satu_kz': 'ru',
+    'onliner': 'ru',
+    'oskelly': 'ru',
+    'thecultt': 'ru',
+    'tsum': 'ru',
+    'poisondrop': 'ru',
+    'rendezvous': 'ru',
+    'leform': 'ru',
+    'peakstore': 'ru',
+    'restore': 'ru',
+    'rivegauche': 'ru',
+    'inmyroom': 'ru',
+    'divan_ru': 'ru',
+    'farfetch': 'en',
+    'mytheresa': 'en',
+    'luisaviaroma': 'en',
+    'netaporter': 'en',
+    'vestiairecollective': 'en',
+    'grailed': 'en',
+    'stockx': 'en',
+    'goat': 'en',
+    'cultbeauty': 'en',
+    'lookfantastic': 'en',
+    'sephora': 'en',
 }
 # Текущий регион клиента (по умолчанию RU)
 _CLIENT_GEO: str = os.environ.get('CLIENT_GEO', 'RU').upper()
@@ -121,9 +252,20 @@ def foreign_sources_for_geo(geo: str | None = None) -> list[str]:
     return GEO_FOREIGN_SOURCES.get(region, [])
 
 
+def localized_sources_for_geo(geo: str | None = None) -> list[str]:
+    """Локальные агрегаторы для региона клиента."""
+    region = (geo or _CLIENT_GEO).upper()
+    return GEO_LOCAL_AGGREGATORS.get(region, [])
+
+
 def is_foreign_source(source: str) -> bool:
     """Проверяет, является ли источник иностранным для текущего региона."""
     return source.lower() in FOREIGN_RETAILERS
+
+
+def source_query_language(source: str) -> str:
+    """Язык запроса для конкретного link-only источника."""
+    return SOURCE_QUERY_LANGUAGE.get((source or '').strip().lower(), 'ru')
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +311,9 @@ QUERY_TRANSLATIONS = {
     'проектор': 'projector', 'принтер': 'printer', 'роутер': 'router',
     'камера': 'camera', 'объектив': 'lens', 'штатив': 'tripod',
     'микрофон': 'microphone', 'веб-камера': 'webcam',
+    'аппарат': 'device', 'массажер': 'massager', 'массажёр': 'massager',
+    'массаж': 'massage', 'массажа': 'massage', 'нога': 'foot', 'ног': 'foot',
+    'режим': 'mode', 'режимы': 'modes',
     # ── Мебель / интерьер ──
     'диван': 'sofa', 'кресло': 'armchair', 'стол': 'table', 'стул': 'chair',
     'шкаф': 'wardrobe', 'комод': 'dresser', 'полка': 'shelf',
@@ -177,6 +322,9 @@ QUERY_TRANSLATIONS = {
     'ковёр': 'carpet', 'ковер': 'carpet', 'штора': 'curtain',
     'шторы': 'curtains', 'подушка': 'pillow', 'одеяло': 'blanket',
     'плед': 'throw blanket', 'ваза': 'vase', 'картина': 'painting',
+    'подвесной': 'pendant', 'геометрический': 'geometric',
+    'современный': 'modern', 'современная': 'modern',
+    'металл': 'metal', 'стекло': 'glass',
     # ── Косметика / уход ──
     'крем': 'cream', 'сыворотка': 'serum', 'тоник': 'toner',
     'маска': 'mask', 'шампунь': 'shampoo', 'бальзам': 'conditioner',
@@ -186,6 +334,8 @@ QUERY_TRANSLATIONS = {
     'дезодорант': 'deodorant', 'лосьон': 'lotion',
     # ── Цвета ──
     'серый': 'gray', 'серая': 'gray', 'серое': 'gray', 'серые': 'gray',
+    'темно-синий': 'dark blue', 'тёмно-синий': 'dark blue',
+    'темно-синяя': 'dark blue', 'тёмно-синяя': 'dark blue',
     'черный': 'black', 'черная': 'black', 'черное': 'black', 'чёрный': 'black',
     'белый': 'white', 'белая': 'white', 'белое': 'white',
     'синий': 'blue', 'синяя': 'blue', 'синее': 'blue', 'голубой': 'light blue',
@@ -213,6 +363,8 @@ QUERY_TRANSLATIONS = {
     'трикотаж': 'knit', 'трикотажный': 'knit',
     'металлический': 'metal', 'деревянный': 'wood', 'пластиковый': 'plastic',
     'стеклянный': 'glass', 'керамический': 'ceramic',
+    'сетчатый': 'mesh', 'сетчатая': 'mesh',
+    'подкладка': 'lining', 'молния': 'zipper', 'молниями': 'zipper',
     # ── Fit / крой ──
     'облегающий': 'slim fit', 'свободный': 'loose fit', 'прямой': 'straight',
     'приталенный': 'fitted', 'оверсайз': 'oversize', 'удлинённый': 'longline',
@@ -249,6 +401,7 @@ _QUERY_WORD_RX = re.compile(r"[\wА-Яа-яЁё][\wА-Яа-яЁё-]*", re.UNICOD
 
 # Regex: обнаружить оставшуюся кириллицу (после перевода)
 _CYRILLIC_RX = re.compile(r'[А-Яа-яЁё]')
+_LATIN_RX = re.compile(r'[A-Za-z]')
 
 # Суффиксы русских прилагательных для стемминга (убираем окончание, ищем основу)
 _RU_ADJ_SUFFIXES = (
@@ -285,35 +438,273 @@ def _stem_lookup(word: str) -> str | None:
     return None
 
 
-def translate_query_for_source(query: str, source: str) -> str:
-    """Переводит русские товарные термины в английские для foreign маркетплейсов.
+EN_TO_DE = {
+    'sweater': 'pullover',
+    'pullover': 'pullover',
+    'cardigan': 'strickjacke',
+    'hoodie': 'hoodie',
+    'sweatshirt': 'sweatshirt',
+    't-shirt': 't-shirt',
+    'shirt': 'hemd',
+    'coat': 'mantel',
+    'jacket': 'jacke',
+    'dress': 'kleid',
+    'pants': 'hose',
+    'jeans': 'jeans',
+    'sneakers': 'sneaker',
+    'trainers': 'sneaker',
+    'shoes': 'schuhe',
+    'boots': 'stiefel',
+    'loafers': 'loafer',
+    'bag': 'tasche',
+    'backpack': 'rucksack',
+    'wallet': 'geldbeutel',
+    'watch': 'uhr',
+    'headphones': 'kopfhorer',
+    'laptop': 'laptop',
+    'smartphone': 'smartphone',
+    'phone': 'telefon',
+    'tablet': 'tablet',
+    'keyboard': 'tastatur',
+    'mouse': 'maus',
+    'speaker': 'lautsprecher',
+    'charger': 'ladegerat',
+    'case': 'hulle',
+    'massager': 'massagegerat',
+    'massage': 'massage',
+    'foot': 'fuss',
+    'mode': 'modus',
+    'modes': 'modi',
+    'sofa': 'sofa',
+    'armchair': 'sessel',
+    'table': 'tisch',
+    'chair': 'stuhl',
+    'wardrobe': 'kleiderschrank',
+    'bed': 'bett',
+    'mirror': 'spiegel',
+    'lamp': 'lampe',
+    'serum': 'serum',
+    'cream': 'creme',
+    'perfume': 'parfum',
+    'gray': 'grau',
+    'black': 'schwarz',
+    'white': 'weiss',
+    'blue': 'blau',
+    'light blue': 'hellblau',
+    'red': 'rot',
+    'green': 'grun',
+    'yellow': 'gelb',
+    'brown': 'braun',
+    'beige': 'beige',
+    'pink': 'rosa',
+    'purple': 'lila',
+    'orange': 'orange',
+    'gold': 'gold',
+    'silver': 'silber',
+    'leather': 'leder',
+    'suede': 'wildleder',
+    'cotton': 'baumwolle',
+    'wool': 'wolle',
+    'linen': 'leinen',
+    'silk': 'seide',
+    'polyester': 'polyester',
+    'metal': 'metall',
+    'glass': 'glas',
+    'ceramic': 'keramik',
+    'mesh': 'netz',
+    'zipper': 'reissverschluss',
+    'oversize': 'oversize',
+    'cropped': 'cropped',
+    'winter': 'winter',
+    'summer': 'sommer',
+    'spring': 'fruhling',
+    'autumn': 'herbst',
+    'all-season': 'ganzjahres',
+    'insulated': 'gefuttert',
+    'women': 'damen',
+    'men': 'herren',
+    'kids': 'kinder',
+    'unisex': 'unisex',
+    'casual': 'casual',
+    'sporty': 'sportlich',
+    'classic': 'klassisch',
+    'business': 'business',
+    'vintage': 'vintage',
+    'minimalist': 'minimalistisch',
+}
 
-    Бренды (латиница) и неизвестные слова сохраняются как есть.
-    Служебные слова (купить, цена, недорого) удаляются.
-    Поддерживает стемминг русских прилагательных (замшевые → suede).
-    """
+
+def _translate_query_to_english(query: str) -> str:
     if not query:
-        return query
-    src = (source or "").strip().lower()
-    if src not in FOREIGN_RETAILERS:
         return query
 
     def repl(match: re.Match[str]) -> str:
         word = match.group(0)
         translation = _stem_lookup(word)
         if translation is not None:
-            return translation  # может быть '' для служебных слов
+            return translation
         return word
 
     translated = _QUERY_WORD_RX.sub(repl, query)
-    # Убираем множественные пробелы и мусорные символы после удаления слов
     translated = re.sub(r"\s+", " ", translated).strip()
     return translated or query
+
+
+def _translate_english_to_locale(text: str, lang: str) -> str:
+    if not text:
+        return text
+    if lang == 'en':
+        return text
+    if lang == 'de':
+        out = text
+        for src, dst in sorted(EN_TO_DE.items(), key=lambda kv: len(kv[0]), reverse=True):
+            out = re.sub(rf'(?<!\\w){re.escape(src)}(?!\\w)', dst, out, flags=re.IGNORECASE)
+        out = re.sub(r"\s+", " ", out).strip()
+        return out or text
+    return text
+
+
+def translate_query_for_source(query: str, source: str) -> str:
+    """Переводит запрос в язык конкретного источника."""
+    if not query:
+        return query
+    src = (source or "").strip().lower()
+    lang = source_query_language(src)
+    if src not in NON_RU_QUERY_SOURCES and lang == 'ru':
+        return query
+    english = _translate_query_to_english(query)
+    if lang == 'en':
+        return english
+    return _translate_english_to_locale(english, lang)
 
 
 def has_untranslated_cyrillic(text: str) -> bool:
     """Проверяет, остались ли непереведённые кириллические слова (кроме брендов)."""
     return bool(_CYRILLIC_RX.search(text))
+
+
+def _drop_cyrillic_tokens(text: str) -> str:
+    tokens = _QUERY_WORD_RX.findall(text or '')
+    kept = [token for token in tokens if not _CYRILLIC_RX.search(token)]
+    return ' '.join(kept).strip()
+
+
+def _drop_non_latin_tokens(text: str) -> str:
+    tokens = _QUERY_WORD_RX.findall(text or '')
+    kept = [token for token in tokens if _LATIN_RX.search(token)]
+    return ' '.join(kept).strip()
+
+
+def build_source_query_bundle(
+    queries: Sequence[str],
+    source: str,
+    *,
+    max_tokens: int = 12,
+    context: dict | None = None,
+) -> dict[str, str]:
+    """Собирает запрос и его RU/EN/local варианты для конкретного источника.
+
+    Использует LLM-перевод (ml_translate) для осмысленного перевода
+    с полным контекстом Memory Lane.
+    """
+    cleaned = [q.strip() for q in queries if q and q.strip()]
+    if not cleaned:
+        return {'query': '', 'query_ru': '', 'query_en': '',
+                'query_local': '', 'query_lang': 'ru'}
+
+    # Сажаем все query-варианты в один консолидированный запрос
+    merged_tokens: list[str] = []
+    seen: set[str] = set()
+    for query in cleaned:
+        for token in _QUERY_WORD_RX.findall(query):
+            key = token.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_tokens.append(token)
+            if len(merged_tokens) >= max_tokens:
+                break
+        if len(merged_tokens) >= max_tokens:
+            break
+
+    query_ru = ' '.join(merged_tokens) or cleaned[0]
+    query_lang = source_query_language(source)
+
+    # LLM-перевод (основной путь)
+    try:
+        from ml_translate import translate_query as _llm_translate_query
+        has_llm = True
+    except ImportError:
+        has_llm = False
+
+    if query_lang == 'ru':
+        query_local = query_ru
+        query_en = query_ru
+        query = query_ru
+    else:
+        # Пытаемся LLM-перевод
+        llm_text = None
+        if has_llm:
+            try:
+                llm_text = _llm_translate_query(
+                    query_ru, query_lang, context=context)
+            except Exception:
+                pass
+
+        if llm_text:
+            query_en = llm_text if query_lang == 'en' else \
+                _translate_query_to_english(query_ru)
+            if query_lang == 'en':
+                query_local = query_en
+                query = _drop_cyrillic_tokens(query_en) or query_en
+            else:
+                # Для DE — LLM даёт локальный, EN — словарный
+                query_local = llm_text
+                query = _drop_cyrillic_tokens(llm_text) or llm_text or query_en
+        else:
+            # Fallback: словарный перевод
+            english = _translate_query_to_english(query_ru)
+            query_en = _drop_non_latin_tokens(english) or english or query_ru
+            if query_lang == 'en':
+                query_local = query_en
+            else:
+                query_local = _translate_english_to_locale(
+                    query_en, query_lang) or query_en
+            query = query_local
+            if query_lang in {'en', 'de'}:
+                query = _drop_cyrillic_tokens(query_local) or query_local \
+                    or query_en or query_ru
+
+    return {
+        'query': query or query_en or query_ru,
+        'query_ru': query_ru,
+        'query_en': query_en or query_ru,
+        'query_local': query_local or query_en or query_ru,
+        'query_lang': query_lang,
+    }
+
+
+def _build_site_search_url(domain: str, source_query: str) -> str:
+    payload = urllib.parse.quote(f"site:{domain} {source_query}".strip())
+    return f"https://www.google.com/search?q={payload}"
+
+
+def build_source_query(queries: Sequence[str], source: str, *, max_tokens: int = 12) -> str:
+    """Choose a source-specific query.
+
+    For foreign link-only sources we merge the strongest query variants first,
+    then translate the combined keyword set to English and drop untranslated
+    Cyrillic leftovers so the outgoing query is actually foreign-friendly.
+    """
+    cleaned = [q.strip() for q in queries if q and q.strip()]
+    if not cleaned:
+        return ''
+
+    src = (source or '').strip().lower()
+    if src not in FOREIGN_RETAILERS:
+        return cleaned[0]
+
+    return build_source_query_bundle(cleaned, src, max_tokens=max_tokens)['query']
 
 
 # ---------------------------------------------------------------------------
@@ -605,27 +996,42 @@ def retailer_links(
     sources: Sequence[str],
     *,
     limit_per_source: int = 1,
+    context: dict | None = None,
 ) -> list[dict]:
-    """Generate direct search links for explicit retailer sources."""
+    """Generate direct search links for explicit retailer sources.
+
+    `context` передаётся в build_source_query_bundle для LLM-перевода.
+    """
     out: list[dict] = []
     plain_sources = [s.lower() for s in sources if not s.lower().startswith("brand:")]
     for src in plain_sources:
         template = RETAILER_SEARCH_URLS.get(src)
-        if not template:
+        site_domain = RETAILER_SITE_SEARCH_DOMAINS.get(src)
+        if not template and not site_domain:
             continue
         title = RETAILER_TITLES.get(src, src)
-        for query in list(queries)[:limit_per_source]:
-            source_query = translate_query_for_source(query, src)
+        source_queries = list(queries)[:limit_per_source]
+        query_bundle = None
+        if src in FOREIGN_RETAILERS:
+            query_bundle = build_source_query_bundle(queries, src, context=context)
+            source_queries = [query_bundle['query']]
+        for query in source_queries:
+            source_query = query_bundle['query'] if query_bundle else query
             encoded = urllib.parse.quote(source_query)
+            url = template.format(query=encoded) if template else _build_site_search_url(site_domain, source_query)
             out.append({
                 "title": f"🔗 {title}: {source_query[:60]}",
                 "brand": "",
-                "url": template.format(query=encoded),
+                "url": url,
                 "price": None,
                 "store": title,
                 "source": src,
                 "image_url": "",
                 "_link_only": True,
+                "query_ru": query_bundle["query_ru"] if query_bundle else query,
+                "query_en": query_bundle["query_en"] if query_bundle else query,
+                "query_local": query_bundle["query_local"] if query_bundle else query,
+                "query_lang": query_bundle["query_lang"] if query_bundle else 'ru',
             })
     return out
 
@@ -696,6 +1102,8 @@ async def composite_provider(
     queries: list[str],
     sources: list[str],
     photo_path: Optional[str],
+    *,
+    context: dict | None = None,
 ) -> list[dict]:
     """Fetch candidates with an emphasis on direct seller links.
 
@@ -704,6 +1112,8 @@ async def composite_provider(
 
     `sources` is the bandit-ranked list from route_sources(). We only
     query APIs or emit links for sources that appear in the list.
+
+    `context` содержит Memory Lane item context для LLM-перевода запросов.
     """
     src_set = {s.lower() for s in sources}
 
@@ -712,7 +1122,7 @@ async def composite_provider(
     all_results: list[dict] = []
 
     all_results.extend(brand_site_links(queries, sources))
-    all_results.extend(retailer_links(queries, sources))
+    all_results.extend(retailer_links(queries, sources, context=context))
 
     if any(s in src_set for s in ("wildberries", "wb")):
         tasks.append(asyncio.ensure_future(search_wildberries(queries)))

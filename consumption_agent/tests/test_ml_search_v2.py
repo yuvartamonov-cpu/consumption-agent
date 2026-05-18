@@ -23,15 +23,39 @@ from ml_search_v2 import (
 def test_route_sources_uses_category_map():
     sources = route_sources({'category': 'одежда'})
     assert 'lamoda' in sources
-    assert 'wildberries' in sources
-    assert 'aliexpress' in sources
+    assert 'brandshop' in sources
+    assert 'farfetch' in sources
+    assert 'oskelly' in sources
+    assert 'amazon' not in sources  # marketplaces pushed back after specialists
 
 
 def test_route_sources_default_for_unknown_category():
     sources = route_sources({'category': 'неизвестно'})
     assert 'wildberries' in sources
     assert 'lamoda' in sources
+    assert 'amazon' in sources
+    assert 'ebay' in sources
     assert 'alibaba' in sources
+
+
+def test_route_sources_appends_local_aggregators_for_eu():
+    import ml_providers as mp
+    original = mp.get_client_geo()
+    try:
+        mp.set_client_geo('EU')
+        sources = route_sources({'category': 'одежда'})
+        assert 'idealo' in sources
+        assert 'billiger' in sources
+    finally:
+        mp.set_client_geo(original)
+
+
+def test_route_sources_accessories_include_luxury_resale_and_specialists():
+    sources = route_sources({'category': 'аксессуары'})
+    assert 'oskelly' in sources
+    assert 'thecultt' in sources
+    assert 'poisondrop' in sources
+    assert 'tsum' in sources
 
 
 def test_route_sources_prepends_brand_site():
@@ -189,6 +213,38 @@ def test_pipeline_calls_extractor_when_no_cache():
     assert row[0] is not None
     persisted = json.loads(row[0])
     assert persisted['brand'] == 'Nike'
+    conn.close()
+
+
+def test_pipeline_appends_memory_lane_context_queries():
+    conn = _setup_full_db([{
+        'id': 1,
+        'caption': 'нравится #повседневный',
+        'liked_features': '["нравится"]',
+        'style_tags': '["casual", "хлопок"]',
+        'topic': 'одежда',
+        'name': 'джемпер',
+        'description': 'Серый хлопковый джемпер для повседневной носки.',
+        'attributes_json': json.dumps({
+            'category': 'одежда',
+            'subcategory': 'джемпер',
+            'brand': 'Hamington',
+        }),
+    }])
+
+    captured_queries = []
+
+    async def provider(queries, sources, photo):
+        captured_queries.extend(queries)
+        return []
+
+    result = _run(search_ml_item_v2(
+        conn, 1, candidates_provider=provider,
+        attribute_extractor=lambda *a, **kw: asyncio.sleep(0, result={}),
+    ))
+    assert any(tag == 'memory_lane_context' for _, tag in result['queries'])
+    assert any('хлопков' in q.lower() for q in captured_queries)
+    assert any('серый' in q.lower() for q in captured_queries)
     conn.close()
 
 
@@ -595,3 +651,20 @@ def test_format_caps_groups_shown():
     assert 'item2' in out
     assert 'item3' not in out
     assert 'ещё 7' in out
+
+
+def test_format_group_shows_bilingual_queries_for_link_only():
+    text = v2._format_group(1, {
+        'title': '🔗 Idealo: hamington pullover grau',
+        'url': 'https://example.com/idealo',
+        'store': 'Idealo',
+        'sources_count': 1,
+        '_link_only': True,
+        'query_ru': 'hamington джемпер серый',
+        'query_en': 'hamington sweater gray',
+        'query_local': 'hamington pullover grau',
+        'query_lang': 'de',
+    })
+    assert 'RU: hamington джемпер серый' in text
+    assert 'EN: hamington sweater gray' in text
+    assert 'DE: hamington pullover grau' in text

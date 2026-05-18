@@ -10,6 +10,8 @@ from typing import Any
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from bot.handlers.memory_lane import cmd_ml_search
+
 
 log = logging.getLogger(__name__)
 
