@@ -1173,3 +1173,107 @@ Memory Lane → recommendation → action proposal → approval → dry-run
 5. Только потом реальные заказы и бронирования
 ```
 
+---
+
+## §20 Multi-user & Growth Architecture
+
+### 20.1 Критический путь к монетизации
+
+Все каналы монетизации (кроме Premium B2C) требуют многопользовательской архитектуры. Это единственный неделегируемый фундаментальный шаг.
+
+```
+Шаг 1: Config/Env
+  └─ Убрать хардкод email, DB_PATH, API keys из кода
+  └─ Централизовать в config.py + .env файл
+
+Шаг 2: Users Table
+  └─ CREATE TABLE users (user_id, telegram_id, subscription_tier, ...)
+  └─ Добавить user_id как FK во все основные таблицы
+
+Шаг 3: Auth через Telegram
+  └─ telegram_id как primary auth identifier
+  └─ Middleware проверки подписки
+
+Шаг 4: Hosted Deploy
+  └─ Railway / VPS вместо WSL на личной машине
+  └─ PostgreSQL вместо SQLite для multi-user
+```
+
+### 20.2 Схема таблицы users
+
+```sql
+CREATE TABLE users (
+    user_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id   INTEGER UNIQUE NOT NULL,
+    username      TEXT,
+    subscription_tier TEXT DEFAULT 'free',  -- 'free', 'premium'
+    subscription_until DATETIME,
+    referred_by   INTEGER REFERENCES users(user_id),
+    referral_code TEXT UNIQUE,
+    consent_data_sharing INTEGER DEFAULT 0,  -- 0/1
+    consent_lifecycle_ads INTEGER DEFAULT 0,
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_active   DATETIME
+);
+```
+
+### 20.3 Growth Loop
+
+```
+Пользователь А
+    │ /invite
+    ▼
+Уникальная реферальная ссылка
+    │ Пользователь Б активирует
+    ▼
++30 дней Premium для А и Б
+    │ При N≥2 агентах
+    ▼
+P2P-обмен активируется (Канал 6)
+    │ Больше агентов
+    ▼
+Точнее lifecycle-модели → ценнее Data Intelligence (Канал 3)
+```
+
+**Сетевой эффект:** каждый новый пользователь улучшает данные для всех.
+
+### 20.4 Retention Hooks
+
+| Hook | Триггер | Канал |
+|------|---------|-------|
+| Weekly digest | Каждое воскресенье 10:00 | Telegram бот |
+| Price-drop alert | Цена упала > 15% | Telegram бот (Premium) |
+| Expiry reminder | За 7 дней до истечения срока | Telegram бот |
+| Milestone | 10, 50, 100, 500 товаров | Telegram бот |
+| Savings counter | Еженедельно | Weekly digest |
+
+### 20.5 Free vs Premium
+
+| Лимит | Free | Premium |
+|-------|------|---------|
+| Инвентарь | 50 товаров | Неограниченно |
+| Price-drop alerts | ❌ | ✅ |
+| Расширенная аналитика | ❌ | ✅ |
+| Приоритетный OCR | ❌ | ✅ |
+| Экспорт данных | ❌ | ✅ |
+| Поддержка | Community | Priority |
+| Стоимость | 0 ₽ | ~299 ₽/мес |
+
+### 20.6 Новые модули
+
+```
+consumption_agent/
+├── auth/
+│   ├── middleware.py      # Проверка подписки, user_id inject
+│   └── referral.py        # Реферальные коды и бонусы
+├── monetization/
+│   ├── premium.py         # Управление подпиской
+│   ├── lifecycle.py       # Lifecycle-модели и триггеры
+│   └── consent.py         # Управление согласиями
+└── growth/
+    ├── retention.py       # Weekly digest, milestones
+    └── p2p.py             # P2P матчинг между агентами
+```
+
+**См. подробную стратегию монетизации:** [05_monetization.md](05_monetization.md)
+

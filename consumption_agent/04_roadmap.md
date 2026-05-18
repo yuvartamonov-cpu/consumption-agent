@@ -111,6 +111,70 @@ Telegram photo + comment → сохранение в media/ → caption + featur
 
 ---
 
+## ⬜ Phase F — Monetization & Growth
+
+**Статус:** Planned  
+**Горизонт:** Q3 2026 → Q3 2027
+
+### F.0 — Multi-user фундамент (блокер для всех каналов)
+
+**Acceptance criteria:**
+- [ ] Все личные данные (email, DB_PATH) вынесены в config/env
+- [ ] Таблица `users` добавлена в БД (user_id, telegram_id, subscription_tier, consent_flags, created_at)
+- [ ] user_id добавлен как foreign key во все основные таблицы
+- [ ] Auth через Telegram (telegram_id как primary auth)
+- [ ] Hosted деплой на Railway или VPS (не WSL на личной машине)
+
+### F.1 — Канал 5: Premium B2C (Q3-Q4 2026)
+
+**Acceptance criteria:**
+- [ ] Freemium лимит: 50 товаров на бесплатном тарифе
+- [ ] /subscribe команда в боте с описанием Premium
+- [ ] Price-drop alerts только для Premium
+- [ ] Расширенная аналитика только для Premium
+- [ ] Платёжная интеграция (ЮKassa или Telegram Stars)
+
+**Метрика:** 50 платных пользователей через 3 мес после запуска
+
+### F.2 — Growth Loop: реферальная программа (Q4 2026)
+
+**Acceptance criteria:**
+- [ ] /invite команда генерирует уникальную реферальную ссылку
+- [ ] При активации по ссылке: оба получают +30 дней Premium
+- [ ] Retention hooks: weekly digest, price-drop alerts, milestones
+- [ ] Savings counter в еженедельном отчёте
+
+**Метрика:** Referral rate > 15% активных пользователей
+
+### F.3 — Канал 1: Data → Скидки (Q1 2027)
+
+**Acceptance criteria:**
+- [ ] /privacy команда с настройками согласия
+- [ ] Consent flow перед включением "Режима скидок"
+- [ ] Anonymization layer (убрать PII)
+- [ ] API endpoint для брендов-партнёров
+- [ ] Минимум 1 бренд-партнёр в пилоте
+
+### F.4 — Канал 2: Lifecycle CPA (Q1-Q2 2027)
+
+**Acceptance criteria:**
+- [ ] Справочник сроков службы по 20+ категориям
+- [ ] Lifecycle-триггеры в боте с опциональными предложениями
+- [ ] Partner tracking (UTM)
+- [ ] CTR lifecycle-триггера > 10%
+
+### F.5 — Канал 6: P2P между агентами (Q3 2027)
+
+**Acceptance criteria:**
+- [ ] /sell команда: отметить товар как "готов продать"
+- [ ] Анонимный матчинг между агентами сети
+- [ ] Комиссия агента: 2-5% от сделки
+- [ ] N > 1000 активных пользователей в сети
+
+**См. детали:** [05_monetization.md](05_monetization.md)
+
+---
+
 ## 🔧 Technical debt — Приоритет 1 (параллельно)
 
 - [ ] Item-level парсинг для Ozon (_parse_ozon_items) — сейчас 12% items linked
