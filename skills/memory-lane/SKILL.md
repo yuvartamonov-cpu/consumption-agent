@@ -366,6 +366,46 @@ CREATE TABLE search_sources (
 3. Bandit периодически пересчитывает источники по типам товаров
 4. Со временем для `циклинг` исчезнут `leform` и `brandshop`, а появятся `velosipedov.ru`, `chainreactioncycles.com`
 
+## Ozon: отказ от прямого API (19.05.2026)
+
+### Проблема
+Ozon сильно закрутил защиту — куки живут недолго, API эндпоинты меняются, `.ozon_cookies.txt` пустой. Прямой API-доступ к Ozon фактически не работает.
+
+### Решение
+Переходим на web-parsing для Ozon и подключаем агрегаторы цен:
+
+#### 1. Ozon — web scraping через site-search
+- Прямые API-запросы к api.ozon.ru заменяем на Google site-search:
+  `site:ozon.ru {query}`
+- Используем существующий механизм `_build_site_search_url()` в `ml_providers.py`
+- Ozon остаётся в результатах поиска, но как link-only источник без цен
+- Цены можно будет добрать при открытии ссылки через парсинг страницы товара (TODO)
+
+#### 2. Добавление Megamarket (site-search)
+- Нет писем на почте от Megamarket → используем site-search через Google
+- `site:megamarket.ru {query}`
+- Добавить в seed_sources: key='megamarket', tier='marketplace', geo='RU'
+
+#### 3. Подключение агрегаторов цен
+- **Price.ru** — `site:price.ru {query}`, агрегатор, показывает цены с Ozon, WB, Яндекс.Маркета
+- **Goods.ru** — `site:goods.ru {query}`
+- **E-katalog** (ekatalog.ru) — техника, сравнение цен
+- **Priceva.ru** — мониторинг цен
+- **market.yandex.ru** — уже есть
+- **Price24.ru** / **Priceonline.ru** — дополнительные агрегаторы
+
+#### 4. Приоритет
+- Для техники: e-katalog > price.ru > Яндекс.Маркет > Wildberries > Ozon (site-search)
+- Для одежды: Яндекс.Маркет > Lamoda > Brandshop > Ozon (site-search) > Wildberries
+- Агрегаторы показывают реальные цены без авторизации — их ставим выше site-search Ozon
+
+#### 5. Прайсинг через парсинг страницы (TODO)
+- При клике на link-only результат — парсить страницу товара для извлечения цены
+- Использовать curl + регулярки или BeautifulSoup
+- Сохранять в `item_price_links` или `ml_watchlist`
+- Реализовать после voice input
+
+
 ## Telegram Voice Input (Спринт 19.05.2026 — Новая задача)
 
 ### Проблема

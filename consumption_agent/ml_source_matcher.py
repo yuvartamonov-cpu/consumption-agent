@@ -611,6 +611,47 @@ SEED_SOURCES = [
         'geo': 'ALL',
         'tier': 'marketplace',
     },
+    # ── Новые источники (19.05.2026) ──
+    {
+        'key': 'megamarket',
+        'name': 'Megamarket',
+        'url_template': '',
+        'site_domain': 'megamarket.ru',
+        'category_tags': json.dumps(['anything', 'all']),
+        'item_types': json.dumps(['all']),
+        'geo': 'RU',
+        'tier': 'marketplace',
+    },
+    {
+        'key': 'price_ru',
+        'name': 'Price.ru',
+        'url_template': '',
+        'site_domain': 'price.ru',
+        'category_tags': json.dumps(['техника', 'мебель', 'интерьер', 'косметика', 'одежда']),
+        'item_types': json.dumps(['all']),
+        'geo': 'RU',
+        'tier': 'aggregator',
+    },
+    {
+        'key': 'goods_ru',
+        'name': 'Goods.ru',
+        'url_template': '',
+        'site_domain': 'goods.ru',
+        'category_tags': json.dumps(['техника', 'мебель', 'интерьер']),
+        'item_types': json.dumps(['all']),
+        'geo': 'RU',
+        'tier': 'aggregator',
+    },
+    {
+        'key': 'ekatalog',
+        'name': 'E-Katalog',
+        'url_template': '',
+        'site_domain': 'ekatalog.ru',
+        'category_tags': json.dumps(['техника']),
+        'item_types': json.dumps(['electronics', 'computers', 'kitchen_appliances', 'audio']),
+        'geo': 'RU',
+        'tier': 'aggregator',
+    },
 ]
 
 # -----------------------------------------------------------------------
