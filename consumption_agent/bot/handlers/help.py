@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+from telegram import Update
+from telegram.ext import ContextTypes
+
 
 _docs_root: str | os.PathLike[str] | None = None
 

@@ -8,6 +8,9 @@ import traceback
 from datetime import date
 from typing import Any, Callable
 
+from telegram import Update
+from telegram.ext import ContextTypes
+
 
 log = logging.getLogger(__name__)
 _get_db: Callable[..., Any] | None = None
