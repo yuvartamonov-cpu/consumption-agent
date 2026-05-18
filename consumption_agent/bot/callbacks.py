@@ -284,8 +284,14 @@ async def ml_delete_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         media_asset_id = row[0]
 
+        # Отключаем FK для безопасного удаления, восстанавливаем после
+        conn.execute('PRAGMA foreign_keys=OFF')
+        # Сначала удаляем зависимости (FOREIGN KEY)
+        conn.execute('DELETE FROM ml_reminders WHERE item_id = ?', (ml_id,))
+        conn.execute('DELETE FROM ml_watchlist WHERE item_id = ?', (ml_id,))
         # Удаляем запись из memory_lane_items
         conn.execute('DELETE FROM memory_lane_items WHERE id = ?', (ml_id,))
+        conn.execute('PRAGMA foreign_keys=ON')
 
         # Удаляем связанный media_asset (файл + запись в БД)
         if media_asset_id:
