@@ -14,6 +14,10 @@ import os
 import sys
 import tempfile
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 _TMP_DB = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 DB_PATH = _TMP_DB.name
 _TMP_DB.close()
@@ -72,12 +76,11 @@ def test_database_schema():
     missing = required - columns
     if missing:
         print(f"❌ Отсутствуют колонки: {missing}")
-        return False
+    assert not missing
     
     print("✅ Все необходимые колонки на месте")
     print(f"   Колонки: {sorted(columns)}")
     conn.close()
-    return True
 
 def test_add_item_text():
     """Проверяем добавление через текстовую команду"""
@@ -122,7 +125,6 @@ def test_add_item_text():
     
     conn.commit()
     conn.close()
-    return True
 
 def test_add_item_with_photo():
     """Проверяем добавление с фото (caption)"""
@@ -165,7 +167,6 @@ def test_add_item_with_photo():
     
     conn.commit()
     conn.close()
-    return True
 
 def test_vision_photo():
     """Проверяем добавление через vision_photo (без caption)"""
@@ -205,7 +206,6 @@ def test_vision_photo():
     
     conn.commit()
     conn.close()
-    return True
 
 def test_items_full_output():
     """Проверяем вывод /items_full all"""
@@ -224,6 +224,7 @@ def test_items_full_output():
     ''').fetchall()
     
     print(f"Найдено {len(rows)} items:")
+    assert rows
     for r in rows:
         item_id, name, brand, months, days, notes, attrs, origin = r
         print(f"  ID={item_id}: {name} (brand={brand}, origin={origin})")
@@ -237,7 +238,6 @@ def test_items_full_output():
                 pass
     
     conn.close()
-    return True
 
 def test_search():
     """Проверяем поиск"""
@@ -247,6 +247,7 @@ def test_search():
     
     queries = ['пиджак', 'поло', 'TestBrand', 'синий']
     
+    found_any = False
     for query in queries:
         print(f"\nПоиск: '{query}'")
         rows = conn.execute('''
@@ -257,10 +258,11 @@ def test_search():
         ''', (f'%{query.lower()}%', f'%{query.lower()}%', f'%{query.lower()}%')).fetchall()
         
         for r in rows:
+            found_any = True
             print(f"  Найден: ID={r[0]} {r[1]} (brand={r[2]})")
     
     conn.close()
-    return True
+    assert found_any
 
 def test_delete():
     """Проверяем удаление"""
@@ -274,6 +276,7 @@ def test_delete():
         WHERE name LIKE 'Тестовый%' OR name LIKE 'Распознанный%'
     ''').fetchall()
     
+    assert rows
     for r in rows:
         item_id = r[0]
         conn.execute('''
@@ -284,7 +287,12 @@ def test_delete():
     
     conn.commit()
     conn.close()
+
+
+def _run_script_test(test):
+    test()
     return True
+
 
 def cleanup():
     """Удаляем тестовые данные"""
@@ -332,7 +340,7 @@ def main():
         
         for test in tests:
             try:
-                if test():
+                if _run_script_test(test):
                     passed += 1
                 else:
                     failed += 1
