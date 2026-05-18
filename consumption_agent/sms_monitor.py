@@ -41,6 +41,10 @@ BODY_SENDER_PATTERNS = {
     'boostra': ['boostra', 'бустра'],
     'ekvazaim': ['эквазайм', 'ekvazaim'],
     'webzaim': ['webzaim', 'вебзайм'],
+    'dengi_srazu': ['деньги сразу', 'dengisrazu', 'dengi-srazu'],
+    'flashzaim': ['флэшзайм', 'flashzaim', 'flash-zaim'],
+    'fast_finance': ['фаст финанс', 'fast finance', 'fastfinance'],
+    'glatsint': ['глацинт', 'glatsint'],
 }
 
 SMS_INTEREST_PATTERNS = [
@@ -195,7 +199,7 @@ def extract_sms_payment_amount(body: str) -> Optional[float]:
     return None
 
 
-def scan_sms_messages(days_back: int = 7) -> List[dict]:
+def scan_sms_messages(days_back: int = 5) -> List[dict]:
     """Сканирует SMS из Phone Link database."""
     db_path = find_phone_link_db()
     if not db_path:

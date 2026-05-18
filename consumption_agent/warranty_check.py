@@ -4,12 +4,12 @@ Warranty/expiry/low-stock checks and alert generation.
 
 Usage: python3 warranty_check.py
 """
-import os
-import sqlite3
 from datetime import datetime
 from calendar import monthrange
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "consumption.db")
+from consumption.db import DB_PATH, connect as db_connect
+from repositories.items import ensure_warranty_columns
+
 WARRANTY_WARN_DAYS = 30
 EXPIRY_WARN_DAYS = 7
 
@@ -42,12 +42,7 @@ def calc_warranty_until(purchase_date, warranty_months):
 
 
 def ensure_items_schema(conn):
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
-    if "warranty_until" not in existing:
-        conn.execute("ALTER TABLE items ADD COLUMN warranty_until TEXT")
-    if "min_quantity" not in existing:
-        conn.execute("ALTER TABLE items ADD COLUMN min_quantity INTEGER DEFAULT 0")
-    conn.commit()
+    ensure_warranty_columns(conn)
 
 
 def update_warranty_until(conn):
@@ -263,9 +258,7 @@ def get_warranties_report(conn):
 
 
 def main():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn = db_connect(DB_PATH)
 
     saved = run_daily_alert_checks(conn)
     print(f"Saved new alerts: {saved}")

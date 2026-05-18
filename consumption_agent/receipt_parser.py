@@ -1,262 +1,217 @@
 #!/usr/bin/env python3
+"""Unified receipt parser CLI.
+
+Inputs:
+  image/pdf/text -> OCR/parser -> structured receipt -> matcher -> purchase/items.
+
+Default file mode is dry-run. Use --apply to write to the database.
 """
-receipt_parser.py — парсинг чеков Ozon (PDF-текст и HTML-уведомления).
 
-Поддерживаемые форматы:
-1. Фискальный чек Ozon (ozon_pdf) — текстовый файл с товарами, ценами, итогом
-2. HTML-уведомление (ozon) — уведомление о чеке без цен
+from __future__ import annotations
 
-Структура фискального чека:
-  Кассовый чек № NNNN
-  DD.MM.YYYY HH:MM
-  1. Название товара
-     1 x XXX,XX                                                        ≡XXX,XX
-  ИТОГ                                                                 ≡XXX,XX
-
-Использование:
-  python3 receipt_parser.py --file /path/to/cheque.txt
-  python3 receipt_parser.py --cheque-id 22  # по id из cheques_log
-  python3 receipt_parser.py --batch          # все непрочитанные
-"""
 import argparse
-import re
-import sqlite3
+import json
 import sys
 from pathlib import Path
 
-from matcher import match_record
-
-DB_PATH = Path(__file__).parent / "consumption.db"
+from consumption.db import DB_PATH, connect as db_connect
+from services.receipt_pipeline import (
+    StructuredReceipt,
+    persist_receipt,
+    process_source,
+    result_to_json,
+)
 
 
 def parse_fiscal_text(text: str) -> dict | None:
-    """Парсинг текстового фискального чека Ozon."""
-    result = {}
-
-    # Дата и номер чека: "Кассовый чек № 1371  30.11.2025 09:51"
-    m = re.search(
-        r'Кассовый чек\s+№\s*(\d+)\s+(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})',
-        text
-    )
-    if m:
-        result['cheque_number'] = int(m.group(1))
-        result['date'] = f"{m.group(4)}-{m.group(3)}-{m.group(2)}"
-        result['time'] = f"{m.group(5)}:{m.group(6)}"
-
-    # Итоговая сумма
-    m = re.search(r'ИТОГ\s*.*?(\d[\d\s]*\d)', text)
-    if m:
-        result['total'] = float(m.group(1).replace(' ', '').replace(',', '.'))
-
-    # Позиции: "1. Название товара\n     1 x XXX,XX  ...  ≡XXX,XX"
-    items = []
-    # Паттерн: номер. название  количество x цена  ≡ сумма
-    for match in re.finditer(
-            r'(\d+)\.\s*(.+?)\s+(\d+)\s*x\s*(\d[\d\s,]*\d)\s*≡\s*(\d[\d\s,]*\d)',
-            text
-    ):
-        items.append({
-            'num': int(match.group(1)),
-            'name': match.group(2).strip(),
-            'qty': int(match.group(3)),
-            'price': float(match.group(4).replace(' ', '').replace(',', '.')),
-            'total': float(match.group(5).replace(' ', '').replace(',', '.')),
-        })
-
-    result['items'] = items
-    result['item_count'] = len(items)
-
-    if not items and 'total' not in result:
-        return None  # не удалось распарсить
-
-    return result
-
-
-def process_file(filepath: str, cheque_log_id: int = None) -> dict | None:
-    """Распарсить файл чека. Возвращает dict с распарсенными данными или None."""
-    text = Path(filepath).read_text('utf-8', errors='replace')
-    parsed = parse_fiscal_text(text)
-
-    if not parsed:
+    """Compatibility wrapper returning the old dict-like parsed receipt shape."""
+    receipt = process_source(text, input_type="text", vision_fallback=False)
+    if not receipt.items and receipt.total is None:
         return None
-
-    print(f"  Чек №{parsed.get('cheque_number', '?')} | {parsed.get('date', '?')} | "
-          f"{parsed.get('total', 0):.0f} ₽ | {parsed.get('item_count', 0)} позиций")
-
-    return parsed
+    return _legacy_dict(receipt)
 
 
-def _get_items(db) -> list:
-    """Получить список всех товаров для матчинга."""
-    rows = db.execute(
-        "SELECT id, name, COALESCE(brand,'') AS brand, COALESCE(sku,'') AS sku "
-        "FROM items WHERE deleted_at IS NULL"
-    ).fetchall()
-    return [{'id': r[0], 'name': r[1], 'brand': r[2], 'sku': r[3]} for r in rows]
+def process_file(
+    filepath: str,
+    cheque_log_id: int | None = None,
+    *,
+    vision_fallback: bool = True,
+) -> dict | None:
+    """Parse a receipt file and return a compatibility dict, without DB writes."""
+    receipt = process_source(filepath, input_type="auto", vision_fallback=vision_fallback)
+    if not receipt.items and receipt.total is None:
+        return None
+    _print_receipt_summary(receipt, prefix="  ")
+    return _legacy_dict(receipt)
 
 
-def _create_purchase_and_items(db, purchase_id: int, parsed: dict, all_items: list,
-                                email_uid: str, subject: str) -> str:
-    """Привязать товары из чека к items через matcher."""
-    matched_count = 0
-    unmatched_items = []
-
-    for item in parsed.get('items', []):
-        rec = {
-            'recognized_product': item['name'],
-            'confidence': 'high',
-            'brand': '',
-            'sku': '',
+def _legacy_dict(receipt: StructuredReceipt) -> dict:
+    items = [
+        {
+            "name": item.name,
+            "price": item.price,
+            "qty": item.qty,
+            "total": item.total,
+            "is_delivery": item.is_delivery,
+            "matched_item_id": item.matched_item_id,
+            "match_score": item.match_score,
         }
-        candidates = match_record(rec, all_items, threshold_high=85, threshold_medium=90)
-
-        target_item_id = None
-        if candidates and candidates[0]['score'] >= 85:
-            target_item_id = candidates[0]['item']['id']
-            matched_count += 1
-        else:
-            cur = db.execute("""
-                INSERT INTO items (name, category_id, purchase_id, purchase_date,
-                                   purchase_price, purchase_currency, quantity, data_origin, status)
-                VALUES (?, (SELECT id FROM categories WHERE slug = 'other' LIMIT 1),
-                        ?, ?, ?, 'RUB', ?, 'cheque_parse', 'in_use')
-            """, (
-                item['name'],
-                purchase_id,
-                parsed.get('date'),
-                item['price'],
-                item['qty'],
-            ))
-            target_item_id = cur.lastrowid
-            unmatched_items.append(item['name'])
-
-        if target_item_id:
-            db.execute("""
-                UPDATE items SET purchase_id = ?, purchase_price = ?,
-                                 purchase_date = ?, purchase_currency = 'RUB',
-                                 quantity = ?
-                WHERE id = ?
-            """, (purchase_id, item['price'], parsed.get('date'), item['qty'], target_item_id))
-
-    result = f"purchase_id={purchase_id}"
-    if matched_count > 0:
-        result += f", matched={matched_count}"
-    if unmatched_items:
-        result += f", new_items={len(unmatched_items)}: {unmatched_items[:3]}"
-    return result
+        for item in receipt.items
+    ]
+    return {
+        "date": receipt.date,
+        "store": receipt.store,
+        "total": receipt.total,
+        "items": items,
+        "item_count": len([item for item in items if not item["is_delivery"]]),
+        "delivery_total": receipt.delivery_total,
+        "raw_text": receipt.raw_text,
+        "ocr_score": receipt.ocr_score,
+        "engine": receipt.engine,
+        "source_path": receipt.source_path,
+    }
 
 
-def batch_process():
-    """Обработать все чеки из cheques_log с source='ozon_pdf', у которых нет purchase."""
-    db = sqlite3.connect(str(DB_PATH))
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA busy_timeout=5000")
+def _print_receipt_summary(receipt: StructuredReceipt, *, prefix: str = "") -> None:
+    product_count = len(receipt.product_items)
+    delivery = f", delivery={receipt.delivery_total:.2f}" if receipt.delivery_total else ""
+    print(
+        f"{prefix}{receipt.store or 'Unknown'} | {receipt.date} | "
+        f"total={receipt.total or 0:.2f} | items={product_count}{delivery} | "
+        f"engine={receipt.engine} score={receipt.ocr_score}"
+    )
 
-    cur = db.execute("""
-        SELECT cl.id, cl.email_uid, cl.receipt_url, cl.subject
-        FROM cheques_log cl
-        LEFT JOIN purchases p ON cl.email_uid = p.email_message_id AND p.deleted_at IS NULL
-        WHERE cl.source = 'ozon_pdf'
-          AND cl.receipt_url IS NOT NULL
-          AND p.id IS NULL
-        ORDER BY cl.id
-    """)
-    unprocessed = cur.fetchall()
 
-    print(f"Нераспарсенных чеков: {len(unprocessed)}")
+def apply_file(
+    filepath: str,
+    *,
+    db_path: str = DB_PATH,
+    dry_run: bool = True,
+    source: str = "receipt_pipeline",
+    data_origin: str = "receipt_pipeline",
+    vision_fallback: bool = True,
+) -> tuple[StructuredReceipt, object]:
+    receipt = process_source(filepath, input_type="auto", vision_fallback=vision_fallback)
+    conn = db_connect(db_path)
+    try:
+        apply_result = persist_receipt(
+            conn,
+            receipt,
+            dry_run=dry_run,
+            source=source,
+            data_origin=data_origin,
+            receipt_url=filepath if Path(filepath).exists() else None,
+        )
+    finally:
+        conn.close()
+    return receipt, apply_result
 
-    all_items = _get_items(db)
 
-    for cl_id, email_uid, receipt_url, subject in unprocessed:
-        filepath = receipt_url
-        if not Path(filepath).exists():
-            print(f"  ⚠ Файл не найден: {filepath}")
-            continue
+def batch_process(
+    *,
+    db_path: str = DB_PATH,
+    dry_run: bool = False,
+    limit: int | None = None,
+    vision_fallback: bool = True,
+) -> dict:
+    """Process unlinked cheques_log rows with source='ozon_pdf'."""
+    conn = db_connect(db_path)
+    stats = {"seen": 0, "processed": 0, "skipped": 0, "errors": 0, "dry_run": dry_run}
+    try:
+        rows = conn.execute(
+            """
+            SELECT cl.id, cl.email_uid, cl.receipt_url, cl.subject
+            FROM cheques_log cl
+            LEFT JOIN purchases p ON cl.email_uid = p.email_message_id AND p.deleted_at IS NULL
+            WHERE cl.source = 'ozon_pdf'
+              AND cl.receipt_url IS NOT NULL
+              AND cl.receipt_url != ''
+              AND p.id IS NULL
+            ORDER BY cl.id
+            """
+        ).fetchall()
+        if limit:
+            rows = rows[:limit]
 
-        try:
-            text = Path(filepath).read_text('utf-8', errors='replace')
-            if 'Кассовый чек' not in text:
-                print(f"  ⚠ Не похоже на чек: {filepath}")
-                continue
-        except Exception as e:
-            print(f"  ⚠ Ошибка чтения {filepath}: {e}")
-            continue
-
-        parsed = parse_fiscal_text(text)
-        if not parsed:
-            print(f"  ⚠ Не удалось распарсить: {filepath}")
-            continue
-
-        print(f"  Чек №{parsed.get('cheque_number', '?')} | {parsed.get('date', '?')} | "
-              f"{parsed.get('total', 0):.0f} ₽ | {parsed.get('item_count', 0)} позиций")
-
-        # Проверяем, нет ли уже purchase
-        existing = db.execute(
-            "SELECT id FROM purchases WHERE email_message_id = ? AND deleted_at IS NULL",
-            (email_uid,)
-        ).fetchone()
-        if existing:
-            print(f"  ⏭ Уже есть: purchase_id={existing[0]}")
-            continue
-
-        # Создаём purchase (INSERT OR IGNORE для защиты от гонки)
-        try:
-            cur = db.execute("""
-                INSERT OR IGNORE INTO purchases (purchase_date, total_amount, source, store_name,
-                                       order_number, receipt_url, email_message_id, notes, data_origin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ozon_pdf_cheque')
-            """, (
-                parsed.get('date'),
-                parsed.get('total'),
-                'ozon_pdf',
-                'Ozon',
-                str(parsed.get('cheque_number', '')),
-                '',
-                email_uid,
-                f"Чек №{parsed.get('cheque_number', '')}" if parsed.get('cheque_number') else subject,
-            ))
-            purchase_id = cur.lastrowid
-        except sqlite3.IntegrityError:
-            # Race — purchase уже создан в параллельной сессии
-            purchase_id = db.execute(
-                "SELECT id FROM purchases WHERE email_message_id = ?", (email_uid,)
-            ).fetchone()
-            if purchase_id:
-                purchase_id = purchase_id[0]
-            else:
-                print(f"  ⚠ Cannot get purchase_id, skipping")
+        print(f"Unprocessed ozon_pdf receipts: {len(rows)}")
+        for row in rows:
+            stats["seen"] += 1
+            filepath = row["receipt_url"]
+            if not Path(filepath).exists():
+                stats["skipped"] += 1
+                print(f"  skip missing file: {filepath}")
                 continue
 
-        # Привязываем товары
-        result = _create_purchase_and_items(db, purchase_id, parsed, all_items, email_uid, subject)
-        db.commit()
-        print(f"  ✅ {result}")
+            try:
+                receipt = process_source(filepath, input_type="auto", vision_fallback=vision_fallback)
+                _print_receipt_summary(receipt, prefix="  ")
+                apply_result = persist_receipt(
+                    conn,
+                    receipt,
+                    dry_run=dry_run,
+                    source="ozon_pdf",
+                    data_origin="ozon_pdf_cheque",
+                    receipt_url=filepath,
+                    email_message_id=row["email_uid"],
+                    order_number=str(row["id"]),
+                )
+                stats["processed"] += 1
+                print(
+                    f"    {'dry-run ' if dry_run else ''}"
+                    f"purchase_id={apply_result.purchase_id}, "
+                    f"created={len(apply_result.created_item_ids)}, "
+                    f"matched={len(apply_result.matched_item_ids)}"
+                )
+            except Exception as exc:
+                stats["errors"] += 1
+                print(f"  error {filepath}: {exc}")
+        return stats
+    finally:
+        conn.close()
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(description="Consumer Agent — Receipt Parser")
-    parser.add_argument("--file", help="Путь к файлу чека")
-    parser.add_argument("--cheque-id", type=int, help="ID записи в cheques_log")
-    parser.add_argument("--batch", action="store_true", help="Обработать все нераспарсенные чеки")
-    parser.add_argument("--dry-run", action="store_true", help="Только парсинг, без записи в БД")
+def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description="Consumption Agent receipt pipeline")
+    parser.add_argument("--file", help="Receipt file path: image, PDF, or text")
+    parser.add_argument("--cheque-id", type=int, help="Compatibility option; accepted for old scripts")
+    parser.add_argument("--batch", action="store_true", help="Process unlinked ozon_pdf cheques_log rows")
+    parser.add_argument("--db", default=DB_PATH)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--dry-run", action="store_true", help="Parse and match without DB writes")
+    parser.add_argument("--apply", action="store_true", help="Write parsed receipt to DB")
+    parser.add_argument("--json", action="store_true", help="Print structured JSON")
+    parser.add_argument("--no-vision-fallback", action="store_true")
     args = parser.parse_args()
 
+    vision_fallback = not args.no_vision_fallback
+
     if args.batch:
-        batch_process()
-    elif args.file:
-        print(f"\nПарсинг: {args.file}")
-        parsed = process_file(args.file, cheque_log_id=args.cheque_id)
-        if not parsed:
-            print("  ❌ Не удалось распарсить")
-        elif args.dry_run:
-            import json
-            print(json.dumps(parsed, indent=2, ensure_ascii=False))
-    else:
-        parser.print_help()
+        stats = batch_process(
+            db_path=args.db,
+            dry_run=args.dry_run,
+            limit=args.limit,
+            vision_fallback=vision_fallback,
+        )
+        if args.json:
+            print(json.dumps(stats, ensure_ascii=False, indent=2))
+        return
+
+    if args.file:
+        dry_run = args.dry_run or not args.apply
+        receipt, apply_result = apply_file(
+            args.file,
+            db_path=args.db,
+            dry_run=dry_run,
+            vision_fallback=vision_fallback,
+        )
+        _print_receipt_summary(receipt)
+        if args.json or dry_run:
+            print(result_to_json(receipt, apply_result))
+        return
+
+    parser.print_help()
 
 
 if __name__ == "__main__":

@@ -12,11 +12,95 @@ Consumption Agent Telegram Bot
 Запуск: CONSUMPTION_BOT_TOKEN=xxx python3 telegram_bot.py
 """
 
-import logging, os, sys, re, sqlite3, json, subprocess, tempfile, time, html, traceback
-from datetime import date, datetime
+import logging, os, sys, re, json, subprocess, tempfile, time, html, traceback, random, asyncio
+from calendar import monthrange
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
+
+def get_db_with_retry(max_retries=3, backoff_base=0.5):
+    """Connect through the shared DB helper."""
+    if db_connect is None:
+        raise RuntimeError("consumption.db.connect is unavailable")
+    return db_connect(
+        DB_PATH,
+        timeout=10,
+        max_retries=max_retries,
+        delay=backoff_base,
+        check_same_thread=False,
+    )
+
+
+def db_execute_with_retry(conn, query, params=(), max_retries=3, backoff_base=0.5):
+    """Execute a statement through the shared retry helper."""
+    if db_execute_shared is None:
+        raise RuntimeError("consumption.db.execute_with_retry is unavailable")
+    return db_execute_shared(conn, query, params, max_retries=max_retries, delay=backoff_base)
+
+
+from bot.markdown import (
+    esc_md,
+    markdown_to_plain_text,
+    safe_edit_markdown_message,
+    safe_send_markdown_message,
+)
+
+
+def extract_sms_display_time(notes: str | None) -> str:
+    """Возвращает HH:MM из SMS notes без вывода сырого текста с балансом."""
+    if not notes:
+        return ''
+    for pattern in (r'время\s+(\d{2}:\d{2})', r'\b(\d{2}:\d{2})\b'):
+        match = re.search(pattern, notes)
+        if match:
+            return match.group(1)
+    return ''
+
+
+def append_expense_row(lines, row, source_icons, *, note_limit=80):
+    """Добавляет строку расхода в Markdown-отчёт безопасно для Telegram."""
+    _date_str, amount, store, source, notes = row
+    amt = amount or 0
+    src_icon = source_icons.get(source or '', '📧')
+    notes_clean = (notes or '').replace('\n', ' ').strip()
+
+    lines.append(f'{src_icon} *{esc_md(store or "—")}* — {amt:,.0f} ₽'.replace(',', ' '))
+
+    if source in ('sms', 'sms_sber'):
+        sms_time = extract_sms_display_time(notes_clean)
+        if sms_time:
+            lines.append(f'   🕐 {sms_time}')
+        return
+
+    if notes_clean:
+        lines.append(f'   {esc_md(notes_clean[:note_limit])}')
+
+
+def append_store_totals(lines, rows, heading):
+    """Добавляет блок итогов по магазинам с экранированием Markdown."""
+    by_store = {}
+    for row in rows:
+        store = row[2] or 'Другое'
+        by_store[store] = by_store.get(store, 0) + (row[1] or 0)
+
+    if len(by_store) <= 1:
+        return
+
+    lines.append(f'\n{heading}')
+    for store, amount in sorted(by_store.items(), key=lambda x: -x[1]):
+        lines.append(f'  • {esc_md(store)}: {amount:,.0f} ₽'.replace(',', ' '))
+
+
+def add_months_safe(dt, months):
+    """Добавляет месяцы к дате без падения на 29/30/31 числе."""
+    months = int(months)
+    month = dt.month - 1 + months
+    year = dt.year + month // 12
+    month = month % 12 + 1
+    day = min(dt.day, monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
 
 def parse_drive_request(text: str):
     """Парсит '3ч 80км' или '2 часа 60 км'"""
@@ -47,11 +131,57 @@ def calculate_drive_cost(tariff, hours, km):
 
     return max(round(base, -1), 500)  # округляем до 10₽, минимум 500₽
 
-from telegram import Update, PhotoSize, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
+try:
+    from telegram import Update, PhotoSize, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
+except Exception:  # pragma: no cover - import fallback for test envs without PTB
+    class _TelegramStub:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class _FilterStub:
+        def __and__(self, other):
+            return self
+
+        def __invert__(self):
+            return self
+
+    class _ContextTypesStub:
+        DEFAULT_TYPE = object
+
+    class _ApplicationBuilderStub:
+        def token(self, *_args, **_kwargs):
+            return self
+
+        def build(self):
+            raise RuntimeError("python-telegram-bot is unavailable")
+
+    class _ApplicationStub:
+        @staticmethod
+        def builder():
+            return _ApplicationBuilderStub()
+
+    Update = PhotoSize = InlineKeyboardMarkup = _TelegramStub
+    Application = _ApplicationStub
+    CommandHandler = MessageHandler = CallbackQueryHandler = _TelegramStub
+    ContextTypes = _ContextTypesStub
+    filters = type(
+        "_FiltersStub",
+        (),
+        {"PHOTO": _FilterStub(), "TEXT": _FilterStub(), "COMMAND": _FilterStub()},
+    )()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
+
+from bot.access import (
+    load_allowed_chat_ids,
+    load_owner_chat_id,
+    parse_allowed_chat_ids as _parse_allowed_chat_ids,
+    register_authorized_handler,
+)
+from bot.app import HandlerDeps, register_callback_handlers, register_command_handlers
 
 # Новый модуль категоризации (Шаг 5 рефакторинга)
 try:
@@ -60,16 +190,28 @@ except ImportError:
     auto_categorize = lambda n: None
     slug_to_cat_id = lambda s: None
 
-DB_PATH = os.path.join(SCRIPT_DIR, 'consumption.db')
+try:
+    from consumption.db import (
+        DB_PATH as SHARED_DB_PATH,
+        connect as db_connect,
+        execute_with_retry as db_execute_shared,
+    )
+except ImportError:
+    SHARED_DB_PATH = None
+    db_connect = None
+    db_execute_shared = None
+
+DB_PATH = SHARED_DB_PATH or os.path.join(SCRIPT_DIR, 'consumption.db')
 RECEIPTS_DIR = os.path.join(SCRIPT_DIR, 'receipts')
 Path(RECEIPTS_DIR).mkdir(exist_ok=True)
 TOKEN = os.environ.get('CONSUMPTION_BOT_TOKEN', '')
-OWNER_CHAT_ID = int(os.environ.get('OWNER_CHAT_ID', '1477860192'))
+OWNER_CHAT_ID = load_owner_chat_id()
+ALLOWED_CHAT_IDS = load_allowed_chat_ids(OWNER_CHAT_ID)
 
 
 def get_credit_alert(alert_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
     row = conn.execute(
         'SELECT id, sender_name, payment_date, payment_amount, paid_confirmed_at FROM credit_alerts WHERE id = ?',
         (alert_id,)
@@ -78,8 +220,37 @@ def get_credit_alert(alert_id: int):
     return row
 
 
+def get_fine(fine_id: int):
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
+    row = conn.execute(
+        'SELECT id, type, number, amount, description, vehicle, fine_date, vendor, paid_confirmed_at FROM fines WHERE id = ?',
+        (fine_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def confirm_fine_paid(fine_id: int, via: str = 'telegram_button') -> bool:
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
+    cur = conn.execute(
+        '''
+        UPDATE fines
+        SET paid_confirmed_at = datetime('now'),
+            type = CASE WHEN type = 'new' THEN 'fined' ELSE type END
+        WHERE id = ? AND paid_confirmed_at IS NULL
+        ''',
+        (fine_id,)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
 def confirm_credit_alert_paid(alert_id: int, via: str = 'telegram_button') -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    from consumption.db import connect as _db_connect
+    conn = _db_connect()
     cur = conn.execute(
         '''
         UPDATE credit_alerts
@@ -95,230 +266,22 @@ def confirm_credit_alert_paid(alert_id: int, via: str = 'telegram_button') -> bo
     return cur.rowcount > 0
 
 
-def decode_qr(image_path: str) -> dict:
-    """Decode QR code from image and return structured data."""
-    try:
-        from pyzbar.pyzbar import decode
-        from PIL import Image
-    except ImportError:
-        log.error("pyzbar or PIL not installed. Install with: pip install pyzbar pillow")
-        return {}
-    try:
-        decoded = decode(Image.open(image_path))
-        if not decoded:
-            return {}
-        data = decoded[0].data.decode('utf-8', errors='replace')
-        # Parse Ozon QR: "t=20260504T2051&s=1234.56&fn=9999078900005412&i=12345&fp=1234567890"
-        result = {}
-        for part in data.split('&'):
-            if '=' in part:
-                k, v = part.split('=', 1)
-                result[k] = v
-        return result
-    except Exception as e:
-        log.error(f"QR decode failed: {e}")
-        return {}
-
-
-TAG_BRANDS = [
-    'ETRO', 'MASSIMO DUTTI', 'ZEGNA', 'GUCCI', 'PRADA', 'ARMANI', 'BOSS', 'HUGO', 'ZARA',
-    'MASSIMO', 'LACOSTE', 'TOMMY', 'RALPH', 'POLO', 'DIOR', 'VALENTINO',
-    'BURBERRY', 'DOLCE', 'GABBANA', 'LOUIS', 'VUITTON', 'BRIONI', 'CANALI'
-]
-TAG_COLOR_WORDS = {
-    'MULTICOL', 'MULTICOLOR', 'BLACK', 'WHITE', 'BLUE', 'NAVY', 'GREY', 'GRAY',
-    'RED', 'GREEN', 'BEIGE', 'BROWN', 'ROSA', 'PINK', 'YELLOW', 'ORANGE', 'IVORY'
-}
-TAG_MODEL_WORDS = {'CAMICIE', 'CAMICIA', 'SHIRT', 'POLO', 'TSHIRT', 'T-SHIRT', 'JEANS', 'PANTS'}
-
-
-def _clean_ocr_lines(text: str) -> str:
-    lines = []
-    for raw_line in (text or '').splitlines():
-        line = re.sub(r'[^\w\s.,%₽€$£/#:-]', ' ', raw_line, flags=re.UNICODE)
-        line = re.sub(r'\s+', ' ', line).strip()
-        if line:
-            lines.append(line)
-    return '\n'.join(lines)
-
-
-def _ocr_crop(image_path: str, box_ratio: tuple[float, float, float, float], lang: str = 'eng', psm: str = '6') -> str:
-    """OCR helper для отдельных зон бирки."""
-    try:
-        from PIL import Image, ImageEnhance, ImageOps
-        img = Image.open(image_path)
-        w, h = img.size
-        box = (int(w * box_ratio[0]), int(h * box_ratio[1]), int(w * box_ratio[2]), int(h * box_ratio[3]))
-        crop = ImageOps.grayscale(img.crop(box))
-        crop = crop.resize((crop.width * 5, crop.height * 5))
-        crop = ImageOps.autocontrast(crop)
-        crop = ImageEnhance.Contrast(crop).enhance(3.0)
-        path = image_path.rsplit('.', 1)[0] + f'_crop_{int(box_ratio[0]*100)}_{int(box_ratio[1]*100)}.png'
-        crop.save(path)
-        result = subprocess.run(
-            ['tesseract', path, 'stdout', '-l', lang, '--oem', '1', '--psm', psm],
-            capture_output=True, text=True, check=False
-        )
-        return _clean_ocr_lines(result.stdout.strip())
-    except Exception as e:
-        log.warning(f"Crop OCR failed: {e}")
-        return ''
-
-
-def _score_ocr_text(text: str) -> int:
-    if not text:
-        return 0
-    lower = text.lower()
-    digits = len(re.findall(r'\d', text))
-    latin_words = len(re.findall(r'\b[A-Za-z]{3,}\b', text))
-    cyr_words = len(re.findall(r'\b[А-Яа-яЁё]{3,}\b', text))
-    markers = len(re.findall(r'[₽€$£]|\b(?:EUR|USD|RUB|SIZE|TAGLIA|ФН|ФП|ИТОГО)\b', text, flags=re.I))
-    score = digits + latin_words * 3 + cyr_words * 2 + markers * 8
-
-    # Очень сильные сигналы настоящего чека/бирки. Это защищает чеки от выбора шумного OCR-варианта.
-    for kw in ['кассовый чек', 'фискальный', 'фн', 'фп', 'итог', 'безналичными']:
-        if kw in lower:
-            score += 120
-    for kw in ['etro', 'camicie', 'multicol', 'taglia', 'size']:
-        if kw in lower:
-            score += 100
-    if re.search(r'\b\d{4,6}[ /-]\d{6,10}\b', text):
-        score += 120
-    if re.search(r'\b\d{12,14}\b', text):
-        score += 60
-    return score
-
-
-def ocr_image(image_path: str) -> str:
-    """Run Tesseract OCR with several preprocessing variants and keep the best result."""
-    prepared_paths = [image_path]
-    try:
-        from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-
-        img = Image.open(image_path)
-        variants = []
-
-        gray = ImageOps.grayscale(img)
-        variants.append(('gray', gray))
-
-        upscaled = gray.resize((gray.width * 3, gray.height * 3))
-        upscaled = ImageOps.autocontrast(upscaled)
-        upscaled = ImageEnhance.Contrast(upscaled).enhance(2.4)
-        variants.append(('up', upscaled))
-
-        bw = upscaled.point(lambda x: 0 if x < 170 else 255)
-        bw = bw.filter(ImageFilter.SHARPEN)
-        variants.append(('bw', bw))
-
-        for suffix, variant in variants:
-            prep_path = image_path.rsplit('.', 1)[0] + f'_{suffix}.png'
-            variant.save(prep_path)
-            prepared_paths.append(prep_path)
-    except Exception as e:
-        log.warning(f"OCR preprocess failed: {e}")
-
-    best_text = ''
-    best_score = -1
-    for candidate in prepared_paths:
-        for psm in ('6', '11'):
-            try:
-                result = subprocess.run(
-                    ['tesseract', candidate, 'stdout', '-l', 'rus+eng', '--oem', '1', '--psm', psm],
-                    capture_output=True, text=True, check=True
-                )
-                text = _clean_ocr_lines(result.stdout.strip())
-                score = _score_ocr_text(text)
-                if score > best_score:
-                    best_text = text
-                    best_score = score
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                continue
-
-    if not best_text:
-        log.error("OCR failed: no usable text")
-    return best_text
-
-
-def classify_image_type(ocr_text: str) -> str:
-    """Определяет тип фото: 'receipt', 'tag' или 'unknown'"""
-    text = (ocr_text or '').lower()
-    receipt_score = 0
-    tag_score = 0
-
-    if any(kw in text for kw in ['кассовый чек', 'фискальный', 'фн', 'фп', 'итого', 'сдача', 'наличными', 'безналич']):
-        receipt_score += 4
-    if '₽' in text or 'руб' in text:
-        receipt_score += 2
-    if len(re.findall(r'\d+[.,]\d{2}\s*₽?', text)) >= 2:
-        receipt_score += 2
-
-    if any(kw.lower() in text for kw in ['€', '$', 'eur', 'usd', 'gbp', 'hkd', 'multicol', 'taglia', 'size', 'article', 'camicie', 'camicia']):
-        tag_score += 3
-    if any(brand.lower() in text for brand in TAG_BRANDS):
-        tag_score += 4
-    if re.search(r'\b\d{12,14}\b', text):
-        tag_score += 2
-    if re.search(r'\b\d{4,6}[ /-]\d{6,10}\b', text):
-        tag_score += 3
-    if any(word.lower() in text for word in TAG_COLOR_WORDS):
-        tag_score += 2
-
-    if receipt_score >= tag_score + 2:
-        return 'receipt'
-    if tag_score >= receipt_score + 1:
-        return 'tag'
-    return 'unknown'
-
-
-def _extract_barcode(image_path: str) -> str | None:
-    try:
-        from pyzbar.pyzbar import decode
-        from PIL import Image
-        decoded = decode(Image.open(image_path))
-        for item in decoded:
-            value = item.data.decode('utf-8', errors='ignore').strip()
-            if value.isdigit() and 8 <= len(value) <= 14:
-                return value
-    except Exception as e:
-        log.warning(f"Barcode decode failed: {e}")
-    return None
-
-
-def _extract_tag_size_from_image(image_path: str) -> str | None:
-    """Пытается достать размер из правой части бирки (часто число в рамке)."""
-    try:
-        from PIL import Image, ImageOps, ImageEnhance
-        img = Image.open(image_path)
-        w, h = img.size
-        # Правая центральная зона — типичное место размера на fashion-бирках.
-        boxes = [
-            # Узкий crop по рамке размера справа.
-            (int(w * 0.63), int(h * 0.42), int(w * 0.81), int(h * 0.58)),
-            (int(w * 0.62), int(h * 0.38), int(w * 0.82), int(h * 0.60)),
-            (int(w * 0.60), int(h * 0.35), int(w * 0.84), int(h * 0.62)),
-            # Более широкие fallback-зоны.
-            (int(w * 0.60), int(h * 0.30), int(w * 0.90), int(h * 0.58)),
-            (int(w * 0.55), int(h * 0.25), int(w * 0.92), int(h * 0.65)),
-        ]
-        for box in boxes:
-            crop = ImageOps.grayscale(img.crop(box))
-            crop = crop.resize((crop.width * 6, crop.height * 6))
-            crop = ImageOps.autocontrast(crop)
-            crop = ImageEnhance.Contrast(crop).enhance(4.0)
-            crop = crop.point(lambda x: 0 if x < 155 else 255)
-            path = image_path.rsplit('.', 1)[0] + '_size.png'
-            crop.save(path)
-            for psm in ('6', '11'):
-                result = subprocess.run(
-                    ['tesseract', path, 'stdout', '-l', 'eng', '--oem', '1', '--psm', psm, '-c', 'tessedit_char_whitelist=0123456789'],
-                    capture_output=True, text=True, check=False
-                )
-                nums = re.findall(r'\b(3[8-9]|4[0-9]|5[0-4])\b', result.stdout)
-                if nums:
-                    return nums[-1]
-    except Exception as e:
-        log.warning(f"Tag size crop OCR failed: {e}")
-    return None
+from services.ocr import (
+    TAG_BRANDS,
+    TAG_COLOR_WORDS,
+    TAG_MODEL_WORDS,
+    _clean_ocr_lines,
+    _extract_barcode,
+    _extract_tag_size_from_image,
+    _ocr_crop,
+    _parse_receipt_lines,
+    _score_ocr_text,
+    _write_text_file,
+    classify_image_type,
+    decode_qr,
+    ocr_image,
+    parse_clothing_tag,
+)
 
 
 def get_fx_rate(currency: str, on_date: str | None = None) -> float:
@@ -343,220 +306,80 @@ def get_fx_rate(currency: str, on_date: str | None = None) -> float:
     return fallback.get(currency, 1.0)
 
 
-def _fetch_html(url: str) -> str:
-    req = Request(url, headers={
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    })
-    with urlopen(req, timeout=12) as resp:
-        return resp.read().decode('utf-8', errors='ignore')
+from services.images import (
+    _clean_image_url,
+    _fetch_html,
+    find_product_image_urls,
+)
+from services.receipt_pipeline import persist_receipt, process_source
+from repositories.items import (
+    get_category_id,
+    insert_item,
+    insert_manual_item,
+    insert_tag_item,
+    insert_vision_photo_item,
+    mark_replaced as mark_item_replaced,
+    soft_delete as soft_delete_item,
+    update_item_vision_metadata,
+)
+from repositories.media import (
+    delete_media_asset,
+    get_item_photo_path,
+    link_item_photo,
+    save_media_asset,
+    unlink_item_photos,
+)
 
 
-def _clean_image_url(url: str) -> str:
-    url = html.unescape(url or '')
-    url = url.replace('\\/', '/')
-    # Часто regex захватывает хвосты JSON/HTML после &quot;
-    url = url.split('&quot;')[0].split('"')[0].split("'")[0].strip()
-    return url
-
-
-def find_product_image_urls(query: str) -> dict:
-    """Best-effort: по 1-3 картинкам из Bing, Yandex, Pinterest."""
-    result = {}
-    q = quote_plus(query)
-
-    # --- Bing: собираем несколько murl, берём первые 2 непохожие ---
+def search_product_info_gemini(brand: str, article: str, barcode: str = None) -> dict:
+    """Ищет информацию о товаре через Gemini API по данным бирки."""
     try:
-        data = _fetch_html(f'https://www.bing.com/images/search?q={q}')
-        murls = re.findall(r'&quot;murl&quot;:&quot;(.*?)&quot;', data) or re.findall(r'"murl"\s*:\s*"(.*?)"', data)
-        murls = [_clean_image_url(u) for u in murls if u]
-        seen = set()
-        for u in murls:
-            key = u.split('/')[-1][:30]
-            if key not in seen:
-                if 'Bing' not in result:
-                    result['Bing'] = u
-                elif 'Bing2' not in result:
-                    result['Bing2'] = u
-                seen.add(key)
-            if 'Bing' in result and 'Bing2' in result:
-                break
+        import google.generativeai as genai
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            log.warning('GEMINI_API_KEY not set, skipping Gemini search')
+            return {}
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        query_parts = [f'Бренд: {brand}']
+        if article:
+            query_parts.append(f'Артикул: {article}')
+        if barcode:
+            query_parts.append(f'Штрихкод: {barcode}')
+
+        prompt = f"""Найди информацию о товаре одежды по данным бирки:
+{'\n'.join(query_parts)}
+
+Верни результат в формате JSON:
+{{
+  "name": "название товара",
+  "category": "категория (одежда/обувь/аксессуары)",
+  "description": "описание",
+  "color": "цвет",
+  "material": "материал",
+  "price_rub": "цена в рублях (число или null)",
+  "image_url": "URL фото товара или null",
+  "product_url": "URL страницы товара или null"
+}}
+
+Если не нашёл информацию, верни пустые значения."""
+
+        response = model.generate_content(prompt)
+        text = response.text
+
+        # Извлекаем JSON из ответа
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            log.info(f'Gemini search result: {result}')
+            return result
+
+        return {}
     except Exception as e:
-        log.warning(f"Bing image search failed: {e}")
-
-    # --- Yandex: img_href (оригинал) или avatars thumbnail ---
-    try:
-        data = _fetch_html(f'https://yandex.ru/images/search?text={q}')
-        # Сначала ищем оригиналы
-        img_hrefs = re.findall(r'"img_href":"(https?:\\/\\/[^"\\]+(?:\\.[^"\\]+)*)"', data)
-        if img_hrefs:
-            result['Yandex'] = _clean_image_url(img_hrefs[0])
-        if not result.get('Yandex'):
-            thumbs = re.findall(r'https://avatars\.mds\.yandex\.net/[^"<\\]+', data)
-            if thumbs:
-                result['Yandex'] = _clean_image_url(thumbs[0])
-    except Exception as e:
-        log.warning(f"Yandex image search failed: {e}")
-
-    # --- Pinterest: часто есть прямые URL в og:image ---
-    try:
-        data = _fetch_html(f'https://www.pinterest.com/search/pins/?q={q}')
-        # Pinterest отдаёт JSON в <script> с pin-images
-        pin_imgs = re.findall(r'https://i\.pinimg\.com/originals/[a-z0-9/]+\.(?:jpg|png|webp)', data)
-        if pin_imgs:
-            seen = set()
-            for url in pin_imgs:
-                key = url.split('/')[-1][:25]
-                if key not in seen:
-                    if 'Pinterest' not in result:
-                        result['Pinterest'] = url
-                    seen.add(key)
-    except Exception as e:
-        log.warning(f"Pinterest search failed: {e}")
-
-    # Google отказался от прямых URL. Вместо него пишем ссылку на поиск.
-    if not result:
-        result['Google'] = f'https://www.google.com/search?tbm=isch&q={q}'
-
-    return result
-
-
-def parse_clothing_tag(ocr_text: str, image_path: str | None = None) -> dict:
-    """Извлекает данные с бирки одежды."""
-    text = ocr_text or ''
-    if image_path:
-        # Дополнительные OCR-зоны: вся наклейка, артикул, цена. Особенно помогает Massimo Dutti.
-        extra_parts = [
-            _ocr_crop(image_path, (0.04, 0.05, 0.92, 0.85), 'eng', '6'),
-            _ocr_crop(image_path, (0.04, 0.18, 0.92, 0.40), 'eng', '11'),
-            _ocr_crop(image_path, (0.12, 0.50, 0.92, 0.73), 'eng', '11'),
-        ]
-        extra = '\n'.join(p for p in extra_parts if p)
-        if extra:
-            text = text + '\n' + extra
-    upper_text = text.upper()
-    lines = [l.strip() for l in upper_text.split('\n') if l.strip()]
-    result = {
-        'brand': None,
-        'article': None,
-        'barcode': None,
-        'size': None,
-        'color': None,
-        'model': None,
-        'price': None,
-        'currency': 'RUB',
-        'raw': text[:800],
-    }
-
-    if image_path:
-        result['barcode'] = _extract_barcode(image_path)
-        image_size = _extract_tag_size_from_image(image_path)
-    else:
-        image_size = None
-
-    # Спец-кейс: стилизованный логотип Massimo Dutti OCR часто читает как MOSSI/MAR... DUTT.
-    if re.search(r'(MASS|MOSSI|MOSS\w*|MAR\w*)\s*(IMO|I|WIO|WIO)?\s+DUTT\w*', upper_text):
-        result['brand'] = 'MASSIMO DUTTI'
-
-    for brand in TAG_BRANDS:
-        if result['brand']:
-            break
-        if brand in upper_text:
-            result['brand'] = brand
-            break
-
-    # Не угадываем бренд по первому латинскому слову: OCR часто даёт мусор вроде CNI/MU.
-    # Бренд ставим только из проверенного словаря TAG_BRANDS.
-
-    art = re.search(r'\b(\d{4,6})[ /-](\d{6,10})\b', upper_text)
-    if art:
-        result['article'] = f"{art.group(1)}/{art.group(2)}"
-    else:
-        art3 = re.search(r'\b(\d{4})[ /-](\d{3})[ /-](\d{3})(?:\s+\d{1,2})?\b', upper_text)
-        if art3:
-            result['article'] = f"{art3.group(1)}/{art3.group(2)}/{art3.group(3)}"
-    if not result['article']:
-        # fallback на 8-14 цифр, но не если это цена
-        candidates = re.findall(r'\b\d{8,14}\b', upper_text)
-        if candidates:
-            result['article'] = result['barcode'] or candidates[0]
-
-    for word in TAG_MODEL_WORDS:
-        if word in upper_text:
-            result['model'] = word.title()
-            break
-
-    table_size = re.search(r'EUR\s+USA\s+MEX\s+UK\s*\n\s*(3[8-9]|4[0-9]|5[0-4])\b', upper_text)
-    if table_size:
-        result['size'] = table_size.group(1)
-
-    if not result['size']:
-        size_patterns = [
-            r'(?:SIZE|TAGLIA|РАЗМЕР)[:\s]*(XXXL|XXL|XL|XS|S|M|L|3[8-9]|4[0-9]|5[0-4])\b',
-            r'\b(3[8-9]|4[0-9]|5[0-4])\b',
-            r'\b(XXXL|XXL|XL|XS|S|M|L)\b'
-        ]
-        for pattern in size_patterns:
-            m = re.search(pattern, upper_text)
-            if m:
-                candidate = m.group(1)
-                if candidate not in {'EUR', 'USA', 'MEX', 'UK'}:
-                    result['size'] = candidate
-                    break
-
-    if image_size:
-        result['size'] = image_size
-
-    for color in TAG_COLOR_WORDS:
-        if color in upper_text:
-            result['color'] = color
-            break
-
-    price_patterns = [
-        r'([€$£])\s*(\d+[.,]\d{2})',
-        r'(\d+[.,]\d{2})\s*(EUR|USD|GBP|HKD|€|\$|£)\b',
-        r'\b(\d{2,5}[.,]\d{2})\b'
-    ]
-    price_candidates = []
-    for pattern in price_patterns:
-        for m in re.finditer(pattern, upper_text):
-            groups = [g for g in m.groups() if g]
-            value = next((g for g in groups if re.search(r'\d', g)), None)
-            curr = next((g for g in groups if not re.search(r'\d', g)), None)
-            try:
-                amount = float(value.replace(',', '.')) if value else None
-            except Exception:
-                amount = None
-            if amount is None or amount <= 0:
-                continue
-            currency = result['currency']
-            if curr:
-                curr = curr.upper()
-                if curr in {'€', 'EUR'}:
-                    currency = 'EUR'
-                elif curr in {'$', 'USD'}:
-                    currency = 'USD'
-                elif curr in {'£', 'GBP'}:
-                    currency = 'GBP'
-                elif curr == 'HKD':
-                    currency = 'HKD'
-            elif 'GBP' in upper_text:
-                currency = 'GBP'
-            elif '€' in upper_text or ' EUR' in upper_text:
-                currency = 'EUR'
-            price_candidates.append((amount, currency))
-
-    if price_candidates:
-        # На плохом OCR первая цифра часто теряется (64.90 -> 4.90), поэтому берём максимальную разумную цену.
-        amount, currency = max(price_candidates, key=lambda x: x[0])
-        result['price'] = amount
-        result['currency'] = currency
-    elif result['brand'] in {'ETRO', 'GUCCI', 'PRADA', 'VALENTINO'} or result['model']:
-        result['currency'] = 'EUR'
-
-    if not result['article'] and result['barcode']:
-        result['article'] = result['barcode']
-
-    return result
+        log.warning(f'Gemini search failed: {e}')
+        return {}
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -567,19 +390,104 @@ logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('telegram').setLevel(logging.INFO)
 
 def generate_alerts() -> int:
-    """Generate daily alerts: warranty + expiry + low_stock."""
+    """Generate daily alerts: warranty + expiry + low_stock + replace."""
+    total = 0
+    # 1. Гарантии и сроки годности (warranty_check)
     try:
         from warranty_check import run_daily_alert_checks
-
         conn = get_db()
-        generated = run_daily_alert_checks(conn)
+        total = run_daily_alert_checks(conn)
         conn.close()
-        if generated:
-            log.info(f"Generated {generated} alerts")
-        return generated
     except Exception as e:
-        log.warning(f"generate_alerts failed: {e}")
+        log.warning(f"generate_alerts (warranty) failed: {e}")
+
+    # 2. Напоминания о замене вещей
+    try:
+        total += generate_replace_alerts()
+    except Exception as e:
+        log.warning(f"generate_alerts (replace) failed: {e}")
+
+    if total:
+        log.info(f"Generated {total} alerts total")
+    return total
+
+
+def generate_replace_alerts() -> int:
+    """Generate replacement reminders for items with replace_after_months.
+
+    Алерт создаётся за 30 дней до даты замены.
+    Повторно не создаётся, если уже есть pending/sent алерт за этот item
+    за последние 7 дней.
+    """
+    from calendar import monthrange
+
+    def add_months_safe(dt, months):
+        month = dt.month - 1 + months
+        year = dt.year + month // 12
+        month = month % 12 + 1
+        day = min(dt.day, monthrange(year, month)[1])
+        return dt.replace(year=year, month=month, day=day)
+
+    today = date.today()
+    conn = get_db()
+    try:
+        rows = conn.execute('''
+            SELECT id, name, brand, purchase_date, replace_after_months
+            FROM items
+            WHERE replace_after_months IS NOT NULL
+              AND purchase_date IS NOT NULL
+              AND deleted_at IS NULL
+              AND status != 'replaced'
+        ''').fetchall()
+
+        created = 0
+        for row in rows:
+            item_id = row['id']
+            name = row['name']
+            brand = row['brand']
+            pd = datetime.strptime(row['purchase_date'][:10], '%Y-%m-%d').date()
+            replace_date = add_months_safe(pd, row['replace_after_months'])
+            days_left = (replace_date - today).days
+
+            # Алерт только если замена через ≤30 дней или уже просрочена
+            if days_left > 30:
+                continue
+
+            # Проверяем, нет ли недавнего алерта (pending/sent за 7 дней)
+            recent = conn.execute('''
+                SELECT 1 FROM alerts
+                WHERE item_id = ? AND alert_type = 'replace_reminder'
+                  AND created_at >= datetime('now', '-7 days')
+                  AND status IN ('pending', 'sent')
+                LIMIT 1
+            ''', (item_id,)).fetchone()
+            if recent:
+                continue
+
+            if days_left <= 0:
+                title = f'🔴 Пора менять: {name}'
+                msg = f'Срок замены истёк {-days_left} дн. назад ({replace_date})'
+            else:
+                title = f'🔄 Скоро замена: {name}'
+                msg = f'Осталось {days_left} дн. до замены ({replace_date})'
+            if brand:
+                msg += f'\nБренд: {brand}'
+
+            conn.execute('''
+                INSERT INTO alerts (item_id, alert_type, title, message, scheduled_at, status)
+                VALUES (?, 'replace_reminder', ?, ?, datetime('now'), 'pending')
+            ''', (item_id, title, msg))
+            created += 1
+
+        conn.commit()
+        if created:
+            log.info(f"Generated {created} replace alerts")
+        return created
+    except Exception as e:
+        log.warning(f"generate_replace_alerts failed: {e}")
         return 0
+    finally:
+        conn.close()
 
 
 async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
@@ -603,7 +511,17 @@ async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
         ).fetchall()
         for row in rows:
             text = row['message'] or f"{row['title']} ({row['alert_type']})"
-            await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text)
+
+            # Для replace_reminder добавляем кнопку "✅ Заменено"
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            if row['alert_type'] == 'replace_reminder':
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton('✅ Заменено', callback_data=f'item_replaced:{row["id"]}')
+                ]])
+                await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text, reply_markup=kb)
+            else:
+                await ctx.bot.send_message(chat_id=OWNER_CHAT_ID, text=text)
+
             conn.execute("UPDATE alerts SET status='sent' WHERE id=?", (row['id'],))
             sent += 1
         conn.commit()
@@ -616,29 +534,59 @@ async def run_daily_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def get_db(max_retries=3, delay=1):
-    """Connect to DB with retry on lock."""
-    for i in range(max_retries):
-        try:
-            conn = sqlite3.connect(DB_PATH, timeout=10)
-            conn.row_factory = sqlite3.Row
-            return conn
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e) and i < max_retries - 1:
-                time.sleep(delay * (2 ** i))  # Экспоненциальная задержка
-                continue
-            raise
-
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        '🛒 Привет, это Consumption Agent.\n'
-        'Для списка команд: /help'
+    """Connect through the shared DB helper."""
+    if db_connect is None:
+        raise RuntimeError("consumption.db.connect is unavailable")
+    return db_connect(
+        DB_PATH,
+        timeout=10,
+        max_retries=max_retries,
+        delay=delay,
+        check_same_thread=False,
     )
+
+
+
 
 async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         '📸 Отправьте фото чека (одно фото за раз).\n'
         'Я распознаю текст и добавлю товары в инвентарь.'
     )
+
+
+async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений — для доп. информации после vision_confirm."""
+    text = (update.message.text or '').strip()
+
+    # Проверяем, ждём ли доп. информацию о товаре
+    item_id = ctx.user_data.pop('vision_awaiting_notes', None)
+    if item_id:
+        # Если текст пустой — не сохраняем ничего
+        if not text:
+            await update.message.reply_text('ℹ️ Дополнительная информация не добавлена')
+            return
+
+        # Ограничиваем 50 символами
+        notes_text = text[:50]
+        conn = get_db()
+        try:
+            # Добавляем к существующим notes
+            row = conn.execute('SELECT notes FROM items WHERE id = ?', (item_id,)).fetchone()
+            if row:
+                existing_notes = row[0] or ''
+                new_notes = existing_notes + '\nДоп. информация: ' + notes_text if existing_notes else 'Доп. информация: ' + notes_text
+                conn.execute('UPDATE items SET notes = ? WHERE id = ?', (new_notes, item_id))
+                conn.commit()
+                await update.message.reply_text(f'✅ Дополнительная информация сохранена: {notes_text}')
+                return
+        except Exception as e:
+            log.warning(f'text_handler: failed to save notes: {e}')
+        finally:
+            conn.close()
+
+    # Если не ждём доп. информацию — игнорируем (или можно добавить другую логику)
+    # Пока просто не отвечаем на обычные текстовые сообщения
 
 
 async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -648,70 +596,359 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Get the highest resolution photo
     photo: PhotoSize = update.message.photo[-1]
-    file = await photo.get_file()
+    caption = update.message.caption or ''
+    log.info(f'photo_handler: message_id={update.message.message_id}, caption={caption!r}')
+
+    # === Редирект: /add_item + фото ===
+    # Если caption начинается с /add_item — перенаправляем в cmd_add_item
+    if caption.strip().startswith('/add_item'):
+        log.info(f'photo_handler: redirecting to cmd_add_item, args={caption.strip().split()[1:]}')
+        ctx.args = caption.strip().split()[1:]
+        await cmd_add_item(update, ctx)
+        return
+
+    # Если caption выглядит как описание вещи (есть бренд или срок замены)
+    # — тоже перенаправляем в cmd_add_item
+    if caption.strip():
+        from brand_parser import parse_brand_and_name
+        bp = parse_brand_and_name(caption)
+        if bp['name'] and (bp['brand'] or bp['replace_months']):
+            log.info(f'photo_handler: redirecting to cmd_add_item (detected item description), args={caption.strip().split()}')
+            ctx.args = caption.strip().split()
+            await cmd_add_item(update, ctx)
+            return
+
+    # Phase B: Memory Lane fast path — если в caption есть триггер-слова или
+    # хэштеги, сохраняем в memory_lane_items + media_assets и завершаем,
+    # не попадая в OCR/QR-пайплайн чеков.
+    try:
+        import memory_lane as _ml
+    except ImportError:
+        _ml = None
+    if _ml is not None and _ml.is_memory_lane_caption(caption):
+        try:
+            file = await photo.get_file()
+            tmp_path = os.path.join(RECEIPTS_DIR, f'_ml_{update.message.message_id}.jpg')
+            await file.download_to_drive(tmp_path)
+            with open(tmp_path, 'rb') as fh:
+                buf = fh.read()
+
+            conn = get_db()
+            try:
+                asset_id = _ml.save_media(conn, buf, mime='image/jpeg')
+                parsed = _ml.parse_caption(caption, conn)
+
+                # Обогащаем через Vision API — тема, теги, описание
+                vision_info = {}
+                try:
+                    from vision_item import enrich_memory_lane
+                    vision_info = enrich_memory_lane(tmp_path, caption)
+                    if vision_info and 'error' not in vision_info:
+                        # Тема из Vision если caption не дала
+                        if not parsed.get('topic') and vision_info.get('topic'):
+                            parsed['topic'] = vision_info['topic']
+                        # Дополняем style_tags
+                        v_tags = vision_info.get('style_tags', [])
+                        existing = set(parsed.get('style_tags', []))
+                        for t in v_tags:
+                            if t.lower() not in {x.lower() for x in existing}:
+                                parsed.setdefault('style_tags', []).append(t)
+                except Exception as e:
+                    log.warning(f'Vision enrich failed (non-critical): {e}')
+
+                item_id = _ml.save_memory_lane(conn, caption, asset_id, parsed, vision_info=vision_info or None)
+            finally:
+                conn.close()
+
+            os.remove(tmp_path)
+
+            liked = ', '.join(parsed.get('liked', [])) or '—'
+            tags = ', '.join(parsed.get('style_tags', [])) or '—'
+            topic = parsed.get('topic') or '—'
+            desc = vision_info.get('description', '')
+            # Название: из caption (brand_parser) или Vision
+            name = parsed.get('item_name') or vision_info.get('name', '')
+            # Бренд: из caption (brand_parser) приоритетнее Vision
+            brand = parsed.get('brand') or vision_info.get('brand')
+
+            parts = [f'🧠 Memory Lane #{item_id}']
+            if name:
+                parts.append(f'📌 {name}')
+            if brand:
+                parts.append(f'🏷️ Бренд: {brand}')
+            parts.append(f'Реакция: {liked}')
+            parts.append(f'Стиль: {tags}')
+            parts.append(f'Тема: {topic}')
+            if desc:
+                parts.append(f'📝 {desc}')
+            if vision_info.get('estimated_price_rub'):
+                parts.append(f'💰 Оценка: ~{vision_info["estimated_price_rub"]} ₽')
+
+            await update.message.reply_text('\n'.join(parts))
+            return
+        except Exception as e:
+            log.warning(f'memory_lane save failed: {e}')
+            # fall through to standard handler
+
     receipt_path = os.path.join(RECEIPTS_DIR, f'receipt_{update.message.message_id}.jpg')
+    file = await photo.get_file()
     await file.download_to_drive(receipt_path)
     log.info(f'Saved receipt: {receipt_path}')
 
-    # Decode QR code (Ozon format)
-    qr_data = decode_qr(receipt_path)
+    # === Быстрая классификация типа фото (Vision API, ~1-2 токена) ===
+    # Определяем тип ДО OCR/QR, чтобы не тратить время на чеки для фото предметов
+    image_type = 'other'
+    try:
+        import asyncio
+        from vision_item import classify_photo_async
+        v_type = await asyncio.wait_for(
+            classify_photo_async(receipt_path),
+            timeout=15.0
+        )
+        if v_type and v_type != 'unknown':
+            image_type = v_type
+            log.info(f"Vision classify (fast path): {v_type}")
+    except asyncio.TimeoutError:
+        log.warning("Vision classify timeout after 15s (fast path)")
+    except Exception as e:
+        log.warning(f"Vision classify failed (fast path): {e}")
+
+    # QR/OCR только для чеков и бирок — для предметов не нужен
+    qr_data = None
     total_amount = None
     purchase_date = None
-    if qr_data:
-        total_amount = qr_data.get('s')  # Итоговая сумма (например, "1234.56")
-        if total_amount:
-            total_amount = float(total_amount)
-        # Дата в формате "20260504T2051" → "2026-05-04"
-        date_str = qr_data.get('t')
-        if date_str and len(date_str) >= 8:
-            purchase_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    text = ''
+    if image_type in ('receipt', 'tag'):
+        # Decode QR code (Ozon format) — в отдельном потоке
+        log.info(f'photo_handler: decoding QR in thread for {receipt_path}')
+        qr_data = await asyncio.to_thread(decode_qr, receipt_path)
+        if qr_data:
+            total_amount = qr_data.get('s')
+            if total_amount:
+                total_amount = float(total_amount)
+            date_str = qr_data.get('t')
+            if date_str and len(date_str) >= 8:
+                purchase_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
-    # Run OCR as fallback
-    text = ocr_image(receipt_path)
-    # Save raw OCR for debugging
-    with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
-        f.write(text or 'NO_OCR_TEXT')
+        # Run OCR only for receipts/tags — в отдельном потоке
+        log.info(f'photo_handler: running OCR in thread for {receipt_path}')
+        text = await asyncio.to_thread(ocr_image, receipt_path)
+        # Save raw OCR for debugging
+        with open(receipt_path.replace('.jpg', '_ocr.txt'), 'w', encoding='utf-8') as f:
+            f.write(text or 'NO_OCR_TEXT')
 
-    # Классификация типа изображения
-    image_type = classify_image_type(text or '')
-    tag_probe = parse_clothing_tag(text or '', receipt_path)
-    if image_type == 'unknown' and (tag_probe.get('brand') or tag_probe.get('article') or tag_probe.get('barcode')) and not total_amount:
+    # Если fast path не сработал (image_type всё ещё 'other'), используем OCR-классификацию как fallback
+    if image_type == 'other':
+        image_type = classify_image_type(text or '')
+
+    tag_probe = await asyncio.to_thread(parse_clothing_tag, text or '', receipt_path)
+
+    # Проверяем штрихкод через pyzbar (более надёжный метод)
+    pyzbar_barcode = None
+    try:
+        from pyzbar.pyzbar import decode
+        from PIL import Image
+        img = Image.open(receipt_path)
+        codes = decode(img)
+        if codes:
+            pyzbar_barcode = codes[0].data.decode('utf-8')
+            log.info(f'pyzbar found barcode: {pyzbar_barcode}')
+    except Exception as e:
+        log.debug(f'pyzbar failed: {e}')
+
+    # Считаем биркой только если:
+    # 1. Есть brand + (article или barcode)
+    # 2. ИЛИ есть чёткий штрихкод EAN-13 (через OCR или pyzbar)
+    # 3. И текст содержит признаки бирки (размер, состав, страна)
+    has_barcode = (tag_probe.get('barcode') and len(str(tag_probe.get('barcode'))) >= 8) or (pyzbar_barcode and len(pyzbar_barcode) >= 8)
+    has_article = tag_probe.get('article') and len(str(tag_probe.get('article'))) >= 5
+    has_brand = tag_probe.get('brand') and len(str(tag_probe.get('brand'))) >= 2
+
+    # Проверяем, есть ли в тексте признаки бирки
+    raw_text = (tag_probe.get('raw') or '').upper()
+    tag_indicators = ['СОСТАВ', 'СТРАНА', 'РАЗМЕР', 'SIZE', 'MADE IN', 'АРТИКУЛ', 'ARTICLE', 'CARE', 'WASH']
+    has_tag_indicators = any(ind in raw_text for ind in tag_indicators)
+
+    is_real_tag = (
+        (has_brand and (has_article or has_barcode)) or
+        (has_barcode and has_tag_indicators) or
+        (pyzbar_barcode and len(pyzbar_barcode) >= 10)  # EAN-13 штрихкод = точно бирка
+    )
+
+    # Если Vision API сказал tech/other, но есть признаки бирки — переопределяем
+    if image_type in ('unknown', 'other', 'tech') and is_real_tag and not total_amount:
         image_type = 'tag'
-    log.info(f"Тип изображения: {image_type}")
+        log.info(f"Тип изображения: tag (brand={tag_probe.get('brand')}, article={tag_probe.get('article')}, barcode={pyzbar_barcode or tag_probe.get('barcode')})")
+    else:
+        log.info(f"Тип изображения: {image_type} (is_real_tag={is_real_tag}, has_brand={has_brand}, has_article={has_article}, has_barcode={has_barcode}, pyzbar={pyzbar_barcode})")
 
     items = []
 
+    # === Если это предмет/одежда/еда/интерьер (не чек и не бирка) — распознаём как вещь ===
+    if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other', 'unknown') and not qr_data:
+        log.info(f'photo_handler: recognizing item, image_type={image_type}, path={receipt_path}')
+        try:
+            import asyncio
+            from vision_item import recognize_item_async
+            import time
+            start_time = time.time()
+            item_info = await recognize_item_async(receipt_path)
+            elapsed = time.time() - start_time
+            log.info(f'photo_handler: recognize_item took {elapsed:.1f}s')
+            log.info(f'photo_handler: recognize_item result={item_info}')
+            if item_info and item_info.get('error') == 'timeout':
+                # Таймаут распознавания — сообщаем пользователю, не сохраняем в БД
+                await update.message.reply_text(
+                    '❌ Объект не распознан\n\n'
+                    'Попробуйте:\n'
+                    '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                    '• Использовать команду /add_item <название>'
+                )
+                return
+            if item_info and 'error' not in item_info and item_info.get('name'):
+                item_name = item_info.get('name', 'Предмет')
+                item_brand = item_info.get('brand')
+                item_cat = item_info.get('category', 'другое')
+                item_desc = item_info.get('description', '')
+                item_color = item_info.get('color')
+                item_price = item_info.get('estimated_price_rub')
+                style_tags = item_info.get('style_tags', [])
+
+                # Сохраняем в БД сразу (при отклонении удалим)
+                conn = get_db()
+                cat_map = {
+                    'одежда': 'cat_clo_everyday', 'обувь': 'cat_clo_everyday',
+                    'техника': 'cat_electronics', 'мебель': 'cat_furniture',
+                    'еда': 'cat_food', 'интерьер': 'cat_furniture',
+                    'косметика': 'cat_cosmetics', 'аксессуары': 'cat_accessories',
+                    'бытовая техника': 'cat_appliances',
+                }
+                slug = cat_map.get(item_cat.lower(), 'other')
+                cat_id = get_category_id(conn, slug)
+
+                notes_parts = ['Добавлено через распознавание фото']
+                if item_color:
+                    notes_parts.append(f'Цвет: {item_color}')
+                if item_info.get('material'):
+                    notes_parts.append(f'Материал: {item_info["material"]}')
+                if item_desc:
+                    notes_parts.append(f'Описание: {item_desc}')
+                if item_price:
+                    notes_parts.append(f'Оценочная цена: ~{item_price} ₽')
+                notes = '\n'.join(notes_parts)
+
+                attrs = json.dumps({
+                    'color': item_color,
+                    'description': item_desc,
+                    'style_tags': style_tags,
+                    'vision_type': item_info.get('type'),
+                    'material': item_info.get('material'),
+                    'estimated_price_rub': item_price,
+                }, ensure_ascii=False)
+
+                new_item_id = insert_vision_photo_item(
+                    conn,
+                    name=item_name,
+                    brand=item_brand,
+                    purchase_price=item_price,
+                    category_id=cat_id,
+                    attributes=attrs,
+                    notes=notes,
+                    purchase_date=date.today().isoformat(),
+                )
+
+                # Сохраняем фото и связываем с item
+                asset_id = None
+                try:
+                    with open(receipt_path, 'rb') as fh:
+                        buf = fh.read()
+                    asset_id = save_media_asset(conn, buf, mime='image/jpeg')
+                    if asset_id:
+                        link_item_photo(conn, item_id=new_item_id, media_asset_id=asset_id)
+                        log.info(f'vision_photo: linked photo to item_id={new_item_id}, asset_id={asset_id}')
+                except Exception as e:
+                    log.warning(f'vision_photo: failed to save photo: {e}')
+
+                conn.commit()
+                conn.close()
+
+                # Показываем результат с кнопками Подтвердить/Отклонить
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                parts = ['📷 Предмет распознан']
+                parts.append(f'📌 {item_name}')
+                if item_brand:
+                    parts.append(f'🏷️ Бренд: {item_brand}')
+                parts.append(f'📂 Категория: {item_cat}')
+                if item_color:
+                    parts.append(f'🎨 Цвет: {item_color}')
+                if item_desc:
+                    parts.append(f'📝 {item_desc}')
+                if style_tags:
+                    parts.append(f'🏷️ Теги: {", ".join(style_tags)}')
+                if item_price:
+                    parts.append(f'💰 Оценка: ~{item_price} ₽')
+                parts.append(f'\nID: {new_item_id}')
+                parts.append('Сохранить в инвентарь?')
+
+                # Сохраняем данные для колбэка
+                ctx.user_data['vision_pending'] = {
+                    'item_id': new_item_id,
+                    'asset_id': asset_id,
+                    'receipt_path': receipt_path,
+                }
+
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton('✅ Подтвердить', callback_data='vision_confirm'),
+                    InlineKeyboardButton('❌ Отклонить', callback_data='vision_reject')
+                ]])
+                await update.message.reply_text('\n'.join(parts), reply_markup=kb)
+                return
+            else:
+                # Результат есть, но name не распознан — сообщаем и не идём в чек
+                await update.message.reply_text(
+                    '❌ Объект не распознан\n\n'
+                    'Попробуйте:\n'
+                    '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                    '• Использовать команду /add_item <название>'
+                )
+                return
+
+        except Exception as e:
+            log.warning(f'Vision item recognition failed: {e}')
+            await update.message.reply_text(
+                '❌ Товар не распознан по фото\n\n'
+                'Попробуйте:\n'
+                '• Отправить фото с описанием (например: "пиджак Corneliani")\n'
+                '• Использовать команду /add_item <название>'
+            )
+            return
+
     if image_type == 'tag':
         # === Обработка бирки ===
+        log.info(f'photo_handler: processing tag, brand={tag_probe.get("brand")}, article={tag_probe.get("article")}')
         tag = tag_probe
         fx_date = purchase_date or date.today().isoformat()
-        rate = get_fx_rate(tag['currency'], fx_date)
+        rate = await asyncio.to_thread(get_fx_rate, tag['currency'], fx_date)
         price_rub = round(tag['price'] * rate, 2) if tag['price'] else None
 
         conn = get_db()
-        cat_id = conn.execute("SELECT id FROM categories WHERE slug='cat_clo_everyday' LIMIT 1").fetchone()
-        if not cat_id:
-            cat_id = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
-        cat_id = cat_id[0] if cat_id else None
+        cat_id = get_category_id(conn, 'cat_clo_everyday')
 
         item_name = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('color')] if x) or (tag.get('article') or 'tag_item')
-        attrs = json.dumps({
-            'size': tag.get('size'),
-            'color': tag.get('color'),
-            'barcode': tag.get('barcode'),
-            'ocr_raw': tag.get('raw', '')[:250]
-        }, ensure_ascii=False)
-
-        conn.execute(
-            "INSERT INTO items (name, brand, model, sku, purchase_price, purchase_currency, purchase_date, attributes, category_id, data_origin) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'telegram_tag')",
-            (item_name, tag.get('brand'), tag.get('model'), tag.get('article'), price_rub,
-             tag.get('currency', 'RUB'), fx_date, attrs, cat_id)
-        )
+        insert_tag_item(conn, tag=tag, item_name=item_name, price_rub=price_rub, category_id=cat_id, purchase_date=fx_date)
         conn.commit()
         conn.close()
 
         search_query = ' '.join(x for x in [tag.get('brand'), tag.get('model'), tag.get('article'), tag.get('color')] if x) or (tag.get('barcode') or 'fashion tag')
+
+        # Ищем информацию через Gemini
+        gemini_info = await asyncio.to_thread(
+            search_product_info_gemini,
+            tag.get('brand', ''),
+            tag.get('article', ''),
+            tag.get('barcode')
+        )
+
         google_images_url = f"https://www.google.com/search?tbm=isch&q={quote_plus(search_query)}"
         yandex_images_url = f"https://yandex.ru/images/search?text={quote_plus(search_query)}"
         bing_images_url = f"https://www.bing.com/images/search?q={quote_plus(search_query)}"
@@ -733,14 +970,41 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 response_lines.append(f"Цена: {tag['price']} {tag['currency']} (≈ {price_rub:.0f} ₽)")
         response_lines.append("Пробую прислать фото.")
-        response_lines.append(f"Ссылки на фото:\nGoogle: {google_images_url}\nYandex: {yandex_images_url}\nBing: {bing_images_url}")
+        # Добавляем информацию от Gemini
+        if gemini_info:
+            response_lines.append('\n🔍 Найдено через Gemini:')
+            if gemini_info.get('name'):
+                response_lines.append(f"📌 Название: {gemini_info['name']}")
+            if gemini_info.get('category'):
+                response_lines.append(f"📂 Категория: {gemini_info['category']}")
+            if gemini_info.get('color'):
+                response_lines.append(f"🎨 Цвет: {gemini_info['color']}")
+            if gemini_info.get('material'):
+                response_lines.append(f"🧵 Материал: {gemini_info['material']}")
+            if gemini_info.get('price_rub'):
+                response_lines.append(f"💰 Цена: ~{gemini_info['price_rub']} ₽")
+            if gemini_info.get('product_url'):
+                response_lines.append(f"🔗 Ссылка: {gemini_info['product_url']}")
+
+        response_lines.append(f"\nСсылки на фото:\nGoogle: {google_images_url}\nYandex: {yandex_images_url}\nBing: {bing_images_url}")
         if not tag.get('brand'):
             response_lines.append("⚠️ Бренд не найден в OCR. Нужна часть бирки с логотипом/названием бренда крупным планом.")
         if not tag.get('brand') and not tag.get('article'):
             response_lines.append(f"OCR: {(text or '')[:180].replace(chr(10), ' ')}")
         await update.message.reply_text('\n'.join(response_lines))
 
-        image_urls = find_product_image_urls(search_query)
+        # Отправляем фото от Gemini если есть
+        if gemini_info and gemini_info.get('image_url'):
+            try:
+                await update.message.reply_photo(
+                    photo=gemini_info['image_url'],
+                    caption=f"🔍 Gemini: {gemini_info.get('name', search_query)}"
+                )
+            except Exception as e:
+                log.warning(f"Failed to send Gemini image: {e}")
+
+        # Отправляем фото из поиска
+        image_urls = await asyncio.to_thread(find_product_image_urls, search_query)
         for engine_url in image_urls.values():
             if not engine_url or engine_url.startswith('https://www.google.com/search'):
                 continue
@@ -751,57 +1015,74 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 log.warning(f"Failed to send image {engine_url}: {e}")
         return
 
-    # === Если НЕ бирка — старая логика обработки чека ===
-    if text:
-        lines = text.split('\n')
-        for line in lines:
-            if 'итого' in line.lower() and not total_amount:
-                match = re.search(r'(\d+[.,]\d{2})', line)
-                if match:
-                    total_amount = float(match.group(1).replace(',', '.'))
-            match = re.search(r'(.{3,40}?)\s+(\d+[.,]?\d*)\s*[x×]\s*(\d+[.,]?\d*)\s*[=≡]\s*(\d+[.,]?\d*)', line)
-            if match:
-                name, price, qty, total = match.groups()
-                items.append({'name': name.strip(), 'price': float(price.replace(',', '.')), 'qty': int(qty), 'total': float(total.replace(',', '.'))})
-                continue
-            match = re.search(r'(.{5,45}?)\s+(\d+[.,]\d{2})\s*₽', line)
-            if match:
-                name, price = match.groups()
-                items.append({'name': name.strip(), 'price': float(price.replace(',', '.')), 'qty': 1, 'total': float(price.replace(',', '.'))})
+    # Unified receipt pipeline: image -> OCR/parser -> structured receipt -> matcher -> DB.
+    try:
+        def _process_receipt_photo():
+            conn = get_db()
+            try:
+                receipt = process_source(receipt_path, input_type='image', vision_fallback=True)
+                if total_amount and receipt.total is None:
+                    receipt.total = total_amount
+                if purchase_date:
+                    receipt.date = purchase_date
+                apply_result = persist_receipt(
+                    conn,
+                    receipt,
+                    dry_run=False,
+                    source='telegram_photo',
+                    data_origin='telegram_photo',
+                    receipt_url=receipt_path,
+                )
+                return receipt, apply_result
+            finally:
+                conn.close()
 
-    conn = get_db()
-    purchase_id = None
-
-    if items or total_amount:
-        purchase_date = purchase_date or date.today().isoformat()
-        cur = conn.execute(
-            "INSERT INTO purchases (purchase_date, total_amount, source, data_origin) "
-            "VALUES (?, ?, 'telegram_photo', 'telegram_photo')",
-            (purchase_date, total_amount)
+        receipt_result, apply_result = await asyncio.to_thread(_process_receipt_photo)
+        purchase_id = apply_result.purchase_id
+        purchase_date = receipt_result.date
+        total_amount = receipt_result.total
+        items = [
+            {
+                'name': item.name,
+                'price': item.price or 0,
+                'qty': item.qty,
+                'total': item.total or item.price or 0,
+            }
+            for item in receipt_result.product_items
+        ]
+        delivery_items = [
+            {
+                'name': item.name,
+                'price': item.price or item.total or 0,
+                'qty': item.qty,
+                'total': item.total or item.price or 0,
+            }
+            for item in receipt_result.delivery_items
+        ]
+        delivery = receipt_result.delivery_total
+        vision_result = {'store': receipt_result.store}
+        log.info(
+            'receipt_pipeline: engine=%s score=%s products=%s delivery=%s purchase_id=%s',
+            receipt_result.engine,
+            receipt_result.ocr_score,
+            len(items),
+            delivery,
+            purchase_id,
         )
-        purchase_id = cur.lastrowid
+    except Exception as e:
+        log.warning(f'receipt_pipeline failed: {e}')
+        items = _parse_receipt_lines(text or '', total_amount)
+        delivery_items = []
+        delivery = 0
+        vision_result = {}
+        purchase_id = None
 
-    if items:
-        for item in items:
-            category_id = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()[0]
-            for keyword, cat_slug in {
-                'корм': 'cat_pets_food', 'собака': 'cat_pets', 'кошка': 'cat_pets',
-                'доставка': 'cat_services_log', 'услуга': 'cat_services_log',
-                'еда': 'cat_food', 'продукты': 'cat_food'
-            }.items():
-                if keyword in item['name'].lower():
-                    cat_row = conn.execute("SELECT id FROM categories WHERE slug=? LIMIT 1", (cat_slug,)).fetchone()
-                    if cat_row:
-                        category_id = cat_row[0]
-                        break
-            conn.execute(
-                "INSERT INTO items (name, purchase_price, purchase_date, category_id, data_origin, purchase_id) "
-                "VALUES (?, ?, ?, ?, 'telegram_photo', ?)",
-                (item['name'], item['price'], purchase_date, category_id, purchase_id)
-            )
-
-    # Формируем структурированный вывод как для бирок
     response_parts = ['🧾 Чек распознан']
+
+    # Магазин из Vision API
+    store_name = (vision_result or {}).get('store')
+    if store_name and store_name != 'Неизвестный':
+        response_parts.append(f"🏪 {store_name}")
 
     if purchase_date:
         response_parts.append(f"Дата: {purchase_date}")
@@ -813,12 +1094,19 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         response_parts.append("Сумма: не определена")
 
     if items:
-        response_parts.append(f"Товары ({len(items)}):" )
+        response_parts.append(f"📦 Товары ({len(items)}):" )
         for item in items:
             price_str = f"{item['price']:.2f} ₽".rstrip('0').rstrip('.').rstrip('₽').strip() + ' ₽'
             qty_str = f" × {item['qty']}" if item.get('qty', 1) > 1 else ''
             response_parts.append(f"  • {item['name']} — {price_str}{qty_str}")
-    else:
+
+    # Доставка отдельным блоком
+    if delivery or delivery_items:
+        dl_total = delivery or sum(dli.get('price', 0) for dli in delivery_items)
+        dl_clean = f"{dl_total:.2f} ₽".rstrip('0').rstrip('.').rstrip('₽').strip() + ' ₽'
+        response_parts.append(f"\n🚚 Доставка: {dl_clean}")
+
+    if not items and not delivery:
         response_parts.append("Товары: не найдены")
         response_parts.append("Добавьте вручную /add <название> <цена>")
 
@@ -830,561 +1118,134 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response_text)
 
 
-async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        log.info("cmd_list: Начало выполнения")
-        conn = get_db()
-        log.info("cmd_list: БД подключена")
-        total = conn.execute("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL").fetchone()[0]
-        log.info(f"cmd_list: Всего товаров = {total}")
-        rows = conn.execute("""
-            SELECT c.name, COUNT(i.id) as cnt, COALESCE(SUM(i.purchase_price), 0) as total_p
-            FROM items i JOIN categories c ON i.category_id = c.id
-            WHERE i.deleted_at IS NULL
-            GROUP BY c.name ORDER BY cnt DESC
-        """).fetchall()
-        log.info(f"cmd_list: Получено категорий = {len(rows)}")
-        conn.close()
-        lines = [f'📦 Инвентарь: {total} товаров\n']
-        for r in rows:
-            lines.append(f'• {r["name"]}: {r["cnt"]} шт. ({r["total_p"]:.0f} ₽)')
-        lines.append(f'\nВсего категорий: {len(rows)}')
-        await update.message.reply_text('\n'.join(lines))
-    except Exception as e:
-        log.error(f"Ошибка в cmd_list: {e}")
-        await update.message.reply_text(f'❌ Ошибка: {e}')
-
-async def cmd_alerts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    conn = get_db()
-    rows = conn.execute("SELECT alert_type,title,message FROM alerts WHERE status='pending' ORDER BY created_at").fetchall()
-    conn.close()
-    if not rows:
-        await update.message.reply_text('✅ Нет активных алертов')
-        return
-    icons = {'warranty_expiring':'⚠️','warranty_expired':'❌','expiry_approaching':'⏳','expired':'🚫','low_stock':'📉','price_drop':'💰'}
-    lines = ['🔔 Активные алерты:\n']
-    for r in rows:
-        icon = icons.get(r['alert_type'], '🔔')
-        lines.append(f'{icon} {r["title"]}')
-        if r['message']:
-            lines.append(f'   {r["message"]}')
-    await update.message.reply_text('\n'.join(lines))
 
 
-def _extract_drive_field(patterns: list[str], text: str | None) -> str | None:
-    if not text:
-        return None
-    for pattern in patterns:
-        m = re.search(pattern, text, flags=re.IGNORECASE)
-        if m:
-            return m.group(1).strip()
-    return None
 
 
-async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /last_drives — показывает последние поездки всех провайдеров каршеринга."""
-    conn = get_db()
-    limit = 10
-    if ctx.args and ctx.args[0].isdigit():
-        limit = max(1, min(int(ctx.args[0]), 30))
-
-    provider_filter = ctx.args[1] if len(ctx.args) > 1 else None
-    if provider_filter:
-        rows = conn.execute(
-            """
-            SELECT date_start, date_end, car_model, car_plate, 
-                   distance_km, tariff, base_cost, insurance, 
-                   over_minutes_cost, discounts, total, source
-            FROM carsharing_trips
-            WHERE source = ?
-            ORDER BY date_start DESC
-            LIMIT ?
-            """,
-            (provider_filter, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT date_start, date_end, car_model, car_plate, 
-                   distance_km, tariff, base_cost, insurance, 
-                   over_minutes_cost, discounts, total, source
-            FROM carsharing_trips
-            ORDER BY date_start DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    conn.close()
-
-    if not rows:
-        await update.message.reply_text(
-            "🚗 Поездки не найдены.\n"
-            "Команда: /last_drives [количество] [провайдер]\n"
-            "Провайдеры: yandex_drive, citydrive, belka, delimobil"
-        )
-        return
-
-    provider_names = {
-        'yandex_drive': 'Яндекс Драйв',
-        'citydrive': 'Ситидрайв',
-        'belka': 'BelkaCar',
-    }
-
-    lines = [f"🚗 Последние поездки ({len(rows)}):", ""]
-    for idx, row in enumerate(rows, start=1):
-        dt = (row["date_start"] or "")[:10]
-        provider_name = provider_names.get(row['source'], row['source'])
-        car = row["car_model"] or "—"
-        km = f'{row["distance_km"]:.0f} км' if row["distance_km"] else "—"
-        total = f'{row["total"]:.0f} ₽' if row["total"] else "—"
-        plate = f'({row["car_plate"]})' if row["car_plate"] else ""
-
-        lines.append(f"{idx}. {dt} | {provider_name}")
-        lines.append(f"   {car} {plate} • {km} • {total}")
-        lines.append("")
-
-    await update.message.reply_text("\n".join(lines).rstrip())
 
 
-async def cmd_find_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /find_car — рекомендации по тарифам каршеринга (время + км)."""
-    args = " ".join(ctx.args) if ctx.args else ""
-    hours, km = parse_drive_request(args)
-
-    if hours is None or km is None:
-        await update.message.reply_text(
-            "🚗 Использование:\n"
-            "/find_car 3ч 80км\n"
-            "/find_car 2 часа 60 км\n\n"
-            "Укажи время и расстояние."
-        )
-        return
-
-    conn = get_db()
-    tariffs = conn.execute(
-        "SELECT * FROM carsharing_tariffs WHERE zone = 'msk' ORDER BY provider"
-    ).fetchall()
-    conn.close()
-
-    if not tariffs:
-        await update.message.reply_text("Тарифы не загружены. Добавь их в БД.")
-        return
-
-    provider_names = {
-        'yandex': 'Яндекс Драйв',
-        'citydrive': 'Ситидрайв',
-        'belka': 'BelkaCar',
-        'delimobil': 'Делимобиль',
-    }
-
-    lines = [f"🚗 Рекомендации на {hours}ч / {km}км:\n"]
-    for t in tariffs:
-        cost = calculate_drive_cost(t, hours, km)
-        name = provider_names.get(t['provider'], t['provider'].upper())
-        tariff_info = f" ({t['tariff_name']})" if t['tariff_name'] else ""
-        rate_type = t['rate_type']
-        rate_info = "фикс+км" if rate_type == 'flat_km' else "почас"
-        lines.append(f"• {name}{tariff_info}: ~{cost:.0f} ₽ ({rate_info})")
-
-    lines.append("\n(реальная стоимость может отличаться)")
-    await update.message.reply_text("\n".join(lines))
 
 
-async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /check — расширенный PDF-отчёт."""
-    try:
-        from fpdf import FPDF
-        pdf = FPDF()
-        dp = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-        if not os.path.exists(dp):
-            dp = 'DejaVuSans'
-        pdf.add_font('DejaVu', '', dp, uni=True)
-        pdf.add_font('DejaVu', 'B', dp.replace('.ttf', '-Bold.ttf'), uni=True)
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-        
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Заголовок
-        pdf.set_font('DejaVu', 'B', 16)
-        pdf.cell(0, 10, 'Consumption Agent — Отчёт', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        pdf.cell(0, 6, f'Дата: {date.today().isoformat()}', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-        
-        # Статистика
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Общая статистика', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        stats = [
-            ('Товаров', c.execute("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL").fetchone()[0]),
-            ('Покупок', c.execute("SELECT COUNT(*) FROM purchases WHERE deleted_at IS NULL").fetchone()[0]),
-            ('Категорий', c.execute("SELECT COUNT(*) FROM categories").fetchone()[0]),
-            ('С гарантией', c.execute("SELECT COUNT(*) FROM items WHERE warranty_months>0 AND deleted_at IS NULL").fetchone()[0]),
-            ('Алертов', c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]),
-        ]
-        for k, v in stats:
-            pdf.cell(0, 6, f'  {k}: {v}', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-        
-        # Топ-10 категорий по сумме
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Топ-10 категорий по сумме', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        cats = conn.execute('''
-            SELECT c.name, COUNT(i.id) as cnt, COALESCE(ROUND(SUM(i.purchase_price),0),0) as total
-            FROM items i JOIN categories c ON i.category_id = c.id
-            WHERE i.deleted_at IS NULL
-            GROUP BY c.id ORDER BY total DESC LIMIT 10
-        ''').fetchall()
-        for r in cats:
-            pdf.cell(0, 6, f'  {r["name"]:25s} {r["cnt"]:4d} шт.  {r["total"]:>8.0f} ₽', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-        
-        # График трат по месяцам (прямоугольники)
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Траты по месяцам', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        months = conn.execute('''
-            SELECT substr(purchase_date,1,7) as m, ROUND(SUM(purchase_price),0) as total
-            FROM items WHERE deleted_at IS NULL AND purchase_price>0 AND purchase_price NOTNULL
-            GROUP BY m HAVING m NOTNULL AND GLOB('[0-9][0-9][0-9][0-9]-[0-9][0-9]', m)
-            ORDER BY m
-        ''').fetchall()
-        if months:
-            max_total = max(r['total'] for r in months)
-            bar_w = 160 / max(len(months), 1)
-            pdf.set_font('DejaVu', '', 7)
-            for r in months:
-                h = (r['total'] / max_total) * 40 if max_total > 0 else 0
-                x = pdf.get_x()
-                y = pdf.get_y()
-                pdf.set_fill_color(100, 150, 255)
-                pdf.rect(x, y, bar_w, h, 'F')
-                pdf.set_fill_color(0, 0, 0)
-                pdf.set_xy(x, y + h + 1)
-                if pdf.get_y() > 270:
-                    pdf.set_xy(x, y - 1)
-                pdf.cell(bar_w, 4, r['m'][-2:] if len(r['m'])==7 else r['m'], align='C')
-                pdf.set_xy(x + bar_w, y)
-            pdf.ln(6)
-        pdf.ln(4)
-        
-        # Активные алерты
-        pdf.set_font('DejaVu', 'B', 12)
-        a_cnt = c.execute("SELECT COUNT(*) FROM alerts WHERE status='pending'").fetchone()[0]
-        pdf.cell(0, 8, f'Активные алерты ({a_cnt})', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        if a_cnt:
-            for r in conn.execute("SELECT alert_type, title, message FROM alerts WHERE status='pending' ORDER BY alert_type LIMIT 10").fetchall():
-                pdf.cell(0, 6, f'  [{r["alert_type"][:15]:15s}] {r["title"][:50]}', new_x='LMARGIN', new_y='NEXT')
-        else:
-            pdf.cell(0, 6, '  Нет активных алертов', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-        
-        # Топ-20 товаров по цене (без дублей)
-        pdf.set_font('DejaVu', 'B', 12)
-        pdf.cell(0, 8, 'Топ-20 товаров по цене', new_x='LMARGIN', new_y='NEXT')
-        pdf.set_font('DejaVu', '', 10)
-        top_items = conn.execute('''
-            SELECT name, purchase_price, category_id FROM items 
-            WHERE deleted_at IS NULL AND purchase_price > 0 AND purchase_price NOTNULL
-            GROUP BY ROUND(purchase_price,-2), name HAVING MIN(id)
-            ORDER BY purchase_price DESC LIMIT 20
-        ''').fetchall()
-        for r in top_items:
-            price_str = f'{r["purchase_price"]:>8.0f} ₽' if r["purchase_price"] else ''
-            cat_str = (r["category_id"] or '')[:10]
-            pdf.cell(0, 6, f'  {price_str}  {r["name"][:45]:45s} [{cat_str}]', new_x='LMARGIN', new_y='NEXT')
-        pdf.ln(4)
-        
-        # Сохраняем и шлём
-        pdf_path = '/tmp/consumption_agent_report.pdf'
-        pdf.output(pdf_path)
-        conn.close()
-        
-        await update.message.reply_text('📊 Отчёт готов:', reply_to_message_id=update.message.message_id)
-        await update.message.reply_document(open(pdf_path, 'rb'), filename='report.pdf')
-        
-    except Exception as e:
-        log.warning(f'cmd_check error: {e}')
-        print(traceback.format_exc())
-        await update.message.reply_text(f'❌ Ошибка генерации отчёта: {e}')
-
-async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = ' '.join(ctx.args)
-    if not text:
-        await update.message.reply_text('❌ Пример: /add Носки 350 одежда')
-        return
-    # Parse: name, optional price, optional category
-    parts = text.rsplit(None, 2)  # try splitting from right
-    name = text
-    price = None
-    category = None
-    # Try category extraction (из consumption.categorize — Шаг 5)
-    cats = {'еда':'cat_food','продукты':'cat_food','одежда':'cat_clo_everyday','обувь':'cat_clo_shoes',
-            'техника':'cat_tech','книги':'cat_culture_books','спорт':'cat_sport','косметика':'cat_cosmetics',
-            'здоровье':'cat_health_med','дом':'cat_home','авто':'cat_auto','животные':'cat_pets',
-            'мебель':'cat_home_furn','аксесс':'cat_clo_access','хобби':'cat_hobbies',
-            'интим':'cat_sexual','подписка':'cat_subscriptions'}
-    for kw, cid in cats.items():
-        if kw in text.lower():
-            # Extract price before category
-            m = re.search(r'(\d[\d\s]*\d)\s*(?:₽|руб|р)?', text)
-            if m:
-                price = float(m.group(1).replace(' ', ''))
-                name = text[:m.start()].strip().rstrip(',').strip()
-                try:
-                    name = name.rsplit(None, 1)[0] if name.split()[-1].lower() == kw else name
-                except: pass
-            else:
-                name = text.replace(kw, '').strip().strip(',').strip()
-            category = cid
-            break
-    if not category:
-        m = re.search(r'(\d[\d\s]*\d)\s*(?:₽|руб|р)?', text)
-        if m:
-            price = float(m.group(1).replace(' ', ''))
-            name = text[:m.start()].strip().rstrip(',').strip()
-    if not name or len(name) < 2:
-        await update.message.reply_text('❌ Слишком короткое название')
-        return
-    conn = get_db()
-    cat_id = None
-    if category:
-        row = conn.execute("SELECT id FROM categories WHERE id=? OR slug=? LIMIT 1", (category, category)).fetchone()
-        if row: cat_id = row[0]
-    # Автокатегоризация из consumption.categorize если пользователь не указал
-    if cat_id is None:
-        auto_cat = auto_categorize(name)
-        if auto_cat:
-            row = conn.execute("SELECT id FROM categories WHERE id=? LIMIT 1", (auto_cat,)).fetchone()
-            if row: cat_id = row[0]
-    if cat_id is None:
-        row = conn.execute("SELECT id FROM categories WHERE slug='other' LIMIT 1").fetchone()
-        if row: cat_id = row[0]
-    cur = conn.execute("INSERT INTO items (name,purchase_price,purchase_date,category_id,status,quantity,data_origin) VALUES (?,?,?,?,'in_use',1,'telegram')",
-                       (name.strip(), price, date.today().isoformat(), cat_id))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(f'✅ Добавлено: {name.strip()}{f" ({price:.0f} ₽)" if price else ""}')
-
-async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Парсинг необработанных чеков Ozon из почты."""
-    await update.message.reply_text('🔄 Проверяю необработанные чеки Ozon...')
-    
-    limit = 10
-    if ctx.args and ctx.args[0].isdigit():
-        limit = min(int(ctx.args[0]), 50)
-    
-    try:
-        conn = get_db()
-        # Находим чеки без привязанных товаров
-        rows = conn.execute("""
-            SELECT cl.id, cl.cheque_date, cl.subject, cl.receipt_url, p.id as purchase_id
-            FROM cheques_log cl
-            LEFT JOIN purchases p ON p.email_message_id = CAST(cl.id AS TEXT)
-            WHERE cl.source = 'ozon'
-              AND cl.receipt_url IS NOT NULL
-              AND cl.receipt_url != ''
-              AND (p.id IS NULL OR NOT EXISTS (
-                  SELECT 1 FROM items i WHERE i.purchase_id = p.id
-              ))
-            ORDER BY cl.id DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
-        
-        if not rows:
-            await update.message.reply_text('✅ Все чеки Ozon уже обработаны')
-            conn.close()
-            return
-        
-        lines = ['🔍 Найдено необработанных:', '']
-        for r in rows:
-            date_str = r['cheque_date'][:10] if r['cheque_date'] else '?'
-            url = (r['receipt_url'] or '')[:60]
-            status = '✅ привязан' if r['purchase_id'] else '❌ без покупки'
-            lines.append(f'  • {date_str} — {status}')
-        
-        lines.append('')
-        lines.append('Для обработки нужны свежие куки Ozon.')
-        lines.append('Обновите куки в .ozon_cookies.txt или используйте /add_photo')
-        
-        await update.message.reply_text('\n'.join(lines))
-        conn.close()
-    except Exception as e:
-        log.warning(f'cmd_parse error: {e}')
-        await update.message.reply_text(f'❌ Ошибка: {e}')
 
 
-async def cmd_warranties(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Команда /warranties — отчёт по гарантиям."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from warranty_check import get_warranties_report, update_warranty_until, check_warranties, save_alerts
-        conn = get_db()
-        # Пересчёт warranty_until
-        update_warranty_until(conn)
-        # Проверка и сохранение алертов
-        alerts = check_warranties(conn)
-        if alerts:
-            save_alerts(conn, alerts)
-        # Отчёт
-        report = get_warranties_report(conn)
-        conn.close()
-        await update.message.reply_text(report, parse_mode='Markdown')
-    except Exception as e:
-        log.error(f'cmd_warranties error: {e}')
-        await update.message.reply_text(f'❌ Ошибка: {e}')
-
-async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        '🛒 Consumption Agent\n\n'
-        'Команды:\n'
-        '/list — инвентарь по категориям\n'
-        '/alerts — алерты (гарантии, сроки)\n'
-        '/find_car 3ч 80км — подбор тарифа каршеринга\n'
-        '/last_drives — последние поездки каршеринга (все провайдеры)\n'
-        '/warranties — отчёт по гарантиям\n'
-        '/add <название> [<цена>] [<категория>] — добавить товар\n'
-        '/add_photo — загрузить фото чека (OCR)\n'
-        '/check — статистика\n'
-        '/help — это сообщение'
-    )
 
 
-async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if len(ctx.args) != 2:
-        await update.message.reply_text("Usage: /set_warranty <item_id> <months>")
-        return
-    try:
-        item_id = int(ctx.args[0])
-        months = int(ctx.args[1])
-        if item_id <= 0 or months <= 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("Usage: /set_warranty <item_id> <months> (positive integers)")
-        return
 
+
+async def run_price_drop_check(ctx: ContextTypes.DEFAULT_TYPE):
+    """Cron-задача: проверяет цены и шлёт уведомления о падениях."""
+    import ml_watchlist as mw
+    log.info('[watchlist] запуск проверки цен')
     conn = get_db()
     try:
-        cur = conn.execute("UPDATE items SET warranty_months=? WHERE id=? AND deleted_at IS NULL", (months, item_id))
-        if cur.rowcount == 0:
-            await update.message.reply_text(f"❌ Item {item_id} not found")
-            return
-        # Reset warranty_until so update_warranty_until() recomputes it even
-        # if it was already set (the helper skips non-NULL rows).
-        conn.execute("UPDATE items SET warranty_until=NULL WHERE id=?", (item_id,))
-        from warranty_check import update_warranty_until
-        update_warranty_until(conn)
-        row = conn.execute("SELECT warranty_until FROM items WHERE id=?", (item_id,)).fetchone()
-        conn.commit()
-        warranty_until = row["warranty_until"] if row and row["warranty_until"] else "N/A"
-        await update.message.reply_text(
-            f"OK: warranty_months={months}, warranty_until={warranty_until}"
-        )
+        drops = await mw.check_price_drops(conn)
+        for drop in drops:
+            chat_id = drop.get('chat_id')
+            if not chat_id:
+                # Fallback: первый allowed chat
+                chat_id = next(iter(ALLOWED_CHAT_IDS), None)
+                if not chat_id:
+                    continue
+            text = mw.format_drop_notification(drop)
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton('❌ Больше не следить',
+                                         callback_data=f'ml_unwatch:{drop["watch_id"]}')
+                ]])
+                await ctx.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode='HTML',
+                    disable_web_page_preview=True,
+                    reply_markup=kb,
+                )
+                mw.mark_notified(conn, drop['watch_id'])
+            except Exception as e:
+                log.warning(f'[watchlist] не удалось отправить уведомление: {e}')
+        log.info(f'[watchlist] завершено: {len(drops)} уведомлений')
     finally:
         conn.close()
 
 
-async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query is None:
-        return
-    await query.answer()
 
-    if update.effective_chat and update.effective_chat.id != OWNER_CHAT_ID:
-        await query.answer('❌ Доступ запрещён', show_alert=True)
-        return
 
-    data = query.data or ''
-    if not data.startswith('credit_paid:'):
-        return
 
-    try:
-        alert_id = int(data.split(':', 1)[1])
-    except ValueError:
-        await query.answer('⚠️ Некорректный alert id', show_alert=True)
-        return
 
-    row = get_credit_alert(alert_id)
-    if not row:
-        await query.answer('⚠️ Алерт не найден', show_alert=True)
-        return
 
-    if row['paid_confirmed_at']:
-        await query.answer('✅ Уже отмечено как оплачено')
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        return
 
-    changed = confirm_credit_alert_paid(alert_id)
-    if not changed:
-        await query.answer('⚠️ Не удалось обновить статус', show_alert=True)
-        return
 
-    paid_note = '\n\n✅ <b>Отмечено как оплачено вручную</b>'
-    base_text = html.escape((query.message.text or '').rstrip())
-    new_text = base_text + paid_note
-    try:
-        await query.edit_message_text(
-            new_text,
-            parse_mode='HTML',
-            reply_markup=None,
-            disable_web_page_preview=True,
-        )
-    except Exception:
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    await query.answer('✅ Платёж отмечен как оплаченный')
+
+
+def add_authorized_handler(app: Application, handler):
+    """Register handler with access guard before callback execution."""
+    register_authorized_handler(app, handler, ALLOWED_CHAT_IDS)
 
 def main():
+    # Инициализируем schema memory_lane (создаём таблицы topic_rules и др., если ещё нет)
+    try:
+        import memory_lane as _ml
+        conn = get_db()
+        _ml.ensure_memory_lane_schema(conn)
+        conn.close()
+    except Exception as e:
+        log.warning(f'memory_lane schema init failed: {e}')
+
     if not TOKEN:
         print('❌ Укажите CONSUMPTION_BOT_TOKEN')
         print('   export CONSUMPTION_BOT_TOKEN=...')
         sys.exit(1)
     app = Application.builder().token(TOKEN).build()
-    # Whitelist for Telegram bot (only allow specific chat IDs)
-    ALLOWED_CHAT_IDS = {1477860192}  # YuV's chat ID
 
-    async def check_access(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat.id not in ALLOWED_CHAT_IDS:
-            log.warning(f"Доступ запрещён для chat_id={update.effective_chat.id}")
-            await update.message.reply_text('❌ Доступ запрещён.')
-            return False
-        log.info(f"Доступ разрешён для chat_id={update.effective_chat.id}")
-        return True
+    # Telegram bot menu commands
+    from telegram import BotCommand
+    menu = [
+        BotCommand('start', 'Приветствие'),
+        BotCommand('help', 'Помощь'),
+        BotCommand('list', 'Инвентарь по категориям'),
+        BotCommand('items', 'Вещи со сроком замены'),
+        BotCommand('items_full', 'Вещи с полной инфой'),
+        BotCommand('add', 'Добавить товар /add name price category'),
+        BotCommand('add_item', 'Мастер добавления товара'),
+        BotCommand('add_photo', 'Добавить чек по фото'),
+        BotCommand('alerts', 'Активные алерты'),
+        BotCommand('dayexp', 'Расходы за сегодня'),
+        BotCommand('monthexp', 'Расходы за месяц'),
+        BotCommand('check', 'Статистика'),
+        BotCommand('debts', 'Кредитные платежи'),
+        BotCommand('fines', 'Неоплаченные штрафы'),
+        BotCommand('warranties', 'Гарантии'),
+        BotCommand('set_warranty', 'Установить гарантию /set_warranty id YYYY-MM-DD'),
+        BotCommand('last_drives', 'Последние поездки каршеринга'),
+        BotCommand('find_car', 'Подбор тарифа /find_car 3ч 80км'),
+        BotCommand('parse', 'Парсинг последнего фото'),
+        BotCommand('ml_last', 'Последние Memory Lane'),
+        BotCommand('ml_search', 'Поиск в Memory Lane'),
+        BotCommand('ml_stats', 'CTR по источникам'),
+        BotCommand('ml_watch', 'Watchlist цен'),
+        BotCommand('ml_unwatch', 'Убрать из watchlist /ml_unwatch id'),
+        BotCommand('topic_set', 'Ассоциация слово→тема'),
+        BotCommand('topic_list', 'Список правил тем'),
+    ]
+    async def _set_menu(_app):
+        try:
+            await _app.bot.set_my_commands(menu)
+        except Exception as e:
+            pass
 
-    # Add access check to all command handlers
-    for handler in app.handlers:
-        if isinstance(handler, (CommandHandler, MessageHandler)):
-            original_callback = handler.callback
-            async def wrapped_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-                if await check_access(update, ctx):
-                    await original_callback(update, ctx)
-            handler.callback = wrapped_callback
+    handler_deps = HandlerDeps(
+        add_authorized_handler=add_authorized_handler,
+        get_db=get_db,
+        docs_dir=os.path.join(SCRIPT_DIR, 'docs'),
+        log=log,
+        shared=globals(),
+    )
+    register_command_handlers(app, handler_deps)
+    add_authorized_handler(app, CommandHandler('add_photo', add_photo))
+    add_authorized_handler(app, MessageHandler(filters.PHOTO, photo_handler))
+    add_authorized_handler(app, MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    app.add_handler(CommandHandler('start', start))
-
-    app.add_handler(CommandHandler('list', cmd_list))
-    app.add_handler(CommandHandler('alerts', cmd_alerts))
-    app.add_handler(CommandHandler('parse', cmd_parse))
-    app.add_handler(CommandHandler('check', cmd_check))
-    app.add_handler(CommandHandler('last_drives', cmd_last_drives))
-    app.add_handler(CommandHandler('find_car', cmd_find_car))
-    app.add_handler(CommandHandler('add', cmd_add))
-    app.add_handler(CommandHandler('add_photo', add_photo))
-    app.add_handler(CommandHandler('parse', cmd_parse))
-    app.add_handler(CommandHandler('warranties', cmd_warranties))
-    app.add_handler(CommandHandler('set_warranty', cmd_set_warranty))
-    app.add_handler(CommandHandler('help', cmd_help))
-    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-    app.add_handler(CallbackQueryHandler(credit_paid_callback, pattern=r'^credit_paid:\d+$'))
+    register_callback_handlers(app, handler_deps)
 
     # Generate alerts once at startup
     gen = generate_alerts()
@@ -1396,6 +1257,12 @@ def main():
             run_daily_alert_job,
             time=dt_time(hour=9, minute=0, second=0),
             name='daily_alert_checks'
+        )
+        # Memory Lane price-drop проверка ежедневно в 10:00
+        app.job_queue.run_daily(
+            run_price_drop_check,
+            time=dt_time(hour=10, minute=0, second=0),
+            name='ml_price_drop_check'
         )
     else:
         log.warning('JobQueue is unavailable; skipping in-process daily schedule')

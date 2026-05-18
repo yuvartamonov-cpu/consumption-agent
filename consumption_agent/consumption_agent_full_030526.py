@@ -52,7 +52,7 @@ IMAP_CFG_NEUTRINON = {'host': 'imap.mail.ru', 'port': 993,
 FINANCIAL_SENDERS = [
     # Маркетплейсы (чеки)
     {'id': 'ozon',              'from': 'sender.ozon.ru',       'doc_type': 'cheque',  'subject_marker': 'ваш чек'},
-    {'id': 'ozon',              'from': 'noreply@sender.ozon.ru', 'doc_type': 'cheque',  'subject_marker': 'ваш чек'},
+    {'id': 'ozon_noreply',      'from': 'noreply@sender.ozon.ru', 'doc_type': 'cheque',  'subject_marker': 'ваш чек'},
     {'id': 'yandex_market',     'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек'},
     # OFD / Фискальные сервисы (чеки)
     {'id': 'ofd_yandex',        'from': 'no-reply@ofd.yandex.ru', 'doc_type': 'fiscal', 'subject_marker': 'чек'},
@@ -75,12 +75,12 @@ FINANCIAL_SENDERS = [
     {'id': 'samokat_retail',    'from': 'umnyj-retail.ru',       'doc_type': 'food',   'subject_marker': 'чек'},
     {'id': 'samokat_ofd',       'from': 'noreply@chek.pofd.ru',  'doc_type': 'food',   'subject_marker': ''},
     # Яндекс.Почта — свои отправители
-    {'id': 'yandex_market',     'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_lavka',      'from': 'lavka.yandex.ru',     'doc_type': 'food',    'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_eda',        'from': 'eda.yandex.ru',       'doc_type': 'food',    'subject_marker': 'заказ', 'mailbox': 'yandex'},
+    {'id': 'yandex_market_ya',  'from': 'market.yandex',       'doc_type': 'cheque',  'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_lavka_ya',   'from': 'lavka.yandex.ru',     'doc_type': 'food',    'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_eda_ya',     'from': 'eda.yandex.ru',       'doc_type': 'food',    'subject_marker': 'заказ', 'mailbox': 'yandex'},
     {'id': 'yandex_drive',      'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'yandex'},
-    {'id': 'yandex_taxi',       'from': 'taxi.yandex.ru',      'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'yandex'},
-    {'id': 'ofd_yandex',        'from': 'no-reply@ofd.yandex.ru', 'doc_type': 'fiscal', 'subject_marker': 'чек', 'mailbox': 'yandex'},
+    {'id': 'yandex_taxi_ya',    'from': 'taxi.yandex.ru',      'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'yandex'},
+    {'id': 'ofd_yandex_ya',     'from': 'no-reply@ofd.yandex.ru', 'doc_type': 'fiscal', 'subject_marker': 'чек', 'mailbox': 'yandex'},
     {'id': 'yandex_drive_gmail', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'gmail'},
     {'id': 'yandex_drive_zorea', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'zorea'},
     {'id': 'yandex_drive_neutr', 'from': 'noreply@drive.yandex.ru', 'doc_type': 'trip',    'subject_marker': 'чек', 'mailbox': 'neutrinon'},
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, prof
 CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', category_id TEXT REFERENCES categories(id), name TEXT NOT NULL, brand TEXT, model TEXT, sku TEXT, description TEXT, attributes TEXT DEFAULT '{}', status TEXT DEFAULT 'in_use' CHECK (status IN ('wishlist','in_use','low_stock','storage','expired','broken','disposed','replaced')), quantity INTEGER DEFAULT 1, unit TEXT, remaining REAL, purchase_date TEXT, purchase_price REAL, purchase_currency TEXT DEFAULT 'RUB', purchase_source TEXT, purchase_url TEXT, purchase_id INTEGER REFERENCES purchases(id), warranty_months INTEGER, expiry_date TEXT, lifespan_months INTEGER, priority TEXT CHECK (priority IN ('critical','must','planned','backlog','wish')), target_price REAL, current_price REAL, price_tracking INTEGER DEFAULT 0, discovery_source TEXT, replaces_id INTEGER REFERENCES items(id), notes TEXT, tags TEXT DEFAULT '[]', data_origin TEXT DEFAULT 'local', created_at TEXT DEFAULT (datetime("now")), updated_at TEXT DEFAULT (datetime("now")), deleted_at TEXT);
 CREATE TABLE IF NOT EXISTS recognized_items_log (id INTEGER PRIMARY KEY AUTOINCREMENT, source_file TEXT NOT NULL, source_type TEXT NOT NULL, recognized_product TEXT NOT NULL, confidence TEXT, matched_item_id INTEGER REFERENCES items(id), notes TEXT, imported_at TEXT DEFAULT (datetime("now")));
 CREATE TABLE IF NOT EXISTS cheques_log (id INTEGER PRIMARY KEY AUTOINCREMENT, email_uid TEXT UNIQUE, source TEXT DEFAULT 'ozon', cheque_date TEXT, subject TEXT, receipt_url TEXT, imported_at TEXT DEFAULT (datetime("now")));
-CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', item_id INTEGER REFERENCES items(id), purchase_id INTEGER REFERENCES purchases(id), alert_type TEXT NOT NULL CHECK (alert_type IN ('warranty_expiring','warranty_expired','expiry_approaching','expired','low_stock','price_drop','seasonal_reminder','dependency_alert','budget_warning')), title TEXT NOT NULL, message TEXT, scheduled_at TEXT, sent_at TEXT, status TEXT DEFAULT 'pending' CHECK (status IN ('pending','sent','dismissed','actioned')), created_at TEXT DEFAULT (datetime("now")));
+CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', item_id INTEGER REFERENCES items(id), purchase_id INTEGER REFERENCES purchases(id), alert_type TEXT NOT NULL CHECK (alert_type IN ('warranty_expiring','warranty_expired','expiry_approaching','expired','low_stock','price_drop','seasonal_reminder','dependency_alert','budget_warning','replace_reminder')), title TEXT NOT NULL, message TEXT, scheduled_at TEXT, sent_at TEXT, status TEXT DEFAULT 'pending' CHECK (status IN ('pending','sent','dismissed','actioned')), created_at TEXT DEFAULT (datetime("now")));
 CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, provider TEXT, price_monthly REAL, price_yearly REAL, currency TEXT DEFAULT 'RUB', billing_date INTEGER, next_billing TEXT, status TEXT DEFAULT 'active' CHECK (status IN ('active','paused','cancelled','expired')), auto_renew INTEGER DEFAULT 1, notes TEXT, created_at TEXT DEFAULT (datetime("now")));
 CREATE INDEX IF NOT EXISTS idx_items_deleted ON items(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_items_category ON items(category_id);
@@ -213,6 +213,11 @@ def cmd_init(args):
         for t in ['subscriptions','alerts','cheques_log','recognized_items_log','items','purchases','categories','profiles']:
             conn.execute(f'DROP TABLE IF EXISTS {t}')
     conn.executescript(SCHEMA)
+    # Добавляем колонку is_delivery в items, если её нет
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN is_delivery INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("INSERT OR IGNORE INTO profiles (id,name) VALUES ('default','Default')")
     for c in CATS:
         conn.execute("INSERT OR IGNORE INTO categories (id,parent_id,name,slug,sort_order) VALUES (?,?,?,?,?)", c)
@@ -312,10 +317,14 @@ def cmd_import(args):
                     if links: url = links[0].split('?')[0]
                 total_amount = _extract_amount_from_html(html, ms_id)
                 
-                # Parse items for Samokat OFD cheques
+                # Parse items per sender:
+                #   samokat_ofd → numbered cheque blocks (_parse_samokat_items)
+                #   ozon / ozon_noreply → HTML table rows (_parse_ozon_items)
                 items = []
                 if ms_id == 'samokat_ofd' and html:
                     items = _parse_samokat_items(html)
+                elif ms_id in ('ozon', 'ozon_noreply') and html:
+                    items = _parse_ozon_items(html)
                     
             except Exception as e:
                 if 'FETCH' not in str(e):  # игнорируем IMAP ошибки
@@ -329,10 +338,14 @@ def cmd_import(args):
             purchase_id = conn.execute("SELECT id FROM purchases WHERE email_message_id = ?", (uid_s,)).fetchone()
             purchase_id = purchase_id[0] if purchase_id else None
             
-            # Insert items for Samokat
+            # Insert items for Samokat / Ozon
             if purchase_id and items:
+                # Pick a default category by sender. Ozon receipts cover
+                # a wide range, so leave category NULL and let cmd_match
+                # fuzzy-link them later. Samokat is food-only.
+                default_cat = 'food_other' if ms_id == 'samokat_ofd' else None
                 for item in items:
-                    # Check if item already exists
+                    # Check if item already exists for this purchase
                     existing = conn.execute(
                         "SELECT id FROM items WHERE name = ? AND purchase_id = ?",
                         (item['name'], purchase_id)
@@ -341,7 +354,7 @@ def cmd_import(args):
                         conn.execute('''
                             INSERT INTO items (name, category_id, quantity, unit, purchase_price, purchase_date, purchase_source, purchase_id, data_origin)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (item['name'], 'food_other', item['qty'], item['unit'], item['price'], iso, src, purchase_id, 'email_import'))
+                        ''', (item['name'], default_cat, item['qty'], item['unit'], item['price'], iso, src, purchase_id, 'email_import'))
             
             cheque_source = f'{src}_pdf' if url else src
             conn.execute("INSERT OR IGNORE INTO cheques_log (email_uid,cheque_date,subject,receipt_url,source) VALUES (?,?,?,?,?)",
@@ -449,66 +462,178 @@ def parse_fiscal_cheque(text):
 
 
 def _parse_samokat_items(html):
-    """Parse items from Samokat (OFD) HTML cheque."""
+    """Parse items from Samokat (OFD) HTML cheque.
+    
+    Samokat отправляет чеки через Платформу ОФД (noreply@chek.pofd.ru).
+    Письмо содержит HTML с рекламой и ОФД-ссылкой.
+    В HTML есть таблица с полными фискальными данными, где построчно:
+      N: Название товара, вес
+      количество
+      шт.
+      x
+      цена
+      Общая стоимость позиции с учетом скидок и наценок
+      сумма
+      ... НДС, способ расчёта ...
+      ИТОГ = сумма
+    """
     from bs4 import BeautifulSoup
+    import re
     items = []
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        # Find all item blocks - each item is in a table with itemName
-        # Look for tables that contain item number and name
+        
+        # Находим таблицу с полными данными (содержит КАССОВЫЙ ЧЕК и ИТОГ)
         all_tables = soup.find_all('table')
+        cheque_table = None
         for table in all_tables:
             text = table.get_text(separator='\n', strip=True)
-            # Skip non-item tables (look for item pattern with number and name)
-            if not re.search(r'^\d+:\s*', text, re.MULTILINE):
+            if 'КАССОВЫЙ ЧЕК' in text and 'ИТОГ' in text:
+                cheque_table = table
+                break
+        
+        if not cheque_table:
+            return items
+        
+        text = cheque_table.get_text(separator='\n', strip=True)
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            m = re.match(r'^(\d+):\s*(.+)$', line)
+            if not m:
+                i += 1
                 continue
             
-            # Extract item name: "1: Product name, 200 г" or "1: Product name"
-            # Name is everything after "N: " and before weight if present
-            name_match = re.search(r'^\d+:\s*(.+?)(?:,\s*(\d+[\.,]?\d*)\s*(г|мл|л|шт|кг))?(?:\n|$)', text, re.MULTILINE | re.DOTALL)
-            if not name_match:
-                continue
-            name = name_match.group(1).strip()
-            # Clean up name - remove newlines and extra spaces
-            name = re.sub(r'\s+', ' ', name)
-            weight = name_match.group(2) if name_match.group(2) else None
-            unit = name_match.group(3) if name_match.group(3) else 'шт'
+            item_name = m.group(2).strip()
+            i += 1
             
-            # Convert unit for small volumes: 0.33 л → 330 мл, 0.5 л → 500 мл
-            if unit == 'л' and weight:
-                try:
-                    w = float(weight.replace(',', '.'))
-                    if w < 1:
-                        unit = 'мл'
-                        weight = str(int(w * 1000))
-                except:
-                    pass
+            qty = 1
+            price = 0.0
+            total = 0.0
             
-            # Look for price pattern: "1 шт. x 239.00"
-            price_match = re.search(r'(\d+)\s*шт\.\s*x\s*([\d\.]+)', text)
-            if not price_match:
-                continue
-            qty = int(price_match.group(1))
-            price = float(price_match.group(2))
+            # Следующие строки до следующего "N:" или "ИТОГ"
+            while i < len(lines) and not re.match(r'^\d+:', lines[i]) and lines[i] != 'ИТОГ':
+                current = lines[i]
+                if current.isdigit() and i+1 < len(lines) and lines[i+1] == 'шт.':
+                    qty = int(current)
+                if current == 'x' and i+1 < len(lines) and re.match(r'^[\d\.]+$', lines[i+1]):
+                    price = float(lines[i+1])
+                if 'Общая стоимость' in current and i+1 < len(lines) and re.match(r'^[\d\.]+$', lines[i+1]):
+                    total = float(lines[i+1])
+                i += 1
             
-            # Look for total: "Общая стоимость... = 239.00"
-            total_match = re.search(r'Общая стоимость.*?([\d\.]+)', text, re.DOTALL)
-            total = float(total_match.group(1)) if total_match else price * qty
-            
-            # Skip if name looks like a number (false positives from metadata)
-            if re.match(r'^\d+$', name) or len(name) < 3:
-                continue
-            
-            items.append({
-                'name': name,
-                'qty': qty,
-                'unit': unit,
-                'price': price,
-                'total': total,
-                'weight': weight
-            })
+            if price > 0 and len(item_name) > 2:
+                items.append({
+                    'name': item_name,
+                    'qty': qty,
+                    'price': price,
+                    'total': total if total > 0 else price * qty
+                })
     except Exception as e:
         pass
+    return items
+
+
+def _parse_ozon_items(html):
+    """Parse items from an Ozon email cheque HTML body.
+
+    Ozon receipts come as HTML tables where one cell holds the item name
+    and another holds the price in the form ``1 234,56 ₽`` (or with a dot).
+    Quantity is occasionally rendered as ``2 x 619.00`` on a separate line
+    of the same row.
+
+    Returns a list of dicts with keys: name, qty, unit, price, total.
+    Empty list on any parsing failure — the import path is expected to
+    fall back to the legacy «only total_amount» behaviour.
+    """
+    from bs4 import BeautifulSoup
+
+    PRICE_RX = re.compile(r'([\d\s]+[.,]\d{2})\s*(?:₽|руб)', re.IGNORECASE)
+    QTY_RX = re.compile(r'(\d+)\s*x\s*([\d\s]+[.,]\d{2})', re.IGNORECASE)
+    SKIP_NAME_RX = re.compile(
+        r'доставк|курьер|сервис|итого|всего|сумма|скидк|комисси|бонус|возврат|чаевы|промокод|купон',
+        re.IGNORECASE,
+    )
+
+    def _num(s):
+        return float(s.replace(' ', '').replace('\xa0', '').replace(',', '.'))
+
+    items = []
+    seen = set()
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Strategy 1: table-based. Walk every <tr> and look for a price cell
+        # whose previous sibling cell holds the item name.
+        for table in soup.find_all('table'):
+            for row in table.find_all('tr'):
+                cells = [c.get_text(' ', strip=True) for c in row.find_all(['td', 'th'])]
+                if not cells:
+                    continue
+                row_text = ' | '.join(cells)
+                # Total / subtotal rows are skipped (they would otherwise be
+                # picked up as zero-quantity items).
+                if SKIP_NAME_RX.search(row_text):
+                    continue
+                # Find the cell carrying the price with currency marker
+                # (the total cell) and walk backwards to the first cell
+                # that looks like a real name. Quantity is extracted
+                # separately from any `N x price` cell so we never confuse
+                # the per-unit price with the total.
+                price_idx = next((i for i, c in enumerate(cells) if PRICE_RX.search(c)), None)
+                if price_idx is None or price_idx == 0:
+                    continue
+                qty_cell = next(
+                    (c for c in cells if QTY_RX.search(c) and not PRICE_RX.search(c)),
+                    None,
+                )
+                qty = 1
+                unit_price = None
+                if qty_cell:
+                    qm = QTY_RX.search(qty_cell)
+                    qty = int(qm.group(1))
+                    unit_price = _num(qm.group(2))
+                # Pick the first non-numeric cell before the price as the name.
+                name = None
+                for j in range(price_idx - 1, -1, -1):
+                    cand = cells[j].strip()
+                    if not cand or len(cand) < 3:
+                        continue
+                    if SKIP_NAME_RX.search(cand):
+                        name = None
+                        break
+                    if re.fullmatch(r'[\d\s.,]+', cand):  # pure number
+                        continue
+                    if QTY_RX.search(cand):  # "2 x 89.99" — not the name
+                        continue
+                    name = cand
+                    break
+                if not name:
+                    continue
+                total = _num(PRICE_RX.search(cells[price_idx]).group(1))
+                price = unit_price if unit_price is not None else round(total / qty, 2)
+                key = (name, price)
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append({
+                    'name': name,
+                    'qty': qty,
+                    'unit': 'шт',
+                    'price': price,
+                    'total': round(price * qty, 2),
+                })
+
+        # NOTE: a flat-text fallback strategy was considered and rejected.
+        # Ozon emails are uniformly HTML tables; a fallback that scans free
+        # text for `N x PRICE` patterns risks promoting greeting/header
+        # lines ("Спасибо за заказ") into items. Returning [] on parse
+        # failure is safer — the import path keeps the purchase row without
+        # items, which cmd_match can revisit.
+    except Exception:
+        return items
     return items
 
 
@@ -920,16 +1045,19 @@ def main():
     p.add_argument('--price', type=float)
     p.add_argument('--date')
     p.add_argument('--category')
+    p.add_argument('--apply', action='store_true', help='Apply changes (default is dry-run for dedup)')
     p.add_argument('cmd', nargs='?', default='help',
-                    choices=['init','import','parse','match','enrich','check','report','all','list','alerts','add','help'])
+                    choices=['init','import','parse','match','enrich','check','report','all','list','alerts','add','dedup','help'])
     args = p.parse_args()
 
+    from dedup import cmd_dedup
     cmds = {'init':cmd_init,'import':cmd_import,'parse':cmd_parse,'match':cmd_match,
-            'enrich':cmd_enrich,'check':cmd_check,'report':cmd_report,'list':cmd_list,'alerts':cmd_alerts,'add':cmd_add,'all':cmd_all_safe}
+            'enrich':cmd_enrich,'check':cmd_check,'report':cmd_report,'list':cmd_list,'alerts':cmd_alerts,'add':cmd_add,
+            'dedup':cmd_dedup,'all':cmd_all_safe}
 
     if args.cmd == 'help':
         p.print_help()
-        print('\nCommands: init, import, parse, match, enrich, check, report, list, alerts, add, all')
+        print('\nCommands: init, import, parse, match, enrich, check, report, list, alerts, add, dedup, all')
         return
     cmds[args.cmd](args)
 

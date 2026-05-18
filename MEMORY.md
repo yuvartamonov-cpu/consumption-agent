@@ -9,6 +9,9 @@
 - **IMAP (Gmail):** yu.v.artamonov@gmail.com / пароль [REDACTED_OLD_GMAIL_APP_PASSWORD] (app password)
 - **Путь проекта:** ~/.openclaw/workspace/consumption_agent/
 - **Конфиг marketplace:** MARKETPLACE_SENDERS — Ozon + Яндекс.Маркет, WB и Megamarket не найдены (писем нет)
+- **Memory Lane search (16.05.2026):** `ml_search_v2` переведён в режим seller-link search: прямые ссылки продавцов/ритейлеров и официальный brand-site fallback важнее попыток автоматизировать Ozon.
+- **Иностранные площадки:** `AliExpress` и `Alibaba` добавлены как дополнительные источники ссылок; запросы для них переводятся с русского на английский.
+- **Качество поиска:** введён строгий brand gating, чтобы `hamington` не матчился в `Remington`; link-only выдача не схлопывается в одну карточку.
 - **Cron:** 10:10 ежедневно (daily_run.sh: import --max 20 + enrich + check)
 - **Репорт:** gen_report.py (генерирует report_consumption_agent.pdf — 35 КБ, ~4 страницы, есть warning по символу \n в шрифте DejaVu)
 - **Telegram-ручной ввод:** consumption_telegram.sh (вызов из OpenClaw)
@@ -104,3 +107,27 @@
 ### 📊 Отчёты и алерты
 - Сделать отчёт по тратам на еду и каршеринг за последние 30 дней
 - Настроить алерты на превышение лимита по категориям
+## 📋 План на следующую сессию (инвентарь /add_item)
+
+### 1. Напоминания о замене
+- При сохранении вещи: `purchase_date + replace_after_months = replace_date`
+- Daily cron: проверять все `items` с `replace_after_months IS NOT NULL`
+- За 30 дней до `replace_date` → отправить алерт:
+  "🔄 Напоминание: через месяц пора менять {name} ({brand}). /find_similar {item_id}"
+- Таблица `alerts` уже есть (для гарантий, сроков)
+- Алерт с кнопкой: ✅ Заменено (ставит `status='replaced'` или обновляет `replace_notified_at`)
+
+### 2. Поиск аналогов
+- Обсудить на следующей сессии: искать через web_search прямых продавцов по названию+бренду
+- Сохранять ссылки в `item_price_links`
+- Или просто показывать в чате "найди где купить {name} {brand}"
+
+### 3. Исправление параллельного распознавателя бирок
+- Какой-то внешний скрипт перехватывает фото с бирками
+- Нужно выяснить и отключить (если мешает)
+
+
+### Paperclip CEO — OpenClaw Gateway адаптер серый (не активен)
+- Не отображается интеграция OpenClaw ⇄ Paperclip CEO
+- OCR-задача в roadmap.md не синхронизируется
+- **План:** разобраться 12.05: попробовать зайти через localhost:18789 с Windows, или установить плагин, или прямой API

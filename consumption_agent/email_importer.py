@@ -1,4 +1,3 @@
-import os
 #!/usr/bin/env python3
 """
 Consumption Agent — email-импорт покупок и импорт распознанных товаров.
@@ -9,7 +8,6 @@ v2 — исправлен pipeline:
   - data_origin различается по источнику
   - fuzzy-дедупликация через LIKE (first 20 chars)
 """
-import sqlite3
 import csv
 import os
 import imaplib
@@ -17,7 +15,7 @@ import email
 import re
 from email.header import decode_header
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
+from consumption.db import DB_PATH, connect as db_connect
 
 IMAP_CONFIG = {
     'host': 'imap.gmail.com',
@@ -105,7 +103,7 @@ def import_file_csv():
         print(f'  Файл не найден: {path}')
         return 0
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect(DB_PATH)
     count = 0
     with open(path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -143,7 +141,7 @@ def import_screens_csv():
         print(f'  Файл не найден: {path}')
         return 0
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect(DB_PATH)
     count = 0
     with open(path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -178,7 +176,7 @@ def check_ozon_emails(limit=20):
     Создаёт purchase ТОЛЬКО для писем с subject "Ваш чек".
     Извлекает сумму из тела письма.
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect(DB_PATH)
 
     mail = imaplib.IMAP4_SSL(IMAP_CONFIG['host'], IMAP_CONFIG['port'])
     mail.login(IMAP_CONFIG['user'], IMAP_CONFIG['password'])
@@ -300,7 +298,7 @@ def main():
     check_ozon_emails(limit=20)
 
     # 3. Статистика
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect(DB_PATH)
     show_stats(conn)
     conn.close()
 

@@ -3,6 +3,7 @@ consumption_agent/venv/
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Базы данных
 *.db
@@ -28,6 +29,8 @@ venv/
 # PDF и прочие файлы проекта
 *.pdf
 *.txt
+!consumption_agent/requirements.txt
+!consumption_agent/requirements-dev.txt
 update-check.json
 
 # HTML export Yandex

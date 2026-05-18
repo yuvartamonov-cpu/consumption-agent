@@ -8,8 +8,8 @@ import sqlite3
 import os
 import json
 from datetime import date, datetime
+from consumption.db import DB_PATH, connect
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 OLD_TABLES = ['purchases', 'purchase_items', 'recognized_items', 'cheques_log']
 
 
@@ -96,6 +96,7 @@ def create_new_schema(conn):
             purchase_source   TEXT,
             purchase_url      TEXT,
             purchase_id       INTEGER REFERENCES purchases(id),
+            is_delivery       INTEGER DEFAULT 0,
             warranty_months   INTEGER,
             expiry_date       TEXT,
             lifespan_months   INTEGER,
@@ -174,6 +175,35 @@ def create_new_schema(conn):
             created_at        TEXT DEFAULT (datetime('now'))
         );
     ''')
+
+    # Индексы для производительности (рекомендация Codex п.4)
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_deleted_at ON items(deleted_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_purchase_id ON items(purchase_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_purchases_deleted_at ON purchases(deleted_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_recog_log_matched_item_id ON recognized_items_log(matched_item_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_recog_log_source_type ON recognized_items_log(source_type)')
+
+
+def ensure_indexes(conn):
+    """Create read-path indexes that are safe to apply to existing databases."""
+    conn.executescript('''
+        CREATE INDEX IF NOT EXISTS idx_items_deleted_at
+            ON items(deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_items_category_id
+            ON items(category_id);
+        CREATE INDEX IF NOT EXISTS idx_items_purchase_id
+            ON items(purchase_id);
+        CREATE INDEX IF NOT EXISTS idx_purchases_deleted_at
+            ON purchases(deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_alerts_status
+            ON alerts(status);
+        CREATE INDEX IF NOT EXISTS idx_recognized_items_log_match_source
+            ON recognized_items_log(matched_item_id, source_type);
+    ''')
+    conn.commit()
 
 
 def seed_categories(conn):
@@ -302,9 +332,10 @@ def main():
     # Для первого запуска удаляем старые таблицы и создаём новые
     db_exists = os.path.exists(DB_PATH)
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect(DB_PATH)
     
     if db_exists and check_is_initialized(conn):
+        ensure_indexes(conn)
         print("БД уже инициализирована. Пропускаю.")
         conn.close()
         return
@@ -319,6 +350,7 @@ def main():
 
     
     create_new_schema(conn)
+    ensure_indexes(conn)
     ensure_default_profile(conn)
     seed_categories(conn)
     

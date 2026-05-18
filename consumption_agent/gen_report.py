@@ -22,7 +22,8 @@ class PDF(FPDF):
         self.cell(0,8,s or '', new_x='LMARGIN', new_y='NEXT')
     def bd(self, s):
         self.set_font('DejaVu','',10)
-        self.multi_cell(0,6,str(s or ''))
+        text = str(s or '').replace('\n', ' ').replace('\r', '')
+        self.multi_cell(0,6,text)
     def tr(self, cells, widths, fill=False):
         self.set_fill_color(240,240,240) if fill else self.set_fill_color(255,255,255)
         self.set_font('DejaVu','',8)
@@ -61,14 +62,16 @@ tot_matched = db.execute('SELECT COUNT(*) FROM recognized_items_log WHERE matche
 tot_cheques = db.execute('SELECT COUNT(*) FROM cheques_log').fetchone()[0]
 
 pdf.h1('Statistics')
-pdf.bd(f'Active items: {tot_items}')
-pdf.bd(f'Purchases: {tot_purch}')
-pdf.bd(f'Categories: {tot_cats}')
-pdf.bd(f'Active alerts: {tot_alerts}')
-pdf.bd(f'Items with warranty: {tot_warr}')
-pdf.bd(f'Items with expiry: {tot_expiry}')
-pdf.bd(f'Cheques processed: {tot_cheques}')
-pdf.bd(f'OCR records: {tot_ocr} (matched: {tot_matched}, {100*tot_matched//tot_ocr if tot_ocr else 0}%)')
+pdf.set_font('DejaVu','',10)
+pdf.cell(0,6,f'Active items: {tot_items}', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Purchases: {tot_purch}', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Categories: {tot_cats}', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Active alerts: {tot_alerts}', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Items with warranty: {tot_warr}', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Items with expiry: {tot_expiry}', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Cheques processed: {tot_cheques}', new_x='LMARGIN', new_y='NEXT')
+match_pct = 100*tot_matched//tot_ocr if tot_ocr else 0
+pdf.cell(0,6,f'OCR records: {tot_ocr} (matched: {tot_matched}, {match_pct}%)', new_x='LMARGIN', new_y='NEXT')
 pdf.ln(4)
 
 # Categories
@@ -142,9 +145,10 @@ else:
 
 pdf.ln(4)
 pdf.h1('OCR & Recognition')
-pdf.bd(f'Total OCR records: {tot_ocr}  |  Matched to items: {tot_matched}')
-pdf.bd(f'Precision: {100*tot_matched//tot_ocr if tot_ocr else 0}%')
-pdf.bd(f'Cheques imported: {tot_cheques}')
+pdf.set_font('DejaVu','',10)
+pdf.cell(0,6,f'Total OCR records: {tot_ocr}  |  Matched to items: {tot_matched}', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Precision: {100*tot_matched//tot_ocr if tot_ocr else 0}%', new_x='LMARGIN', new_y='NEXT')
+pdf.cell(0,6,f'Cheques imported: {tot_cheques}', new_x='LMARGIN', new_y='NEXT')
 
 # Plan
 pdf.add_page()
@@ -184,7 +188,8 @@ plan = [
 ]
 pdf.set_font('DejaVu','',9)
 for l in plan:
-    pdf.multi_cell(0,5,str(l))
+    safe_l = str(l).replace('\n', ' ').replace('\r', '')
+    pdf.cell(0,5,safe_l, new_x='LMARGIN', new_y='NEXT')
     if not l:
         pdf.ln(1)
 

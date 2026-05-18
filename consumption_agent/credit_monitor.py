@@ -17,6 +17,10 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import json
 
+from consumption.db import connect as db_connect
+from imap_folders import ScanMetrics, build_message_uid, discover_target_mailboxes
+from repositories import credit as credit_repo
+
 DB_PATH = os.path.join(os.path.dirname(__file__), 'consumption.db')
 
 # IMAP конфигурации для всех почт
@@ -67,6 +71,10 @@ MFO_PATTERNS = {
     'boostra': ['boostra', 'бустра'],
     'ekvazaim': ['эквазайм', 'ekvazaim'],
     'webzaim': ['webzaim', 'вебзайм'],
+    'dengi_srazu': ['деньги сразу', 'dengisrazu', 'dengi-srazu'],
+    'flashzaim': ['флэшзайм', 'flashzaim', 'flash-zaim'],
+    'fast_finance': ['фаст финанс', 'fast finance', 'fastfinance'],
+    'glatsint': ['глацинт', 'glatsint'],
 }
 
 ALL_PATTERNS = {**BANK_PATTERNS, **MFO_PATTERNS}
@@ -127,62 +135,18 @@ class CreditAlert:
     paid_confirmed_via: str = ''
 
 
+def _db_connect():
+    """Connect through the shared SQLite helper."""
+    return db_connect(DB_PATH, timeout=10, max_retries=3, delay=0.5)
+
+
 def init_credit_tables():
     """Создаёт таблицы для хранения кредитных алертов."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.executescript('''
-        CREATE TABLE IF NOT EXISTS credit_alerts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,  -- 'email' или 'sms'
-            sender TEXT,
-            sender_name TEXT,  -- Название банка/МФО
-            subject TEXT,
-            body TEXT,
-            payment_date TEXT,
-            payment_amount REAL,
-            currency TEXT DEFAULT 'RUB',
-            detected_at TEXT DEFAULT (datetime('now')),
-            notified_at TEXT,
-            days_until_payment INTEGER,
-            raw_message_id TEXT UNIQUE,
-            is_active INTEGER DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS credit_alert_notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            alert_id INTEGER NOT NULL REFERENCES credit_alerts(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL,
-            telegram_chat_id TEXT,
-            telegram_message_id TEXT,
-            is_test INTEGER DEFAULT 0,
-            sent_at TEXT DEFAULT (datetime('now')),
-            UNIQUE(alert_id, kind, is_test)
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_credit_alerts_date 
-        ON credit_alerts(payment_date);
-        
-        CREATE INDEX IF NOT EXISTS idx_credit_alerts_notified 
-        ON credit_alerts(notified_at);
-        
-        CREATE INDEX IF NOT EXISTS idx_credit_alerts_active 
-        ON credit_alerts(is_active);
-    ''')
-
-    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(credit_alerts)").fetchall()}
-    if 'paid_confirmed_at' not in existing_columns:
-        conn.execute('ALTER TABLE credit_alerts ADD COLUMN paid_confirmed_at TEXT')
-    if 'paid_confirmed_via' not in existing_columns:
-        conn.execute('ALTER TABLE credit_alerts ADD COLUMN paid_confirmed_via TEXT')
-    if 'paid_note' not in existing_columns:
-        conn.execute('ALTER TABLE credit_alerts ADD COLUMN paid_note TEXT')
-
-    conn.execute('''
-        CREATE INDEX IF NOT EXISTS idx_credit_alert_notifications_alert
-        ON credit_alert_notifications(alert_id, kind, is_test)
-    ''')
-    conn.commit()
-    conn.close()
+    conn = _db_connect()
+    try:
+        credit_repo.ensure_credit_schema(conn)
+    finally:
+        conn.close()
 
 
 def _compute_days_until(payment_date: Optional[datetime]) -> Optional[int]:
@@ -236,67 +200,55 @@ def get_notification_kind(alert: CreditAlert) -> Optional[str]:
 
 def record_notification(alert_id: int, kind: str, telegram_chat_id: Optional[str] = None,
                         telegram_message_id: Optional[str] = None, is_test: bool = False):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute('''
-        INSERT OR IGNORE INTO credit_alert_notifications
-        (alert_id, kind, telegram_chat_id, telegram_message_id, is_test)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (alert_id, kind, telegram_chat_id, telegram_message_id, 1 if is_test else 0))
-    if not is_test:
-        conn.execute(
-            'UPDATE credit_alerts SET notified_at = datetime("now") WHERE id = ?',
-            (alert_id,)
+    conn = _db_connect()
+    try:
+        credit_repo.record_notification(
+            conn,
+            alert_id,
+            kind,
+            telegram_chat_id=telegram_chat_id,
+            telegram_message_id=telegram_message_id,
+            is_test=is_test,
         )
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def was_notification_sent(alert_id: int, kind: str, is_test: bool = False) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute(
-        'SELECT 1 FROM credit_alert_notifications WHERE alert_id = ? AND kind = ? AND is_test = ? LIMIT 1',
-        (alert_id, kind, 1 if is_test else 0)
-    ).fetchone()
-    conn.close()
-    return bool(row)
+    conn = _db_connect()
+    try:
+        return credit_repo.was_notification_sent(conn, alert_id, kind, is_test=is_test)
+    finally:
+        conn.close()
 
 
 def get_alert_by_id(alert_id: int) -> Optional[CreditAlert]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute('SELECT * FROM credit_alerts WHERE id = ?', (alert_id,)).fetchone()
-    conn.close()
-    return _row_to_alert(row) if row else None
+    conn = _db_connect()
+    try:
+        row = credit_repo.get_alert_by_id(conn, alert_id)
+        return _row_to_alert(row) if row else None
+    finally:
+        conn.close()
 
 
 def confirm_alert_paid(alert_id: int, via: str = 'telegram_button', note: str = '') -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.execute('''
-        UPDATE credit_alerts
-        SET paid_confirmed_at = datetime('now'),
-            paid_confirmed_via = ?,
-            paid_note = ?,
-            is_active = 0
-        WHERE id = ? AND paid_confirmed_at IS NULL
-    ''', (via, note, alert_id))
-    conn.commit()
-    changed = cur.rowcount > 0
-    conn.close()
-    return changed
+    conn = _db_connect()
+    try:
+        changed = credit_repo.confirm_paid(conn, alert_id, via=via, note=note)
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
 
 
 def get_alerts_ready_for_notification() -> List[Tuple[CreditAlert, str]]:
     init_credit_tables()
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute('''
-        SELECT * FROM credit_alerts
-        WHERE is_active = 1
-          AND payment_date IS NOT NULL
-          AND paid_confirmed_at IS NULL
-        ORDER BY payment_date ASC
-    ''').fetchall()
-    conn.close()
+    conn = _db_connect()
+    try:
+        rows = credit_repo.list_active(conn)
+    finally:
+        conn.close()
 
     result: List[Tuple[CreditAlert, str]] = []
     for row in rows:
@@ -312,17 +264,11 @@ def get_alerts_ready_for_notification() -> List[Tuple[CreditAlert, str]]:
 
 def get_nearest_alerts(limit: int = 3) -> List[CreditAlert]:
     init_credit_tables()
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute('''
-        SELECT * FROM credit_alerts
-        WHERE payment_date IS NOT NULL
-          AND is_active = 1
-          AND paid_confirmed_at IS NULL
-        ORDER BY ABS(julianday(payment_date) - julianday('now')) ASC, payment_date ASC
-        LIMIT ?
-    ''', (limit,)).fetchall()
-    conn.close()
+    conn = _db_connect()
+    try:
+        rows = credit_repo.list_nearest(conn, limit=limit)
+    finally:
+        conn.close()
     alerts = [_row_to_alert(row) for row in rows]
     for alert in alerts:
         alert.days_until_payment = _compute_days_until(alert.payment_date)
@@ -461,81 +407,180 @@ def extract_payment_amount(text: str) -> Optional[float]:
     return None
 
 
+# Маркетинговые слова — исключаем письма с этими терминами
+MARKETING_KEYWORDS = [
+    'скидка', 'кэшбэк', 'кешбэк', 'подарок', 'акция', 'промокод',
+    'выгода', 'экономьте', 'бонус', 'кешбек', 'кэшбек',
+    'страховка жилья', 'страхование', 'полис',
+    'самокат', 'доставка', 'город мчит',
+    'топливо', 'заправка', 'азс',
+    'пицца', 'шашлык', 'майские',
+    'кэшбэк', 'кешбэк', 'cashback',
+    'приз', 'розыгрыш', 'конкурс',
+    'карта лояльности', 'баллы',
+    'реферал', 'пригласи друга',
+    'новый сервис', 'попробуйте',
+    'успейте', 'только сегодня', 'последний шанс',
+    'бесплатная доставка', 'бесплатно',
+    'кешбэк', 'кэшбек',
+]
+
+# Обязательные признаки реального кредитного уведомления
+CREDIT_REQUIRED_INDICATORS = [
+    'плат[её]ж', 'взнос', 'списание', 'погашение',
+    'задолженность', 'долг', 'просрочка',
+    'неустойка', 'штраф', 'пени',
+    'график платежей', 'аннуитетный',
+    'сумма к оплате', 'к оплате',
+    'платеж по кредиту', 'погашение кредита',
+    'задолженность по кредиту',
+    'просроченный платеж',
+]
+
 def is_credit_message(subject: str, body: str) -> bool:
-    """Проверяет, является ли сообщение кредитным."""
+    """Проверяет, является ли сообщение кредитным уведомлением (не маркетингом).
+    
+    Логика:
+    1. Если есть маркетинговые слова — исключаем
+    2. Если есть обязательные признаки кредита — включаем
+    3. Если есть ключевые слова кредита + контекст оплаты — включаем
+    4. Иначе — исключаем (дефолтно False)
+    """
     text = (subject + ' ' + body).lower()
     
-    # Проверяем ключевые слова
-    for keyword in CREDIT_KEYWORDS:
-        if re.search(keyword, text):
+    # 1. Маркетинг — строго исключаем
+    for mk in MARKETING_KEYWORDS:
+        if mk in text:
+            return False
+    
+    # 2. Обязательные признаки реального уведомления
+    for indicator in CREDIT_REQUIRED_INDICATORS:
+        if re.search(indicator, text):
             return True
     
-    # Проверяем паттерны банков/МФО
-    for patterns in ALL_PATTERNS.values():
-        for pattern in patterns:
-            if pattern in text:
+    # 3. Ключевые слова кредита — только если есть контекст оплаты/долга
+    credit_keywords_found = False
+    for keyword in ['кредит', 'займ', 'микрозайм']:
+        if re.search(keyword, text):
+            credit_keywords_found = True
+            break
+    
+    if credit_keywords_found:
+        # Проверяем контекст — должны быть слова об оплате/долге
+        payment_context = ['оплат', 'плат', 'долг', 'задолжен', 'взнос', 'списан']
+        for ctx in payment_context:
+            if ctx in text:
                 return True
     
+    # 4. По умолчанию — не кредитное (избегаем false positive)
     return False
 
 
-def check_email_account(config: dict, days_back: int = 7) -> List[CreditAlert]:
+def check_email_account(config: dict, days_back: int = 1) -> List[CreditAlert]:
     """Проверяет почтовый ящик на кредитные сообщения."""
+    _log = logging.getLogger(__name__)
     alerts = []
-    
+    metrics = ScanMetrics(scanner='credit_monitor', account=config['name']).start()
+
     if not config.get('password'):
         print(f"⚠️ Нет пароля для {config['name']}")
         return alerts
-    
+
     try:
+        import socket
+        socket.setdefaulttimeout(15)
+
         mail = imaplib.IMAP4_SSL(config['host'], config['port'])
-        # Для Gmail нужно использовать полный email как логин
         login_user = config['user']
-        # Убираем пробелы из пароля (для app password)
         password_clean = config['password'].replace(' ', '')
         mail.login(login_user, password_clean)
-        mail.select('INBOX')
-        
-        # Ищем письма за последние N дней
-        since_date = (datetime.now() - timedelta(days=days_back)).strftime('%d-%b-%Y')
-        _, message_numbers = mail.search(None, f'(SINCE {since_date})')
-        
-        for num in message_numbers[0].split():
+        mailboxes = discover_target_mailboxes(mail, account_label=config['name'])
+        seen_ids = set()
+        on_date = datetime.now().strftime('%d-%b-%Y')
+
+        for mailbox_name in mailboxes:
+            folder_seen = 0
+            folder_deduped = 0
+            folder_parsed = 0
+            folder_error = None
+
             try:
-                _, msg_data = mail.fetch(num, '(RFC822)')
-                msg = email.message_from_bytes(msg_data[0][1])
-                
-                subject = decode_subject(msg)
-                body = get_email_body(msg)
-                sender = msg.get('From', '')
-                message_id = msg.get('Message-ID', '')
-                
-                if is_credit_message(subject, body):
-                    bank_id, bank_name = detect_sender_name(subject + ' ' + body)
-                    payment_date = extract_payment_date(subject + ' ' + body)
-                    payment_amount = extract_payment_amount(subject + ' ' + body)
-                    
-                    alert = CreditAlert(
-                        source='email',
-                        sender=sender,
-                        sender_name=bank_id,
-                        subject=subject,
-                        body=body[:500],  # Ограничиваем длину
-                        payment_date=payment_date,
-                        payment_amount=payment_amount,
-                        raw_message_id=message_id,
-                    )
-                    alerts.append(alert)
+                status, _ = mail.select(f'"{mailbox_name}"', readonly=True)
+                if status != 'OK':
+                    folder_error = f'SELECT failed: {status}'
+                    print(f"   ⚠️ Не удалось открыть папку {mailbox_name}")
+                    metrics.record_folder(mailbox_name, error=folder_error)
+                    continue
             except Exception as e:
-                print(f"⚠️ Ошибка обработки письма: {e}")
+                folder_error = str(e)
+                print(f"   ⚠️ Не удалось открыть папку {mailbox_name}: {e}")
+                metrics.record_folder(mailbox_name, error=folder_error)
                 continue
-        
+
+            _, message_numbers = mail.search(None, f'(ON {on_date} UNSEEN)')
+            nums = message_numbers[0].split() if message_numbers and message_numbers[0] else []
+
+            if not nums:
+                _, message_numbers = mail.search(None, f'(ON {on_date})')
+                nums = message_numbers[0].split() if message_numbers and message_numbers[0] else []
+                print(f"   {mailbox_name}: писем за сегодня (все): {len(nums)}")
+            else:
+                print(f"   {mailbox_name}: писем за сегодня (непрочитанных): {len(nums)}")
+
+            folder_seen = len(nums)
+
+            for num in nums[:100]:
+                try:
+                    _, msg_data = mail.fetch(num, '(RFC822)')
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    dedup_key = build_message_uid(msg.get('Message-ID', ''), config['name'], mailbox_name, num)
+                    if dedup_key in seen_ids:
+                        folder_deduped += 1
+                        continue
+                    seen_ids.add(dedup_key)
+
+                    subject = decode_subject(msg)
+                    body = get_email_body(msg)
+                    sender = msg.get('From', '')
+                    message_id = msg.get('Message-ID', '')
+
+                    if is_credit_message(subject, body):
+                        bank_id, bank_name = detect_sender_name(subject + ' ' + body)
+                        payment_date = extract_payment_date(subject + ' ' + body)
+                        payment_amount = extract_payment_amount(subject + ' ' + body)
+
+                        alert = CreditAlert(
+                            source='email',
+                            sender=sender,
+                            sender_name=bank_id,
+                            subject=subject,
+                            body=body[:500],
+                            payment_date=payment_date,
+                            payment_amount=payment_amount,
+                            raw_message_id=message_id or dedup_key,
+                        )
+                        alerts.append(alert)
+                        folder_parsed += 1
+                except Exception as e:
+                    print(f"⚠️ Ошибка обработки письма в {mailbox_name}: {e}")
+                    continue
+
+            metrics.record_folder(mailbox_name, seen=folder_seen,
+                                  deduped=folder_deduped, parsed=folder_parsed)
+
         mail.close()
         mail.logout()
-        
+
+    except socket.timeout:
+        print(f"⏱️ Таймаут подключения к {config['name']}")
+        metrics.errors += 1
     except Exception as e:
         print(f"❌ Ошибка подключения к {config['name']}: {e}")
-    
+        metrics.errors += 1
+    finally:
+        socket.setdefaulttimeout(None)
+
+    metrics.stop().log_summary(_log)
     return alerts
 
 
@@ -543,7 +588,7 @@ def save_alerts(alerts: List[CreditAlert]) -> List[CreditAlert]:
     """Сохраняет алерты в БД, возвращает только новые."""
     new_alerts = []
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     
     for alert in alerts:
         # Проверяем, не существует ли уже такой алерт
@@ -560,20 +605,23 @@ def save_alerts(alerts: List[CreditAlert]) -> List[CreditAlert]:
         if alert.payment_date:
             days_until = (alert.payment_date - datetime.now()).days
         
-        conn.execute('''
-            INSERT INTO credit_alerts 
-            (source, sender, sender_name, subject, body, payment_date, 
-             payment_amount, currency, detected_at, days_until_payment, raw_message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)
-        ''', (
-            alert.source, alert.sender, alert.sender_name, alert.subject,
-            alert.body, 
-            alert.payment_date.strftime('%Y-%m-%d') if alert.payment_date else None,
-            alert.payment_amount, alert.currency, days_until, alert.raw_message_id
-        ))
-        
-        alert.days_until_payment = days_until
-        new_alerts.append(alert)
+        new_id = credit_repo.insert_alert(
+            conn,
+            source=alert.source,
+            sender=alert.sender,
+            sender_name=alert.sender_name,
+            subject=alert.subject,
+            body=alert.body,
+            payment_date=alert.payment_date.strftime('%Y-%m-%d') if alert.payment_date else None,
+            payment_amount=alert.payment_amount,
+            currency=alert.currency,
+            days_until_payment=days_until,
+            raw_message_id=alert.raw_message_id,
+        )
+        if new_id:
+            alert.id = new_id
+            alert.days_until_payment = days_until
+            new_alerts.append(alert)
     
     conn.commit()
     conn.close()
@@ -583,7 +631,7 @@ def save_alerts(alerts: List[CreditAlert]) -> List[CreditAlert]:
 
 def get_pending_alerts(min_days: int = 3) -> List[CreditAlert]:
     """Получает алерты, по которым ещё не отправлено уведомление и платёж через min_days+ дней."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     
     rows = conn.execute('''
@@ -607,14 +655,13 @@ def get_pending_alerts(min_days: int = 3) -> List[CreditAlert]:
 
 def mark_notified(alert_ids: List[int]):
     """Отмечает алерты как отправленные."""
-    conn = sqlite3.connect(DB_PATH)
-    for alert_id in alert_ids:
-        conn.execute(
-            'UPDATE credit_alerts SET notified_at = datetime("now") WHERE id = ?',
-            (alert_id,)
-        )
-    conn.commit()
-    conn.close()
+    conn = _db_connect()
+    try:
+        for alert_id in alert_ids:
+            credit_repo.mark_notified(conn, alert_id)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def format_alert_message(alert: CreditAlert) -> str:
@@ -655,7 +702,7 @@ def check_all_emails() -> List[CreditAlert]:
     
     for config in IMAP_CONFIGS:
         print(f"📧 Проверяем {config['name']}...")
-        alerts = check_email_account(config)
+        alerts = check_email_account(config, days_back=1)
         print(f"   Найдено {len(alerts)} кредитных сообщений")
         all_alerts.extend(alerts)
     

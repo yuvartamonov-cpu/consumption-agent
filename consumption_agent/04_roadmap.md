@@ -1,7 +1,7 @@
 # Roadmap реализации — consumption_agent
 
-**Версия от 11.05.2026 · 04_roadmap.md (обновлено после принятия Architecture v2)**
-**Git:** 70839df (02_architecture_v2.md)
+**Версия от 16.05.2026 · 04_roadmap.md (обновлено после seller-link search и IMAP folder scan)**
+**Git baseline:** efff784
 
 ---
 
@@ -15,7 +15,7 @@
 
 **Цель:** зафиксировать инфраструктуру, перенести код в управляемую структуру, восстановление после сбоев.
 
-- [ ] **GitHub repository** (создать remote, пушить)
+- [x] **GitHub repository** (remote настроен, push работает)
 - [ ] `docs/` — структура каталога:
   - [ ] `architecture.md` (симлинк или копия 02_architecture_v2.md)
   - [ ] `security.md`
@@ -23,15 +23,16 @@
   - [ ] `development_workflow.md`
 - [ ] `.env.example` (без секретов)
 - [ ] `README.md` — общее описание проекта
-- [ ] **CLI** `consumption status|doctor|check-db|backup-now|restart-bot`
+- [x] **CLI** `consumption status|doctor|check-db|backup-now|restart-bot` (YUR-70, commit pending)
 - [ ] **Backup script** (шифрованный `.backup` по расписанию)
-- [ ] **Tests baseline** — хотя бы минимальные тесты на существующую логику
+- [x] **Tests baseline** — минимальный baseline давно есть, новые тесты добавляются по модулям
 - [ ] **Pre-commit hook** для py_compile + secret scanning
 - [ ] `docs/cli_workflow.md` — инструкция для CLI вместо Telegram
 
 ### Что уже есть
 
 - ✅ Git в WSL, bare-репо на Windows
+- ✅ GitHub remote синхронизируется с bare-репо на Windows
 - ✅ .gitignore
 - ✅ .env (секреты)
 - ✅ systemd-юнит consumption-bot.service (autorestart)
@@ -41,7 +42,7 @@
 
 ---
 
-## 🔄 Phase B — Memory Lane MVP (текущий спринт)
+## 🔄 Phase B — Memory Lane MVP + Visual Search (текущий спринт)
 
 **Цель:** владелец отправляет фото с комментарием, бот сохраняет запись и извлекает признаки вкуса.
 
@@ -53,15 +54,23 @@ Telegram photo + comment → сохранение в media/ → caption + featur
 
 ### Acceptance criteria
 
-- [ ] **Автообработка фото в Telegram** — если бот получает фото с текстом «нравится»,
-      «запомни», «найди похожее» и т.п., предлагает сохранить в Memory Lane
-- [ ] Сохранение оригинала в `data/media/`
-- [ ] Запись в `memory_lane_items` (liked_features, disliked_features, style_tags)
-- [ ] Запись в `media_assets`
-- [ ] Команда `/ml_last` — последние впечатления
-- [ ] Команда `/ml_find <query>` — текстовый поиск по памяти
-- [ ] Команда `/ml_profile <topic>` — профиль вкуса по теме
-- [ ] **Тесты** на сохранение, извлечение, поиск
+- [x] **Автообработка фото в Telegram** — если бот получает фото с текстом «нравится»,
+      «запомни», «найди похожее» и т.п., сохраняет в Memory Lane (commit YUR-64)
+- [x] Сохранение оригинала в `data/media/` (sha256-deduped, MEDIA_SUBDIR)
+- [x] Запись в `memory_lane_items` (liked_features, disliked_features, style_tags, topic)
+- [x] Запись в `media_assets`
+- [x] Команда `/ml_last` — последние впечатления (опц. фильтр по topic)
+- [ ] Команда `/ml_find <query>` — текстовый поиск по памяти (следующая итерация: embedding)
+- [ ] Команда `/ml_profile <topic>` — профиль вкуса по теме (следующая итерация)
+- [x] **Тесты** на сохранение (9 кейсов в tests/test_memory_lane.py)
+- [x] `ml_search_v2` — seller-link orchestrator с brand gating и canonicalization
+- [x] Прямые seller links вместо Ozon-first retrieval
+- [x] `AliExpress` / `Alibaba` — запросы переводятся с русского на английский
+- [x] Official-site fallback через поисковые ссылки Google / Yandex
+- [ ] Structured official/distributor resolution — не только generic search links
+- [ ] CLIP visual gate для проверки визуального совпадения кандидатов
+- [ ] Reverse image search provider
+- [ ] Price-drop tracking для товаров из Memory Lane
 
 ### Детали
 
@@ -111,78 +120,28 @@ Telegram photo + comment → сохранение в media/ → caption + featur
 
 ---
 
-## ⬜ Phase F — Monetization & Growth
-
-**Статус:** Planned  
-**Горизонт:** Q3 2026 → Q3 2027
-
-### F.0 — Multi-user фундамент (блокер для всех каналов)
-
-**Acceptance criteria:**
-- [ ] Все личные данные (email, DB_PATH) вынесены в config/env
-- [ ] Таблица `users` добавлена в БД (user_id, telegram_id, subscription_tier, consent_flags, created_at)
-- [ ] user_id добавлен как foreign key во все основные таблицы
-- [ ] Auth через Telegram (telegram_id как primary auth)
-- [ ] Hosted деплой на Railway или VPS (не WSL на личной машине)
-
-### F.1 — Канал 5: Premium B2C (Q3-Q4 2026)
-
-**Acceptance criteria:**
-- [ ] Freemium лимит: 50 товаров на бесплатном тарифе
-- [ ] /subscribe команда в боте с описанием Premium
-- [ ] Price-drop alerts только для Premium
-- [ ] Расширенная аналитика только для Premium
-- [ ] Платёжная интеграция (ЮKassa или Telegram Stars)
-
-**Метрика:** 50 платных пользователей через 3 мес после запуска
-
-### F.2 — Growth Loop: реферальная программа (Q4 2026)
-
-**Acceptance criteria:**
-- [ ] /invite команда генерирует уникальную реферальную ссылку
-- [ ] При активации по ссылке: оба получают +30 дней Premium
-- [ ] Retention hooks: weekly digest, price-drop alerts, milestones
-- [ ] Savings counter в еженедельном отчёте
-
-**Метрика:** Referral rate > 15% активных пользователей
-
-### F.3 — Канал 1: Data → Скидки (Q1 2027)
-
-**Acceptance criteria:**
-- [ ] /privacy команда с настройками согласия
-- [ ] Consent flow перед включением "Режима скидок"
-- [ ] Anonymization layer (убрать PII)
-- [ ] API endpoint для брендов-партнёров
-- [ ] Минимум 1 бренд-партнёр в пилоте
-
-### F.4 — Канал 2: Lifecycle CPA (Q1-Q2 2027)
-
-**Acceptance criteria:**
-- [ ] Справочник сроков службы по 20+ категориям
-- [ ] Lifecycle-триггеры в боте с опциональными предложениями
-- [ ] Partner tracking (UTM)
-- [ ] CTR lifecycle-триггера > 10%
-
-### F.5 — Канал 6: P2P между агентами (Q3 2027)
-
-**Acceptance criteria:**
-- [ ] /sell команда: отметить товар как "готов продать"
-- [ ] Анонимный матчинг между агентами сети
-- [ ] Комиссия агента: 2-5% от сделки
-- [ ] N > 1000 активных пользователей в сети
-
-**См. детали:** [05_monetization.md](05_monetization.md)
-
----
-
 ## 🔧 Technical debt — Приоритет 1 (параллельно)
+
+### 📸 Распознавание чеков — критично
+**Проблема:** OCR через Tesseract выдаёт мусор на большинстве фото/скринов чеков. Названия товаров, суммы и состав позиций распознаются нестабильно. «Товар 2» вместо реального названия, мусорные строки в начале OCR.
+
+**Что нужно:**
+- [ ] **CEO: спроектировать скрипт устойчивого распознавания чеков** (чеков с фото, скриншотов приложений, PDF — любых форматов)
+- [ ] Сценарий: фото/скриншот → стабильное извлечение названий товаров, цен, количества, итога, доставки
+- [ ] Альтернативы Tesseract: EasyOCR, PaddleOCR, LLM API (GPT-4o) для структурного парсинга
+- [ ] Детекция доставки: выделение стоимости доставки + отдельные item с `is_delivery=1`
+- [ ] Post-processing: fuzzy-матчинг товаров с существующим инвентарём
+- [ ] Unit-тесты на реальных чеках (коллекция проблемных примеров)
 
 - [ ] Item-level парсинг для Ozon (_parse_ozon_items) — сейчас 12% items linked
 - [ ] Item-level парсинг для Yandex.Market
-- [ ] Очистка recognized_items_log (1230 мусорных записей)
+- [x] Очистка recognized_items_log (1230 мусорных записей удалены, YUR-73)
 - [ ] Удалить тестовую запись item id 843 (data_origin='telegram_tag')
 - [ ] Сбор курсов валют на дату чека
 - [ ] Алерты low_stock (требует заполнения remaining вручную)
+- [x] Документировать mail-сканирование команд `/dayexp`, `/monthexp`, `/debts`, `/fines`
+- [x] Сканирование IMAP-папок расширено: `INBOX` + `Spam/Junk/Спам` + `Receipts/чеки`
+- [ ] Интеграционные тесты на обход нескольких IMAP-папок для команд отчётов и долгов
 - [ ] Документировать credit_monitor / sms_monitor
 
 ---
@@ -215,6 +174,7 @@ Telegram photo + comment → сохранение в media/ → caption + featur
 - credit_monitor.py, sms_monitor.py, credit_alerts.py
 - Gmail + Яндекс + 2×Mail.ru + SMS (Phone Link)
 - Cron: 10:00 + 18:00
+- С 16.05: IMAP-обход релевантных папок, а не только `INBOX`
 
 ---
 
@@ -225,8 +185,35 @@ Telegram photo + comment → сохранение в media/ → caption + featur
 - ✅ .gitignore: бинарные артефакты, .venv, data/
 - ✅ Gateway: allowInsecureAuth=false
 - ✅ .env: ротирован Gmail app-password (10.05.2026)
-- ⬜ GitHub как второй remote
+- ✅ GitHub как второй remote
 
 ---
 
-consumption_agent · git: 70839df · обновлено 11.05.2026 · architecture v2
+## 📅 План кодирования — ближайшие 5 дней
+
+### День 1 — Stabilize mail scans and observability
+- Закрыть хвосты после IMAP folder scan: единые логи по выбранным папкам, счётчики folders_scanned/messages_seen/messages_deduped.
+- Добавить интеграционный тестовый контур для daily_cheque_scan.py, credit_monitor.py, scripts/fines_bot.py с mock IMAP LIST/SELECT/SEARCH.
+- Acceptance: можно доказать тестом, что INBOX, Spam и Receipts реально участвуют в сканировании.
+
+### День 2 — Official seller retrieval
+- Усилить ml_providers.py: бренды → official site / distributor / authorized retailer entry points.
+- Вынести отдельный resolver для official/distributor domains, чтобы не плодить generic search links.
+- Acceptance: /ml_search по брендовой вещи показывает 2–4 точных seller entry points без мусора чужих брендов.
+
+### День 3 — Foreign marketplace translation quality
+- Расширить словарь и нормализацию для AliExpress / Alibaba: категория, материал, цвет, gender, fit, сезон.
+- Добавить тесты на fashion/home/beauty/tech-запросы, чтобы в query не оставались русские хвосты.
+- Acceptance: англоязычные search URLs строятся стабильно и читаемо по ключевым категориям.
+
+### День 4 — Receipt OCR fallback
+- Подключить Vision fallback для плохого OCR чеков: Tesseract остаётся fast path, Vision — только для low-confidence / noisy cases.
+- Нормализовать разбор суммы, доставки и item-lines из photo/screenshot/PDF чеков.
+- Acceptance: проблемные чеки перестают сваливаться в мусорный текст или "Товар 2".
+
+### День 5 — User-facing workflows
+- Либо price-drop alerts для Memory Lane, либо reminders/replacement workflow для inventory — в зависимости от результатов дней 2–4.
+- Минимум: один завершённый пользовательский loop с Telegram-кнопкой и записью состояния в БД.
+- Acceptance: у пользователя появляется новый законченный сценарий, а не только внутренние модули.
+
+consumption_agent · git baseline: efff784 · обновлено 16.05.2026 · architecture v2 + seller-link search + IMAP folder scan
