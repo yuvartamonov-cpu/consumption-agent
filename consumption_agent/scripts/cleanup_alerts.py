@@ -29,9 +29,9 @@ CREDIT_SENDERS = {
     'sovcombank', 'raiffeisen', 'gazprombank', 'otkritie',
     'rosbank', 'uralsib', 'homecredit', 'rencredit',
     'pochtabank', 'akbars', 'absolut', 'mdm',
-    'turbozaim', 'joy_finance', 'nebus',
+    'turbozaim', 'joy_finance', 'nebus', 'boostra',
     'ekvazaim', 'webzaim', 'dengi_srazu',
-    'flashzaim', 'fast_finance', 'glatsint',
+    'flashzaim', 'fast_finance', 'glatsint', 'creditplus',
 }
 
 # Спам-МФО (не настоящие напоминания, а рекламный спам)

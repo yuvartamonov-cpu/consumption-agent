@@ -45,6 +45,7 @@ BODY_SENDER_PATTERNS = {
     'flashzaim': ['флэшзайм', 'flashzaim', 'flash-zaim'],
     'fast_finance': ['фаст финанс', 'fast finance', 'fastfinance'],
     'glatsint': ['глацинт', 'glatsint'],
+    'creditplus': ['creditplus', 'кредитплюс', 'credit plus', 'кредит плюс'],
 }
 
 SMS_INTEREST_PATTERNS = [

@@ -105,6 +105,14 @@ def build_duplicate_hidden_note(notes: str | None) -> str:
     return f'{current} {DUPLICATE_HIDDEN_MARKER}'.strip()
 
 
+def _minutes_diff(t1: str, t2: str) -> int:
+    try:
+        h1, m1 = map(int, t1.split(':'))
+        h2, m2 = map(int, t2.split(':'))
+        return abs((h1 * 60 + m1) - (h2 * 60 + m2))
+    except Exception:
+        return 9999
+
 def is_duplicate_purchase(
     conn: sqlite3.Connection,
     date_str: str | None,
@@ -151,17 +159,26 @@ def is_duplicate_purchase(
 
     for row in rows:
         existing_time = extract_event_time(row[2])
-        if existing_time and existing_time == event_time:
-            existing_total = float(row[1] or 0)
-            existing_delivery = float(extract_delivery_fee(row[2]) or 0)
-            existing_base = existing_total - existing_delivery
-            if abs(existing_total - current_total) < 0.01:
-                return True
-            if abs(existing_base - current_total) < 0.01:
-                return True
-            if abs(existing_total - current_base) < 0.01:
-                return True
-            if abs(existing_base - current_base) < 0.01:
-                return True
+        if existing_time:
+            time_match = (existing_time == event_time)
+            
+            # Самокат, Я.Лавка и другие часто присылают чек аванса и чек полного расчета
+            # с разницей во времени (от нескольких минут до пары часов) на одинаковую сумму.
+            if not time_match and canonical_store in ('Самокат', 'Яндекс Лавка', 'Яндекс Еда', 'ВкусВилл', 'СберМаркет', 'Купер'):
+                if _minutes_diff(existing_time, event_time) <= 180:
+                    time_match = True
+                    
+            if time_match:
+                existing_total = float(row[1] or 0)
+                existing_delivery = float(extract_delivery_fee(row[2]) or 0)
+                existing_base = existing_total - existing_delivery
+                if abs(existing_total - current_total) < 0.01:
+                    return True
+                if abs(existing_base - current_total) < 0.01:
+                    return True
+                if abs(existing_total - current_base) < 0.01:
+                    return True
+                if abs(existing_base - current_base) < 0.01:
+                    return True
 
     return False

@@ -75,6 +75,7 @@ MFO_PATTERNS = {
     'flashzaim': ['флэшзайм', 'flashzaim', 'flash-zaim'],
     'fast_finance': ['фаст финанс', 'fast finance', 'fastfinance'],
     'glatsint': ['глацинт', 'glatsint'],
+    'creditplus': ['creditplus', 'кредитплюс', 'credit plus', 'кредит плюс'],
 }
 
 ALL_PATTERNS = {**BANK_PATTERNS, **MFO_PATTERNS}

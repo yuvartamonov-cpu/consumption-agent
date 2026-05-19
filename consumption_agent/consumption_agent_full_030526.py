@@ -321,9 +321,9 @@ def cmd_import(args):
                 #   samokat_ofd → numbered cheque blocks (_parse_samokat_items)
                 #   ozon / ozon_noreply → HTML table rows (_parse_ozon_items)
                 items = []
-                if ms_id == 'samokat_ofd' and html:
+                if ms_id.startswith('samokat_ofd') and html:
                     items = _parse_samokat_items(html)
-                elif ms_id in ('ozon', 'ozon_noreply') and html:
+                elif ms_id.startswith('ozon') and html:
                     items = _parse_ozon_items(html)
                     
             except Exception as e:
@@ -343,7 +343,7 @@ def cmd_import(args):
                 # Pick a default category by sender. Ozon receipts cover
                 # a wide range, so leave category NULL and let cmd_match
                 # fuzzy-link them later. Samokat is food-only.
-                default_cat = 'food_other' if ms_id == 'samokat_ofd' else None
+                default_cat = 'food_other' if ms_id.startswith('samokat_ofd') else None
                 for item in items:
                     # Check if item already exists for this purchase
                     existing = conn.execute(
