@@ -173,10 +173,25 @@ async def _save_item_final(update, ctx, item_data, cat_id, get_db, msg):
             replace_months=item_data.get('replace_months'),
             replace_days=item_data.get('replace_days'),
             notes=notes,
+            data_origin=item_data.get('data_origin', 'manual'),
         )
+        
+        # update vision metadata if needed
+        if item_data.get('vision') and not item_data.get('vision_metadata_saved'):
+            v = item_data['vision']
+            attrs = json.dumps({
+                'color': v.get('color'),
+                'description': v.get('description'),
+                'style_tags': v.get('style_tags', []),
+                'material': v.get('material'),
+                'estimated_price_rub': v.get('estimated_price_rub'),
+            }, ensure_ascii=False)
+            update_item_vision_metadata(conn, item_id=item_id, brand=item_data['brand'], attributes=attrs, notes=notes)
+
         
         # 2. Save photo if any
         if item_data.get('file_bytes'):
+            db_path = conn.execute("PRAGMA database_list").fetchall()[0][2]
             media_dir = os.path.join(os.path.dirname(db_path), 'data', 'media')
             asset_id = save_media_asset(conn, item_data['file_bytes'], mime='image/jpeg', base_dir=media_dir)
             if asset_id:

@@ -854,102 +854,20 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             if item_info and 'error' not in item_info and item_info.get('name'):
-                item_name = item_info.get('name', 'Предмет')
-                item_brand = item_info.get('brand')
-                item_cat = item_info.get('category', 'другое')
-                item_desc = item_info.get('description', '')
-                item_color = item_info.get('color')
-                item_price = item_info.get('estimated_price_rub')
-                style_tags = item_info.get('style_tags', [])
-
-                # Сохраняем в БД сразу (при отклонении удалим)
-                conn = get_db()
-                cat_map = {
-                    'одежда': 'cat_clo_everyday', 'обувь': 'cat_clo_everyday',
-                    'техника': 'cat_electronics', 'мебель': 'cat_furniture',
-                    'еда': 'cat_food', 'интерьер': 'cat_furniture',
-                    'косметика': 'cat_cosmetics', 'аксессуары': 'cat_accessories',
-                    'бытовая техника': 'cat_appliances',
+                with open(receipt_path, 'rb') as fh:
+                    file_bytes = fh.read()
+                    
+                item_data = {
+                    'name': item_info.get('name', 'Предмет'),
+                    'brand': item_info.get('brand'),
+                    'vision': item_info,
+                    'file_bytes': file_bytes,
+                    'data_origin': 'vision_photo'
                 }
-                slug = cat_map.get(item_cat.lower(), 'other')
-                cat_id = get_category_id(conn, slug)
-
-                notes_parts = ['Добавлено через распознавание фото']
-                if item_color:
-                    notes_parts.append(f'Цвет: {item_color}')
-                if item_info.get('material'):
-                    notes_parts.append(f'Материал: {item_info["material"]}')
-                if item_desc:
-                    notes_parts.append(f'Описание: {item_desc}')
-                if item_price:
-                    notes_parts.append(f'Оценочная цена: ~{item_price} ₽')
-                notes = '\n'.join(notes_parts)
-
-                attrs = json.dumps({
-                    'color': item_color,
-                    'description': item_desc,
-                    'style_tags': style_tags,
-                    'vision_type': item_info.get('type'),
-                    'material': item_info.get('material'),
-                    'estimated_price_rub': item_price,
-                }, ensure_ascii=False)
-
-                new_item_id = insert_vision_photo_item(
-                    conn,
-                    name=item_name,
-                    brand=item_brand,
-                    purchase_price=item_price,
-                    category_id=cat_id,
-                    attributes=attrs,
-                    notes=notes,
-                    purchase_date=date.today().isoformat(),
-                )
-
-                # Сохраняем фото и связываем с item
-                asset_id = None
-                try:
-                    with open(receipt_path, 'rb') as fh:
-                        buf = fh.read()
-                    asset_id = save_media_asset(conn, buf, mime='image/jpeg')
-                    if asset_id:
-                        link_item_photo(conn, item_id=new_item_id, media_asset_id=asset_id)
-                        log.info(f'vision_photo: linked photo to item_id={new_item_id}, asset_id={asset_id}')
-                except Exception as e:
-                    log.warning(f'vision_photo: failed to save photo: {e}')
-
-                conn.commit()
-                conn.close()
-
-                # Показываем результат с кнопками Подтвердить/Отклонить
-                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                parts = ['📷 Предмет распознан']
-                parts.append(f'📌 {item_name}')
-                if item_brand:
-                    parts.append(f'🏷️ Бренд: {item_brand}')
-                parts.append(f'📂 Категория: {item_cat}')
-                if item_color:
-                    parts.append(f'🎨 Цвет: {item_color}')
-                if item_desc:
-                    parts.append(f'📝 {item_desc}')
-                if style_tags:
-                    parts.append(f'🏷️ Теги: {", ".join(style_tags)}')
-                if item_price:
-                    parts.append(f'💰 Оценка: ~{item_price} ₽')
-                parts.append(f'\nID: {new_item_id}')
-                parts.append('Сохранить в инвентарь?')
-
-                # Сохраняем данные для колбэка
-                ctx.user_data['vision_pending'] = {
-                    'item_id': new_item_id,
-                    'asset_id': asset_id,
-                    'receipt_path': receipt_path,
-                }
-
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton('✅ Подтвердить', callback_data='vision_confirm'),
-                    InlineKeyboardButton('❌ Отклонить', callback_data='vision_reject')
-                ]])
-                await update.message.reply_text('\n'.join(parts), reply_markup=kb)
+                
+                from bot.handlers.items_add import _ask_category_suggestion
+                msg = await update.message.reply_text(f"🔍 Анализирую товар: {item_data['name']}...")
+                await _ask_category_suggestion(update, ctx, item_data, msg, get_db)
                 return
             else:
                 # Результат есть, но name не распознан — сообщаем и не идём в чек

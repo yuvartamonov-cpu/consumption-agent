@@ -149,6 +149,7 @@ def insert_manual_item(
     replace_months: int | None,
     replace_days: int | None,
     notes: str,
+    data_origin: str = "manual",
 ) -> int:
     return insert_item(
         conn,
@@ -160,7 +161,7 @@ def insert_manual_item(
         replace_after_days=replace_days,
         purchase_date=date.today().isoformat(),
         notes=notes,
-        data_origin="manual",
+        data_origin=data_origin,
     )
 
 
