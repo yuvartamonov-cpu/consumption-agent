@@ -18,9 +18,15 @@ log = logging.getLogger(__name__)
 
 
 def _format_top_link_button(group: dict[str, Any], index: int) -> InlineKeyboardButton | None:
-    """Build a compact URL button for a top search result."""
+    """Build a compact URL button for a top search result.
+
+    Skips site:google.com/search URLs — they don't open well in Telegram.
+    """
     url = (group.get('url') or '').strip()
     if not url:
+        return None
+    # Skip google site-search URLs — Telegram can't open them properly
+    if 'google.com/search?q=site%3A' in url or 'google.com/search?q=site:' in url:
         return None
     store = (group.get('store') or group.get('source') or 'Ссылка').strip()
     price = group.get('price_min')

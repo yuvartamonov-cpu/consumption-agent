@@ -19,6 +19,16 @@ from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
 
+# Load .env before anything else (local keys for Gemini, xAI, etc.)
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).resolve().parent / '.env'
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
+        logging.debug('Loaded %s', env_path)
+except ImportError:
+    pass
+
 def get_db_with_retry(max_retries=3, backoff_base=0.5):
     """Connect through the shared DB helper."""
     if db_connect is None:
