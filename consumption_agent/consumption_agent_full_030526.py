@@ -37,16 +37,16 @@ REPORT_PATH = os.path.join(SCRIPT_DIR, 'report_consumption_agent.pdf')
 FONT_DIR = '/usr/share/fonts/truetype/dejavu'
 IMAP_CFG = {'host': 'imap.gmail.com', 'port': 993,
             'user': os.environ.get('IMAP_USER', 'yu.v.artamonov@gmail.com'),
-            'password': os.environ.get('GMAIL_PASSWORD', '')}
+            'password': os.environ.get('GMAIL_APP_PASSWORD', os.environ.get('GMAIL_PASSWORD', ''))}
 IMAP_CFG_YANDEX = {'host': 'imap.yandex.ru', 'port': 993,
                    'user': os.environ.get('YANDEX_USER', 'HKID2021@yandex.ru'),
-                   'password': os.environ.get('YANDEX_PASSWORD', '')}
+                   'password': os.environ.get('YANDEX_APP_PASSWORD', os.environ.get('YANDEX_PASSWORD', ''))}
 IMAP_CFG_ZOREA = {'host': 'imap.mail.ru', 'port': 993,
                   'user': os.environ.get('ZOREA_USER', 'zorea2001@mail.ru'),
-                  'password': os.environ.get('ZOREA_PASSWORD', '')}
+                  'password': os.environ.get('MAILRU_ZOREA_PASSWORD', os.environ.get('ZOREA_PASSWORD', ''))}
 IMAP_CFG_NEUTRINON = {'host': 'imap.mail.ru', 'port': 993,
                       'user': os.environ.get('NEUTRINON_USER', 'neutrinon@mail.ru'),
-                      'password': os.environ.get('NEUTRINON_PASSWORD', '')}
+                      'password': os.environ.get('MAILRU_NEUTRINON_PASSWORD', os.environ.get('NEUTRINON_PASSWORD', ''))}
 # Marketplace senders (add new senders here)
 # All known financial document senders
 FINANCIAL_SENDERS = [
@@ -88,6 +88,7 @@ FINANCIAL_SENDERS = [
     {'id': 'belkacar_neutr',    'from': 'no-reply@belkacar.ru',  'doc_type': 'cheque',  'subject_marker': 'кассовый', 'mailbox': 'neutrinon'},
     {'id': 'delimobil',         'from': 'delimobil.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'zorea'},
     {'id': 'delimobil_neutr',   'from': 'delimobil.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'neutrinon'},
+    {'id': 'delimobil_gmail',   'from': 'delimobil.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'gmail'},
     {'id': 'citydrive',         'from': 'citydrive.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'zorea'},
     {'id': 'citydrive_neutr',   'from': 'citydrive.ru',          'doc_type': 'trip',    'subject_marker': '', 'mailbox': 'neutrinon'},
     {'id': 'yandex_plus',       'from': 'hello@plus.yandex.ru',    'doc_type': 'subscription', 'subject_marker': '', 'mailbox': 'yandex'},
@@ -225,34 +226,71 @@ def cmd_init(args):
     print(f'БД инициализирована: {args.db or DB_PATH}')
 
 
+def _dedup_senders_by_from(senders):
+    """Collapse FINANCIAL_SENDERS to one entry per unique 'from' address."""
+    seen = {}
+    for s in senders:
+        if s['from'] not in seen:
+            seen[s['from']] = s
+    return list(seen.values())
+
+
 def cmd_import(args):
-    # Select mailbox configuration
+    """Import financial emails into purchases/cheques_log.
+
+    Принцип: всегда искать по ВСЕМ ящикам и ВСЕМ отправителям, если не задан
+    явный --mailbox / --sender. Каждый уникальный отправитель (по 'from')
+    ищется в каждом ящике — письмо может прийти в любой из них.
+    """
     mailbox_map = {
         'gmail': IMAP_CFG,
         'yandex': IMAP_CFG_YANDEX,
         'zorea': IMAP_CFG_ZOREA,
         'neutrinon': IMAP_CFG_NEUTRINON,
     }
-    cfg = mailbox_map.get(args.mailbox, IMAP_CFG).copy()
-    if args.user: cfg['user'] = args.user
-    if args.password: cfg['password'] = args.password
-    print(f'Подключаюсь к {args.mailbox} ({cfg["user"]})...')
+    conn = sqlite3.connect(args.db or DB_PATH)
+
+    # Which mailboxes: explicit --mailbox → just that one; otherwise ALL.
+    mailboxes = [args.mailbox] if args.mailbox else list(mailbox_map.keys())
+
+    # Which senders: explicit --sender → that id; otherwise ALL (dedup by from).
+    if args.sender:
+        senders = [s for s in FINANCIAL_SENDERS if s['id'] == args.sender]
+        if not senders:
+            print(f'Неизвестный отправитель: {args.sender}')
+            print(f'Известные: {", ".join(sorted(set(s["id"] for s in FINANCIAL_SENDERS)))}')
+            conn.close()
+            return
+    else:
+        senders = _dedup_senders_by_from(FINANCIAL_SENDERS)
+
+    total_imported = 0
+    for mb in mailboxes:
+        cfg = mailbox_map.get(mb, IMAP_CFG).copy()
+        if args.user: cfg['user'] = args.user
+        if args.password: cfg['password'] = args.password
+        if not cfg.get('password'):
+            print(f'  ⚠️ {mb}: нет пароля в .env, пропуск', flush=True)
+            continue
+        try:
+            total_imported += _import_one_mailbox(mb, cfg, conn, senders, args)
+        except Exception as e:
+            print(f'  ⚠️ {mb}: ошибка импорта: {e}', flush=True)
+
+    conn.commit()
+    total = conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0]
+    total_cheques = conn.execute("SELECT COUNT(*) FROM cheques_log").fetchone()[0]
+    conn.close()
+    print(f'Импортировано всего: {total_imported} новых. Покупок: {total}, чеков: {total_cheques}')
+
+
+def _import_one_mailbox(mailbox_key, cfg, conn, senders, args):
+    """Login to one mailbox and import matching emails. Returns imported count."""
+    print(f'Подключаюсь к {mailbox_key} ({cfg["user"]})...', flush=True)
     mail = imaplib.IMAP4_SSL(cfg['host'], cfg['port'])
     mail.login(cfg['user'], cfg['password']); mail.select('INBOX')
-    conn = sqlite3.connect(args.db or DB_PATH); imported = 0
-    # Filter senders by mailbox if specified
-    senders_to_process = [s for s in FINANCIAL_SENDERS if s.get('mailbox', 'gmail') == args.mailbox]
-    if not senders_to_process:
-        # Fallback: if no senders for this mailbox, try all (backward compatibility)
-        senders_to_process = [s for s in FINANCIAL_SENDERS if 'mailbox' not in s]
-    
-    if args.sender:
-        senders_to_process = [s for s in senders_to_process if s['id'] == args.sender]
-        if not senders_to_process:
-            print(f'Неизвестный отправитель: {args.sender} для mailbox {args.mailbox}')
-            print(f'Известные: {", ".join(set(s["id"] for s in FINANCIAL_SENDERS))}')
-            return
-    for sender in senders_to_process:
+    imported = 0
+    for sender in senders:
         ms_id = sender['id']
         ms_from = sender['from']
         ms_marker = sender.get('subject_marker', '')
@@ -364,10 +402,11 @@ def cmd_import(args):
                 conn.commit()
                 print(f'  ... {imported} импортировано', flush=True)
     conn.commit()
-    total = conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0]
-    total_cheques = conn.execute("SELECT COUNT(*) FROM cheques_log").fetchone()[0]
-    conn.close(); mail.logout()
-    print(f'Импортировано: {imported} новых. Всего покупок: {total}, чеков: {total_cheques}')
+    try:
+        mail.logout()
+    except Exception:
+        pass
+    return imported
 
 
 def _fetch_head_batch(mail, uids):
@@ -1039,8 +1078,8 @@ def main():
     p.add_argument('--all-senders', action='store_true', help='Import ALL mail from known financial senders, not just subject-matched')
     p.add_argument('--user')
     p.add_argument('--password')
-    p.add_argument('--mailbox', type=str, default='gmail', choices=['gmail','yandex','zorea','neutrinon'],
-                    help='Mailbox to import from (gmail, yandex, zorea, neutrinon)')
+    p.add_argument('--mailbox', type=str, default=None, choices=['gmail','yandex','zorea','neutrinon'],
+                    help='Mailbox to import from. Default: ALL mailboxes (gmail, yandex, zorea, neutrinon)')
     p.add_argument('--name')
     p.add_argument('--price', type=float)
     p.add_argument('--date')

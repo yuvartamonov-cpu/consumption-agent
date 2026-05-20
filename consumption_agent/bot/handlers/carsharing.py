@@ -41,15 +41,31 @@ async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ctx.args and ctx.args[0].isdigit():
         limit = max(1, min(int(ctx.args[0]), 30))
 
+    # Hide daily auto-aggregated receipt rows when a detailed trip exists
+    # for the same provider and calendar day.
+    visibility_filter = """
+        NOT (
+            COALESCE(t.tariff, '') = 'чек (авто)'
+            AND EXISTS (
+                SELECT 1
+                FROM carsharing_trips t2
+                WHERE t2.source = t.source
+                  AND date(t2.date_start) = date(t.date_start)
+                  AND COALESCE(t2.tariff, '') <> 'чек (авто)'
+            )
+        )
+    """
+
     provider_filter = ctx.args[1] if len(ctx.args) > 1 else None
     if provider_filter:
         rows = conn.execute(
-            """
+            f"""
             SELECT date_start, date_end, car_model, car_plate,
                    distance_km, tariff, base_cost, insurance,
                    over_minutes_cost, discounts, total, source
-            FROM carsharing_trips
+            FROM carsharing_trips t
             WHERE source = ?
+              AND {visibility_filter}
             ORDER BY date_start DESC
             LIMIT ?
             """,
@@ -57,11 +73,12 @@ async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ).fetchall()
     else:
         rows = conn.execute(
-            """
+            f"""
             SELECT date_start, date_end, car_model, car_plate,
                    distance_km, tariff, base_cost, insurance,
                    over_minutes_cost, discounts, total, source
-            FROM carsharing_trips
+            FROM carsharing_trips t
+            WHERE {visibility_filter}
             ORDER BY date_start DESC
             LIMIT ?
             """,
@@ -81,6 +98,7 @@ async def cmd_last_drives(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         'yandex_drive': 'Яндекс Драйв',
         'citydrive': 'Ситидрайв',
         'belka': 'BelkaCar',
+        'delimobil': 'Делимобиль',
     }
 
     lines = [f"🚗 Последние поездки ({len(rows)}):", ""]

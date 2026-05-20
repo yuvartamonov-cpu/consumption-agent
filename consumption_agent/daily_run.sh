@@ -14,5 +14,8 @@ cd "$SCRIPT_DIR"
 
 python3 consumption_agent_full_030526.py all
 
+# Импорт поездок каршеринга из чеков (Delimobil echeck@1-ofd.ru → carsharing_trips)
+python3 carsharing_import.py
+
 # Проверка гарантий и уведомления
 python3 warranty_check.py --notify
