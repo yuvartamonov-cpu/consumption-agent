@@ -867,7 +867,11 @@ def _main_cli():
         print(f"DB not found: {args.db}", file=sys.stderr)
         sys.exit(1)
 
-    conn = sqlite3.connect(args.db)
+    try:
+        from consumption.db import connect as _connect
+        conn = _connect(args.db)
+    except ImportError:
+        conn = sqlite3.connect(args.db)
     result = asyncio.run(search_ml_item_v2(
         conn, args.item_id, force_refresh_attrs=args.force_refresh_attrs
     ))

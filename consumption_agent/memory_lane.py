@@ -4,8 +4,9 @@ memory_lane.py — Phase B fast path: save user-tagged photos.
 
 When the owner sends a photo with a caption like "нравится", "запомни",
 "#пальто", we save the image (deduped by sha256) plus a small JSON of
-taste signals (liked / disliked / style_tags / topic). Embedding search,
-LLM-driven enrichment and `/ml_profile` are deliberately NOT in this slice.
+taste signals (liked / disliked / style_tags / topic). `search_items` and
+`build_profile` provide SQL-based `/ml_find` and `/ml_profile`; embedding
+search and LLM-driven enrichment are deliberately still out of scope.
 """
 from __future__ import annotations
 
@@ -387,3 +388,202 @@ def list_recent(conn: sqlite3.Connection, n: int = 10, topic: str | None = None)
             (n,),
         ).fetchall()
     return rows
+
+
+# Colour / material vocabulary used to surface palette and texture signals
+# from free-form style_tags (there is no dedicated column for them).
+COLOR_WORDS = {
+    'чёрный', 'черный', 'белый', 'серый', 'синий', 'голубой', 'красный',
+    'зелёный', 'зеленый', 'жёлтый', 'желтый', 'оранжевый', 'розовый',
+    'фиолетовый', 'бежевый', 'коричневый', 'бордовый', 'хаки', 'золотой',
+    'серебряный', 'бирюзовый', 'тёмный', 'темный', 'светлый',
+    'black', 'white', 'gray', 'grey', 'blue', 'red', 'green', 'yellow',
+    'pink', 'beige', 'brown', 'navy', 'khaki', 'gold', 'silver',
+}
+MATERIAL_WORDS = {
+    'кожа', 'кожаный', 'замша', 'замшевый', 'хлопок', 'хлопковый', 'шерсть',
+    'шерстяной', 'кашемир', 'деним', 'джинсовый', 'лён', 'лен', 'льняной',
+    'шёлк', 'шелк', 'шёлковый', 'шелковый', 'синтетика', 'полиэстер',
+    'дерево', 'деревянный', 'металл', 'металлический', 'стекло', 'пластик',
+    'leather', 'suede', 'cotton', 'wool', 'cashmere', 'denim', 'linen',
+    'silk', 'wood', 'metal', 'glass', 'plastic',
+}
+
+
+def search_items(
+    conn: sqlite3.Connection,
+    query: str | None = None,
+    *,
+    topic: str | None = None,
+    brand: str | None = None,
+    color: str | None = None,
+    limit: int = 20,
+) -> list:
+    """Text search across Memory Lane impressions (SQL LIKE, no embeddings).
+
+    Matches ``query`` against caption, name, description, brand and style_tags.
+    Optional filters narrow by topic (exact, case-insensitive), brand (LIKE)
+    and colour (matched inside style_tags / description). Newest first.
+    """
+    ensure_memory_lane_schema(conn)
+    _ensure_vision_columns(conn)
+    _register_pylower(conn)
+
+    conditions: list[str] = []
+    params: list = []
+
+    if query and query.strip():
+        like = f'%{query.strip().lower()}%'
+        conditions.append(
+            '(pylower(COALESCE(caption, \'\')) LIKE ?'
+            ' OR pylower(COALESCE(name, \'\')) LIKE ?'
+            ' OR pylower(COALESCE(description, \'\')) LIKE ?'
+            ' OR pylower(COALESCE(brand, \'\')) LIKE ?'
+            ' OR pylower(COALESCE(style_tags, \'\')) LIKE ?)'
+        )
+        params.extend([like] * 5)
+
+    if topic:
+        conditions.append('pylower(COALESCE(topic, \'\')) = ?')
+        params.append(topic.strip().lower())
+
+    if brand:
+        conditions.append('pylower(COALESCE(brand, \'\')) LIKE ?')
+        params.append(f'%{brand.strip().lower()}%')
+
+    if color:
+        c = f'%{color.strip().lower()}%'
+        conditions.append(
+            '(pylower(COALESCE(style_tags, \'\')) LIKE ?'
+            ' OR pylower(COALESCE(description, \'\')) LIKE ?)'
+        )
+        params.extend([c, c])
+
+    where = ' AND '.join(conditions) if conditions else '1=1'
+    params.append(max(1, min(100, limit)))
+
+    return conn.execute(
+        f"""
+        SELECT id, created_at, caption, style_tags, topic, media_asset_id,
+               name, description, brand
+        FROM memory_lane_items
+        WHERE {where}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+
+def _register_pylower(conn: sqlite3.Connection) -> None:
+    """Register a Unicode-aware LOWER() — SQLite's builtin is ASCII-only."""
+    try:
+        conn.create_function('pylower', 1, lambda s: s.lower() if s else s)
+    except Exception:  # pragma: no cover - some drivers may not support it
+        pass
+
+
+def _accumulate_json_list(counter: dict, raw: str | None) -> None:
+    """Add the items of a JSON-encoded list to a frequency counter."""
+    try:
+        values = json.loads(raw or '[]')
+    except (TypeError, ValueError):
+        return
+    if not isinstance(values, list):
+        return
+    for v in values:
+        key = str(v).strip().lower()
+        if key:
+            counter[key] = counter.get(key, 0) + 1
+
+
+def build_profile(
+    conn: sqlite3.Connection,
+    topic: str | None = None,
+    *,
+    examples: int = 5,
+    top_n: int = 5,
+) -> dict:
+    """Aggregate a taste profile across Memory Lane impressions (no LLM).
+
+    Returns a dict with frequency-ranked liked / disliked features, style tags,
+    brands, colours and materials, plus the most recent examples. ``topic``
+    optionally restricts the aggregation to a single topic.
+    """
+    ensure_memory_lane_schema(conn)
+    _ensure_vision_columns(conn)
+    _register_pylower(conn)
+
+    if topic:
+        rows = conn.execute(
+            """
+            SELECT id, created_at, caption, liked_features, disliked_features,
+                   style_tags, topic, name, brand
+            FROM memory_lane_items
+            WHERE pylower(COALESCE(topic, '')) = ?
+            ORDER BY id DESC
+            """,
+            (topic.strip().lower(),),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, created_at, caption, liked_features, disliked_features,
+                   style_tags, topic, name, brand
+            FROM memory_lane_items
+            ORDER BY id DESC
+            """
+        ).fetchall()
+
+    liked: dict = {}
+    disliked: dict = {}
+    tags: dict = {}
+    brands: dict = {}
+    colors: dict = {}
+    materials: dict = {}
+
+    for r in rows:
+        _accumulate_json_list(liked, r['liked_features'])
+        _accumulate_json_list(disliked, r['disliked_features'])
+        _accumulate_json_list(tags, r['style_tags'])
+        brand = (r['brand'] or '').strip()
+        if brand:
+            key = brand.lower()
+            brands[key] = brands.get(key, 0) + 1
+        # Derive colours / materials from style_tags vocabulary.
+        try:
+            tag_values = json.loads(r['style_tags'] or '[]')
+        except (TypeError, ValueError):
+            tag_values = []
+        for v in tag_values:
+            low = str(v).strip().lower()
+            if low in COLOR_WORDS:
+                colors[low] = colors.get(low, 0) + 1
+            if low in MATERIAL_WORDS:
+                materials[low] = materials.get(low, 0) + 1
+
+    def _top(counter: dict) -> list[tuple[str, int]]:
+        return sorted(counter.items(), key=lambda x: (-x[1], x[0]))[:top_n]
+
+    recent = [
+        {
+            'id': r['id'],
+            'created_at': (r['created_at'] or '')[:10],
+            'name': r['name'] or '',
+            'topic': r['topic'] or '',
+            'caption': (r['caption'] or '').strip().replace('\n', ' '),
+        }
+        for r in rows[:examples]
+    ]
+
+    return {
+        'topic': topic,
+        'count': len(rows),
+        'liked': _top(liked),
+        'disliked': _top(disliked),
+        'style_tags': _top(tags),
+        'brands': _top(brands),
+        'colors': _top(colors),
+        'materials': _top(materials),
+        'examples': recent,
+    }

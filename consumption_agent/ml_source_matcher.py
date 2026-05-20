@@ -742,7 +742,13 @@ def infer_item_type(attrs: dict[str, Any]) -> str:
 
 
 def _get_default_conn() -> sqlite3.Connection:
-    return sqlite3.connect(_DEFAULT_DB)
+    # Prefer the shared DB helper (WAL, foreign_keys, busy_timeout, row_factory,
+    # retry). Fall back to a raw connect only if it is unavailable.
+    try:
+        from consumption.db import connect as _connect
+        return _connect(_DEFAULT_DB)
+    except ImportError:
+        return sqlite3.connect(_DEFAULT_DB)
 
 
 # -----------------------------------------------------------------------
@@ -911,6 +917,49 @@ def record_skip(
     conn.commit()
     log.info("ml_source_matcher: skip on %s for %s (-0.05)",
              source_key, item_type)
+
+
+def source_stats(
+    conn: sqlite3.Connection,
+    *,
+    since_days: int = 30,
+) -> list[dict[str, Any]]:
+    """Aggregate click/skip CTR per (tier, geo) over the last ``since_days``.
+
+    Joins ``source_clicks`` with ``search_sources`` so the learned-ranking
+    system can be observed from ``/ml_stats``. Returns rows sorted by CTR desc.
+    """
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT s.tier AS tier,
+               s.geo AS geo,
+               SUM(CASE WHEN c.action = 'click' THEN 1 ELSE 0 END) AS clicks,
+               SUM(CASE WHEN c.action = 'skip' THEN 1 ELSE 0 END) AS skips,
+               COUNT(*) AS total
+        FROM source_clicks c
+        JOIN search_sources s ON s.key = c.source_key
+        WHERE c.created_at >= datetime('now', ?)
+        GROUP BY s.tier, s.geo
+        """,
+        (f'-{int(since_days)} days',),
+    ).fetchall()
+
+    result = []
+    for r in rows:
+        clicks = r['clicks'] or 0
+        total = r['total'] or 0
+        ctr = (clicks / total) if total else 0.0
+        result.append({
+            'tier': r['tier'] or '—',
+            'geo': r['geo'] or '—',
+            'clicks': clicks,
+            'skips': r['skips'] or 0,
+            'total': total,
+            'ctr': ctr,
+        })
+    result.sort(key=lambda x: -x['ctr'])
+    return result
 
 
 def list_sources(

@@ -54,6 +54,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             '/items [all|категория] — инвентарь вещей по категориям\n'
             '/items_full [all|категория] — с полной инфой (фото, атрибуты)\n'
             '/ml_last [N] — последние записи Memory Lane\n'
+            '/ml_find <запрос> — текстовый поиск по памяти\n'
+            '/ml_profile [тема] — профиль вкуса\n'
             '/ml_search <id> — найти товар\n'
             '/ml_stats — CTR по источникам (active learning)\n'
             '/ml_watch — watchlist цен\n'

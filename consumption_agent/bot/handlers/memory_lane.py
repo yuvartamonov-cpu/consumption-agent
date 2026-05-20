@@ -390,6 +390,25 @@ async def cmd_ml_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"(α={r['alpha']:.1f} β={r['beta']:.1f})"
                 )
 
+        # Source matcher: tier × geo × CTR (learned source routing quality)
+        try:
+            import ml_source_matcher as _sm
+            conn2 = get_db()
+            try:
+                sm_stats = _sm.source_stats(conn2, since_days=30)
+            finally:
+                conn2.close()
+            if sm_stats:
+                lines.append('\n<b>Source matcher (tier × geo):</b>')
+                for s in sm_stats[:10]:
+                    ctr_pct = round(s['ctr'] * 100, 1)
+                    lines.append(
+                        f"  • <b>{s['tier']}</b>/{s['geo']}: "
+                        f"{s['clicks']}/{s['total']} ({ctr_pct}%)"
+                    )
+        except Exception as e:
+            log.warning(f'ml_stats source_matcher block failed: {e}')
+
         if recent:
             lines.append('\n<b>Последние события:</b>')
             for e in recent[:5]:
@@ -403,6 +422,142 @@ async def cmd_ml_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'⚠️ Ошибка: {str(e)[:200]}')
 
 
+def _parse_find_args(args: list[str]) -> tuple[str, dict[str, str]]:
+    """Split CLI-style args into (query, {topic,brand,color}).
+
+    Supports ``--topic X`` / ``--brand Y`` / ``--color Z`` flags anywhere;
+    everything else becomes the free-text query.
+    """
+    flags: dict[str, str] = {}
+    query_parts: list[str] = []
+    i = 0
+    known = {'--topic': 'topic', '--brand': 'brand', '--color': 'color'}
+    while i < len(args):
+        tok = args[i]
+        if tok in known and i + 1 < len(args):
+            flags[known[tok]] = args[i + 1]
+            i += 2
+            continue
+        query_parts.append(tok)
+        i += 1
+    return ' '.join(query_parts).strip(), flags
+
+
+async def cmd_ml_find(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/ml_find <query> [--topic T] [--brand B] [--color C] — текстовый поиск."""
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+    try:
+        import memory_lane as _ml
+    except ImportError:
+        await update.message.reply_text('Memory Lane модуль не найден.')
+        return
+
+    args = ctx.args if hasattr(ctx, 'args') else []
+    query, flags = _parse_find_args(args)
+    if not query and not flags:
+        await update.message.reply_text(
+            'Usage: /ml_find <запрос> [--topic тема] [--brand бренд] [--color цвет]\n'
+            'Например: /ml_find пальто --color чёрный'
+        )
+        return
+
+    conn = get_db()
+    try:
+        rows = _ml.search_items(
+            conn, query,
+            topic=flags.get('topic'),
+            brand=flags.get('brand'),
+            color=flags.get('color'),
+            limit=20,
+        )
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text(f'🔍 Ничего не найдено по запросу «{query or "—"}».')
+        return
+
+    lines = [f'🔍 Найдено: {len(rows)}']
+    buttons = []
+    row_buf = []
+    for r in rows:
+        cap = (r['caption'] or '').strip().replace('\n', ' ')
+        if len(cap) > 50:
+            cap = cap[:47] + '…'
+        topic = r['topic'] or '—'
+        d = (r['created_at'] or '')[:10]
+        name = r['name'] or ''
+        name_part = f' {name}' if name else ''
+        lines.append(f'#{r["id"]:>3} {d} [{topic}]{name_part} — {cap}'.rstrip())
+        row_buf.append(InlineKeyboardButton(f'🔍 #{r["id"]}', callback_data=f'ml_search:{r["id"]}'))
+        if len(row_buf) == 3:
+            buttons.append(row_buf)
+            row_buf = []
+    if row_buf:
+        buttons.append(row_buf)
+
+    text = '\n'.join(lines)
+    if len(text) > 4000:
+        text = text[:3997] + '…'
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
+
+
+async def cmd_ml_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/ml_profile [тема] — профиль вкуса по агрегации Memory Lane (без LLM)."""
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+    try:
+        import memory_lane as _ml
+    except ImportError:
+        await update.message.reply_text('Memory Lane модуль не найден.')
+        return
+
+    topic = ' '.join(ctx.args).strip().lower() if ctx.args else None
+
+    conn = get_db()
+    try:
+        profile = _ml.build_profile(conn, topic)
+    finally:
+        conn.close()
+
+    if not profile['count']:
+        if topic:
+            await update.message.reply_text(f'🧠 По теме «{topic}» пока нет записей.')
+        else:
+            await update.message.reply_text('🧠 Memory Lane пуст — профиль вкуса недоступен.')
+        return
+
+    header = f'🧠 Профиль вкуса{" · " + topic if topic else ""} ({profile["count"]} записей)'
+    lines = [header]
+
+    def _fmt(title: str, pairs: list) -> None:
+        if pairs:
+            body = ', '.join(f'{name} ({cnt})' for name, cnt in pairs)
+            lines.append(f'\n{title}: {body}')
+
+    _fmt('👍 Нравится', profile['liked'])
+    _fmt('👎 Не нравится', profile['disliked'])
+    _fmt('🏷️ Бренды', profile['brands'])
+    _fmt('🎨 Цвета', profile['colors'])
+    _fmt('🧵 Материалы', profile['materials'])
+    _fmt('🏆 Стиль-теги', profile['style_tags'])
+
+    if profile['examples']:
+        lines.append('\n📋 Последние:')
+        for ex in profile['examples']:
+            name_part = f' {ex["name"]}' if ex['name'] else ''
+            cap = ex['caption']
+            if len(cap) > 40:
+                cap = cap[:37] + '…'
+            lines.append(f'  #{ex["id"]} {ex["created_at"]}{name_part} — {cap}'.rstrip())
+
+    await update.message.reply_text('\n'.join(lines))
+
+
 def register_handlers(app: Any, deps: Any = None) -> None:
     from bot.app import _add_command
 
@@ -412,6 +567,8 @@ def register_handlers(app: Any, deps: Any = None) -> None:
         ('topic_set', cmd_topic_set),
         ('topic_list', cmd_topic_list),
         ('ml_last', cmd_ml_last),
+        ('ml_find', cmd_ml_find),
+        ('ml_profile', cmd_ml_profile),
         ('ml_search', cmd_ml_search),
         ('ml_stats', cmd_ml_stats),
         ('ml_watch', cmd_ml_watch),

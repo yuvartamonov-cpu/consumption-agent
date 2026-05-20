@@ -658,6 +658,8 @@ def main():
         BotCommand('find_car', 'Подбор тарифа /find_car 3ч 80км'),
         BotCommand('parse', 'Парсинг последнего фото'),
         BotCommand('ml_last', 'Последние Memory Lane'),
+        BotCommand('ml_find', 'Поиск по памяти /ml_find запрос'),
+        BotCommand('ml_profile', 'Профиль вкуса /ml_profile [тема]'),
         BotCommand('ml_search', 'Поиск в Memory Lane'),
         BotCommand('ml_stats', 'CTR по источникам'),
         BotCommand('ml_watch', 'Watchlist цен'),
