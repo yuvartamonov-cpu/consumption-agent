@@ -71,11 +71,11 @@ Each item shows:
 ## Workflow
 
 1. **Parse input** — Extract name, brand, replacement period via `brand_parser.py`
-2. **Determine category** — Auto-assign based on keywords (clothing, tech, home, etc.)
+2. **Determine category** — Now uses AI categorization (`suggest_category`) with an interactive flow (3 attempts to confirm/reject, fallback to "Прочее"). Can auto-create new categories if needed.
 3. **Calculate dates** — `purchase_date = today`, exact days stored in `replace_after_days`
 4. **Generate description** — Add "Ожидается замена через X дн./мес." to notes
-5. **Save to DB** — Insert into `items` table with `data_origin = 'manual'`
-6. **Vision API** (if photo) — Enrich with color, material, style tags, save to `attributes` and `notes`
+5. **Vision API** (if photo) — Enrich with color, material, style tags BEFORE asking for category confirmation to provide better context to the AI.
+6. **Save to DB** — Insert into `items` table with `data_origin = 'manual'` after category is confirmed or fallback is reached.
 7. **Photo storage** — Save to `media_assets` + link in `item_photos`
 
 ## Database Schema
@@ -99,12 +99,13 @@ Table: `items`
 
 ## Category Mapping
 
-Auto-assigned based on keywords in item name:
-- Clothing: `пиджак`, `поло`, `футболка`, `куртка`, `джинсы`, `носки` → `cat_clo_*`
-- Tech: `телефон`, `ноутбук`, `наушники` → `cat_tech`
-- Home: `стремянка`, `пылесос`, `чайник` → `cat_home*` / `cat_home_kitchen`
-- Shoes: `кроссовки`, `ботинки`, `туфли` → `cat_clo_shoes`
-- Full mapping in `telegram_bot.py` → `cat_map` dict
+Categorization is handled via AI model (`bot/ai_categorizer.py`). 
+When a user adds an item:
+1. The bot asks the AI model for the best category.
+2. If confidence >= 80% and it's an existing category, it auto-accepts (first attempt only).
+3. Otherwise, it presents an inline keyboard with the suggested category (existing or new).
+4. The user can ✅ Confirm, ❌ Request another option (up to 3 attempts), or ❌ Send to "Прочее".
+5. If the AI suggests a new category and the user confirms, the bot automatically creates the category in the DB.
 
 ## Notes
 
