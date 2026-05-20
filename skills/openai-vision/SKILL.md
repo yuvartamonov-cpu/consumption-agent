@@ -11,6 +11,18 @@ description: >
 
 # OpenAI Vision API
 
+## Production Note (2026-05-21)
+
+Хотя skill исторически называется `openai-vision`, в production коде используется `services/vision_router.py`:
+
+- OpenAI → Gemini → xAI;
+- при восстановлении OpenAI он автоматически снова становится первым;
+- item/receipt recognition завёрнуты в жёсткий timeout.
+
+Подробное описание реальных алгоритмов см. в:
+
+- `consumption_agent/docs/recognition_algorithms.md`
+
 Два модуля распознавания изображений через OpenAI Vision API.
 
 ## Требования

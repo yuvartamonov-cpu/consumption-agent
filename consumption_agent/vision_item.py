@@ -5,11 +5,12 @@ vision_item.py — Распознавание предметов/товаров 
 Стоимость: ~$0.004-0.006 за фото (gpt-4o-mini).
 """
 
-import base64
 import json
 import logging
 import os
 import re
+
+from services.vision_router import call_vision_with_fallback
 
 log = logging.getLogger(__name__)
 
@@ -51,37 +52,13 @@ CLASSIFY_PROMPT = """Что на фото? Ответь ОДНИМ словом:
 
 def _call_vision(image_path: str, prompt: str, model: str = None, max_tokens: int = 1000) -> str:
     """Вызывает Vision API и возвращает текст ответа."""
-    import openai
-    
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY не задан")
-    
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    
-    ext = os.path.splitext(image_path)[1].lower().lstrip('.')
-    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(ext, "image/jpeg")
-    
-    client = openai.OpenAI(api_key=api_key, timeout=25.0)
-    response = client.chat.completions.create(
-        model=model or VISION_MODEL,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "high"}}
-            ]
-        }],
+    response = call_vision_with_fallback(
+        image_path,
+        prompt,
+        openai_model=model or VISION_MODEL,
         max_tokens=max_tokens,
-        temperature=0.1
     )
-    
-    tokens_in = response.usage.prompt_tokens
-    tokens_out = response.usage.completion_tokens
-    log.info(f"Vision API: {model or VISION_MODEL}, {tokens_in}+{tokens_out} tokens")
-    
-    return response.choices[0].message.content.strip()
+    return response["text"].strip()
 
 
 def _call_vision_with_timeout(image_path: str, prompt: str, model: str = None, max_tokens: int = 1000, timeout: float = 30.0):

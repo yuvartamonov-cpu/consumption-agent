@@ -595,6 +595,35 @@ def _drop_non_latin_tokens(text: str) -> str:
     return ' '.join(kept).strip()
 
 
+def _normalize_query_phrase(text: str) -> str:
+    tokens = _QUERY_WORD_RX.findall(text or '')
+    return ' '.join(token.lower() for token in tokens if token.strip()).strip()
+
+
+def _prune_redundant_queries(queries: Sequence[str]) -> list[str]:
+    """Drop broader queries that merely repeat a shorter earlier phrase.
+
+    Memory Lane often yields a precise branded query first and then appends
+    verbose description-context variants that contain the same phrase. Keeping
+    those longer variants degrades retailer link searches, especially when we
+    later translate or merge tokens for foreign sources.
+    """
+    kept: list[str] = []
+    normalized_kept: list[str] = []
+    for raw in queries:
+        query = (raw or '').strip()
+        if not query:
+            continue
+        norm = _normalize_query_phrase(query)
+        if not norm:
+            continue
+        if any(f' {prev} ' in f' {norm} ' for prev in normalized_kept):
+            continue
+        kept.append(query)
+        normalized_kept.append(norm)
+    return kept
+
+
 def build_source_query_bundle(
     queries: Sequence[str],
     source: str,
@@ -607,7 +636,7 @@ def build_source_query_bundle(
     Использует LLM-перевод (ml_translate) для осмысленного перевода
     с полным контекстом Memory Lane.
     """
-    cleaned = [q.strip() for q in queries if q and q.strip()]
+    cleaned = _prune_redundant_queries([q.strip() for q in queries if q and q.strip()])
     if not cleaned:
         return {'query': '', 'query_ru': '', 'query_en': '',
                 'query_local': '', 'query_lang': 'ru'}
@@ -628,6 +657,14 @@ def build_source_query_bundle(
             break
 
     query_ru = ' '.join(merged_tokens) or cleaned[0]
+    if context:
+        try:
+            from ml_translate import build_visual_search_query as _build_visual_search_query
+            semantic_query = _build_visual_search_query(context, fallback_query=query_ru)
+            if semantic_query:
+                query_ru = semantic_query
+        except ImportError:
+            pass
     query_lang = source_query_language(source)
 
     # LLM-перевод (основной путь)

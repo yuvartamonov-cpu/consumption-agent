@@ -274,6 +274,7 @@ class ReceiptExtraction:
     items: list[dict[str, Any]] = field(default_factory=list)
     delivery_items: list[dict[str, Any]] = field(default_factory=list)
     delivery_total: float = 0.0
+    category_reviews: list[dict[str, Any]] = field(default_factory=list)
 
 
 def extract_receipt(
@@ -330,6 +331,7 @@ def extract_receipt(
         items=items,
         delivery_items=delivery_items,
         delivery_total=receipt.delivery_total,
+        category_reviews=apply_result.category_reviews,
     )
 
 

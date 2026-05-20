@@ -14,6 +14,8 @@ from bot.handlers.memory_lane import cmd_ml_search
 
 
 log = logging.getLogger(__name__)
+RECEIPT_CATEGORY_REVIEW_KEY = 'receipt_category_reviews'
+RECEIPT_CATEGORY_ACTIVE_KEY = 'receipt_category_active'
 
 
 def configure(*, shared: dict[str, Any] | None = None, logger: Any | None = None, **_: Any) -> None:
@@ -22,6 +24,71 @@ def configure(*, shared: dict[str, Any] | None = None, logger: Any | None = None
         globals().update(shared)
     if logger is not None:
         log = logger
+
+
+def _receipt_category_store(ctx: ContextTypes.DEFAULT_TYPE) -> dict[str, dict[str, Any]]:
+    return ctx.user_data.setdefault(RECEIPT_CATEGORY_REVIEW_KEY, {})
+
+
+def _receipt_review_keyboard(review: dict[str, Any]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for opt in (review.get('options') or [])[:3]:
+        label = f"✅ {opt.get('category_name', opt.get('category_id', '?'))}"
+        conf = opt.get('confidence')
+        if isinstance(conf, (int, float)):
+            label += f" ({int(conf)}%)"
+        rows.append([InlineKeyboardButton(
+            label[:64],
+            callback_data=f"rcat_pick:{review['item_id']}:{opt.get('category_id')}",
+        )])
+    rows.append([InlineKeyboardButton(
+        f"❌ Не подходит ({review.get('attempts', 0) + 1}/3)",
+        callback_data=f"rcat_reject:{review['item_id']}",
+    )])
+    return InlineKeyboardMarkup(rows)
+
+
+def _receipt_review_text(review: dict[str, Any]) -> str:
+    item_name = review.get('item_name') or 'Товар'
+    attempt = int(review.get('attempts', 0)) + 1
+    return (
+        f"🤖 Низкая уверенность по категории для чека.\n"
+        f"📦 {item_name}\n"
+        f"Попробуйте выбрать подходящую категорию.\n"
+        f"Попытка {attempt}/3."
+    )
+
+
+async def enqueue_receipt_category_reviews(
+    ctx: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    reviews: list[dict[str, Any]],
+) -> None:
+    store = _receipt_category_store(ctx)
+    for review in reviews or []:
+        item_id = review.get('item_id')
+        if not item_id:
+            continue
+        store[str(item_id)] = review
+    if not ctx.user_data.get(RECEIPT_CATEGORY_ACTIVE_KEY):
+        await _send_next_receipt_category_review(ctx, chat_id)
+
+
+async def _send_next_receipt_category_review(
+    ctx: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    store = _receipt_category_store(ctx)
+    if not store:
+        ctx.user_data.pop(RECEIPT_CATEGORY_ACTIVE_KEY, None)
+        return
+    item_id, review = next(iter(store.items()))
+    ctx.user_data[RECEIPT_CATEGORY_ACTIVE_KEY] = item_id
+    await ctx.bot.send_message(
+        chat_id=chat_id,
+        text=_receipt_review_text(review),
+        reply_markup=_receipt_review_keyboard(review),
+    )
 
 
 async def credit_paid_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -798,6 +865,133 @@ async def dedup_keep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.warning(f'dedup_keep_callback failed: {e}')
         await query.answer('⚠️ Ошибка', show_alert=True)
 
+async def item_to_ml_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки '📸 В Memory Lane' — перенос товара из инвентаря в Memory Lane."""
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    if not data.startswith('item_to_ml:'):
+        return
+
+    try:
+        item_id = int(data.split(':', 1)[1])
+    except ValueError:
+        await query.answer('⚠️ Некорректный item id', show_alert=True)
+        return
+
+    conn = get_db()
+    try:
+        # Читаем товар
+        row = conn.execute(
+            '''SELECT id, name, brand, category_id, description, attributes, notes,
+                      purchase_price, status, tags, profile_id
+               FROM items WHERE id = ? AND deleted_at IS NULL''',
+            (item_id,)
+        ).fetchone()
+        if not row:
+            await query.edit_message_text('⚠️ Товар не найден или уже удалён.')
+            return
+
+        import json as _json
+        _id, _name, _brand, _cat, _desc, _attrs_raw, _notes, _price, _status, _tags_raw, _profile = row
+        attrs = {}
+        try:
+            attrs = _json.loads(_attrs_raw or '{}')
+        except Exception:
+            pass
+        tags = []
+        try:
+            tags = _json.loads(_tags_raw or '[]')
+        except Exception:
+            pass
+
+        # Капшнон
+        caption_parts = [_name]
+        if _brand:
+            caption_parts.append(f'(бренд: {_brand})')
+        if attrs.get('description'):
+            caption_parts.append(attrs['description'])
+        caption = ' '.join(caption_parts)
+
+        # style_tags из attrs
+        style_tags = _json.dumps(attrs.get('style_tags', tags), ensure_ascii=False)
+
+        # topic из категории
+        topic = None
+        if _cat:
+            cat_row = conn.execute('SELECT name FROM categories WHERE id = ?', (_cat,)).fetchone()
+            topic = cat_row[0] if cat_row else _cat
+
+        # Фото: media_asset_id
+        photo_row = conn.execute(
+            'SELECT media_asset_id FROM item_photos WHERE item_id = ? LIMIT 1',
+            (item_id,)
+        ).fetchone()
+        media_asset_id = photo_row[0] if photo_row else None
+
+        # Вставляем в memory_lane_items
+        cur = conn.execute(
+            '''INSERT INTO memory_lane_items
+               (profile_id, caption, style_tags, topic, media_asset_id, source,
+                name, description, brand, attributes_json)
+               VALUES (?, ?, ?, ?, ?, 'inventory_transfer', ?, ?, ?, ?)''',
+            (
+                _profile or 'default',
+                caption,
+                style_tags,
+                topic,
+                media_asset_id,
+                _name,
+                attrs.get('description') or _desc or '',
+                _brand,
+                _attrs_raw or '{}',
+            )
+        )
+        ml_id = cur.lastrowid
+
+        # Если есть фото — отвязываем от item_photos (фото остаётся в media_assets, теперь привязано к ML)
+        if media_asset_id:
+            conn.execute('DELETE FROM item_photos WHERE item_id = ?', (item_id,))
+
+        # Soft-delete из items
+        conn.execute(
+            "UPDATE items SET deleted_at = datetime('now'), status = 'disposed' WHERE id = ?",
+            (item_id,)
+        )
+
+        conn.commit()
+
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton('🔍 Искать', callback_data=f'ml_search:{ml_id}')],
+            [InlineKeyboardButton('⏰ Напомнить', callback_data=f'ml_remind:{ml_id}')],
+        ])
+
+        await query.edit_message_text(
+            f'✅ Перенесено в Memory Lane!\n'
+            f'📸 ML #{ml_id}: {_name}'
+            + (f' ({_brand})' if _brand else '')
+            + (f'\n🏷 Тема: {topic}' if topic else '')
+            + f'\n\nМожно сразу запустить поиск похожих товаров кнопкой ниже или командой /ml_search {ml_id}.',
+            reply_markup=reply_markup,
+        )
+        log.info(f'Item #{item_id} transferred to ML #{ml_id} by chat_id={update.effective_chat.id}')
+    except Exception as e:
+        log.warning(f'item_to_ml_callback failed: {e}')
+        try:
+            await query.edit_message_text(f'⚠️ Ошибка при переносе: {e}')
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
 async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки '📷 Фото' — отправляет фото товара."""
     query = update.callback_query
@@ -846,6 +1040,143 @@ async def item_photo_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
 
+async def receipt_category_pick_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    parts = data.split(':')
+    if len(parts) != 3 or parts[0] != 'rcat_pick':
+        return
+
+    item_id, category_id = parts[1], parts[2]
+    store = _receipt_category_store(ctx)
+    review = store.get(item_id)
+    if not review:
+        await query.answer('⚠️ Варианты устарели', show_alert=True)
+        return
+
+    option = next((opt for opt in review.get('options') or [] if opt.get('category_id') == category_id), None)
+    category_name = option.get('category_name') if option else category_id
+
+    conn = get_db()
+    try:
+        conn.execute("UPDATE items SET category_id = ? WHERE id = ?", (category_id, int(item_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    store.pop(item_id, None)
+    ctx.user_data.pop(RECEIPT_CATEGORY_ACTIVE_KEY, None)
+    try:
+        await query.edit_message_text(
+            f"✅ Категория подтверждена\n📦 {review.get('item_name')}\n📂 {category_name}",
+            reply_markup=None,
+        )
+    except Exception:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    await _send_next_receipt_category_review(ctx, update.effective_chat.id)
+
+
+async def receipt_category_reject_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    if update.effective_chat and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        await query.answer('❌ Доступ запрещён', show_alert=True)
+        return
+
+    data = query.data or ''
+    parts = data.split(':')
+    if len(parts) != 2 or parts[0] != 'rcat_reject':
+        return
+
+    item_id = parts[1]
+    store = _receipt_category_store(ctx)
+    review = store.get(item_id)
+    if not review:
+        await query.answer('⚠️ Варианты устарели', show_alert=True)
+        return
+
+    review['attempts'] = int(review.get('attempts', 0)) + 1
+    rejected = set(review.get('rejected_category_ids') or [])
+    for opt in review.get('options') or []:
+        cat_id = opt.get('category_id')
+        if cat_id:
+            rejected.add(cat_id)
+    review['rejected_category_ids'] = list(rejected)
+
+    if review['attempts'] >= 3:
+        store.pop(item_id, None)
+        ctx.user_data.pop(RECEIPT_CATEGORY_ACTIVE_KEY, None)
+        try:
+            await query.edit_message_text(
+                f"📦 {review.get('item_name')}\nПеренесено в категорию «Прочее» после 3 отказов.",
+                reply_markup=None,
+            )
+        except Exception:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        await _send_next_receipt_category_review(ctx, update.effective_chat.id)
+        return
+
+    conn = get_db()
+    try:
+        from bot.ai_categorizer import suggest_category_options
+
+        options = suggest_category_options(
+            conn,
+            review.get('item_name') or '',
+            rejected_category_ids=review['rejected_category_ids'],
+            limit=3,
+        )
+    finally:
+        conn.close()
+
+    if not options:
+        store.pop(item_id, None)
+        ctx.user_data.pop(RECEIPT_CATEGORY_ACTIVE_KEY, None)
+        try:
+            await query.edit_message_text(
+                f"📦 {review.get('item_name')}\nПодходящие варианты закончились, оставил в категории «Прочее».",
+                reply_markup=None,
+            )
+        except Exception:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        await _send_next_receipt_category_review(ctx, update.effective_chat.id)
+        return
+
+    review['options'] = options
+    store[item_id] = review
+    try:
+        await query.edit_message_text(
+            _receipt_review_text(review),
+            reply_markup=_receipt_review_keyboard(review),
+        )
+    except Exception:
+        try:
+            await query.edit_message_reply_markup(reply_markup=_receipt_review_keyboard(review))
+        except Exception:
+            pass
+
+
 def register_handlers(app: Any, deps: Any = None) -> None:
     from telegram.ext import CallbackQueryHandler
 
@@ -857,6 +1188,7 @@ def register_handlers(app: Any, deps: Any = None) -> None:
     add(app, CallbackQueryHandler(fine_paid_callback, pattern=r'^fine_paid:\d+$'))
     add(app, CallbackQueryHandler(item_replaced_callback, pattern=r'^item_replaced:\d+$'))
     add(app, CallbackQueryHandler(item_delete_callback, pattern=r'^item_delete:\d+$'))
+    add(app, CallbackQueryHandler(item_to_ml_callback, pattern=r'^item_to_ml:\d+$'))
     add(app, CallbackQueryHandler(item_photo_callback, pattern=r'^item_photo:\d+$'))
     add(app, CallbackQueryHandler(ml_delete_callback, pattern=r'^ml_delete:\d+$'))
     add(app, CallbackQueryHandler(ml_search_callback, pattern=r'^ml_search:\d+$'))
@@ -867,6 +1199,8 @@ def register_handlers(app: Any, deps: Any = None) -> None:
     add(app, CallbackQueryHandler(ml_remind_set_callback, pattern=r'^ml_remind_set:\d+$'))
     add(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
     add(app, CallbackQueryHandler(vision_reject_callback, pattern=r'^vision_reject$'))
+    add(app, CallbackQueryHandler(receipt_category_pick_callback, pattern=r'^rcat_pick:\d+:.+$'))
+    add(app, CallbackQueryHandler(receipt_category_reject_callback, pattern=r'^rcat_reject:\d+$'))
     
     # AI Categorization 
     from bot.handlers.items_add import handle_addcat_callback

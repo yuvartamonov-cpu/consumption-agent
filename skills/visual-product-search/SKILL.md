@@ -8,6 +8,18 @@ description: Многоэтапный конвейер поиска товаро
 > Обновлено: 2026-05-17 (по итогам 5-дневного спринта 13–17 мая)
 > Статус: pipeline + retrieval + UX полностью рабочие; добавлены price-drop alerts
 
+## Production Note (2026-05-21)
+
+Для фактического алгоритма, который сейчас крутится в боте, см.:
+
+- `consumption_agent/docs/recognition_algorithms.md`
+
+Ключевая актуализация:
+
+- foreign retrieval теперь строится через semantic visual query, а не буквальный перевод текста;
+- top-3 результата в Telegram выводятся отдельными URL-кнопками;
+- поиск после `inventory -> Memory Lane` использует тот же `ml_search_v2` pipeline.
+
 ---
 
 ## Статус реализации

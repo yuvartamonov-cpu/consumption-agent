@@ -9,6 +9,7 @@ from urllib.parse import unquote
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import ml_providers as mp
+import ml_translate as mt
 
 
 # ─── Базовый перевод ───
@@ -106,6 +107,35 @@ def test_build_source_query_drops_untranslated_cyrillic_tail():
     assert 'serum' in out
     assert 'vitamin' in out
     assert not mp.has_untranslated_cyrillic(out)
+
+
+def test_visual_search_query_prefers_visual_subcategory_over_noisy_name():
+    out = mt.build_visual_search_query({
+        'name': 'Buckingham Palace',
+        'subcategory': 'светильник',
+        'primary_color': 'чёрный',
+        'material': 'металл',
+        'style_tags': '["minimalism"]',
+    })
+    assert 'светильник' in out
+    assert 'Buckingham Palace' not in out
+
+
+def test_build_source_query_bundle_uses_visual_context_for_foreign_sources():
+    bundle = mp.build_source_query_bundle(
+        ['Buckingham Palace сувенир'],
+        'aliexpress',
+        context={
+            'name': 'Buckingham Palace',
+            'subcategory': 'светильник',
+            'primary_color': 'чёрный',
+            'material': 'металл',
+            'style_tags': '["minimalism"]',
+        },
+    )
+    assert 'светильник' in bundle['query_ru']
+    assert 'Buckingham Palace' not in bundle['query_ru']
+    assert 'lamp' in bundle['query']
 
 
 def test_retailer_links_keep_russian_query_for_lamoda():

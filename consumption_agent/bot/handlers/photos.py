@@ -477,6 +477,13 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             extraction.delivery_total, extraction.purchase_id,
         )
         await update.message.reply_text(_format_receipt_reply(extraction))
+        if extraction.category_reviews:
+            from bot.callbacks import enqueue_receipt_category_reviews
+            await enqueue_receipt_category_reviews(
+                ctx,
+                update.effective_chat.id,
+                extraction.category_reviews,
+            )
     except Exception as e:
         log.warning(f'receipt_pipeline failed: {e}')
         from services.ocr import _parse_receipt_lines

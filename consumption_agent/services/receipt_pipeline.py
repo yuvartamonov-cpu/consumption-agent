@@ -90,6 +90,7 @@ class PipelineApplyResult:
     created_item_ids: list[int] = field(default_factory=list)
     matched_item_ids: list[int] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)
+    category_reviews: list[dict[str, Any]] = field(default_factory=list)
 
 
 def is_delivery_name(name: str | None) -> bool:
@@ -403,6 +404,96 @@ def match_receipt_items(
     return receipt
 
 
+def _classify_receipt_item_category(
+    conn,
+    item_name: str,
+    *,
+    fallback_category_id: str | None,
+    min_confidence: int = 60,
+) -> dict[str, Any]:
+    """Classify a new receipt item into an existing category.
+
+    For receipt imports we do not auto-create new categories: that would be too
+    noisy for unattended OCR/vision flows. We only accept an existing category
+    suggestion above the confidence threshold; otherwise we keep `other` and
+    surface top-3 options for user review.
+    """
+    if not item_name:
+        return {
+            "category_id": fallback_category_id,
+            "confidence": 0,
+            "needs_review": False,
+            "options": [],
+        }
+
+    try:
+        from bot.ai_categorizer import suggest_category_options
+    except Exception as exc:
+        log.warning("receipt_pipeline: AI categorizer unavailable: %s", exc)
+        return {
+            "category_id": fallback_category_id,
+            "confidence": 0,
+            "needs_review": False,
+            "options": [],
+        }
+
+    try:
+        options = suggest_category_options(conn, item_name, rejected_category_ids=[], limit=3)
+    except Exception as exc:
+        log.warning("receipt_pipeline: category suggestion failed for %r: %s", item_name, exc)
+        return {
+            "category_id": fallback_category_id,
+            "confidence": 0,
+            "needs_review": False,
+            "options": [],
+        }
+
+    if not options:
+        return {
+            "category_id": fallback_category_id,
+            "confidence": 0,
+            "needs_review": False,
+            "options": [],
+        }
+
+    best = options[0]
+    category_id = best.get("category_id")
+    confidence = best.get("confidence") or 0
+    try:
+        confidence = int(confidence)
+    except Exception:
+        confidence = 0
+
+    exists = None
+    if category_id:
+        exists = conn.execute(
+            "SELECT 1 FROM categories WHERE id = ? LIMIT 1",
+            (category_id,),
+        ).fetchone()
+    if not category_id or not exists:
+        return {
+            "category_id": fallback_category_id,
+            "confidence": 0,
+            "needs_review": False,
+            "options": [],
+        }
+
+    if confidence >= min_confidence:
+        return {
+            "category_id": category_id,
+            "confidence": confidence,
+            "needs_review": False,
+            "options": options,
+        }
+
+    return {
+        "category_id": fallback_category_id,
+        "confidence": confidence,
+        "needs_review": True,
+        "options": options,
+    }
+
+
 def persist_receipt(
     conn,
     receipt: StructuredReceipt,
@@ -470,6 +561,7 @@ def persist_receipt(
 
     other_category = get_category_id(conn, "other", fallback_slug=None)
     service_category = get_category_id(conn, "service", fallback_slug=None) or other_category
+    category_cache: dict[str, dict[str, Any]] = {}
 
     for item in receipt.items:
         if item.matched_item_id and not item.is_delivery:
@@ -484,17 +576,38 @@ def persist_receipt(
             result.matched_item_ids.append(item.matched_item_id)
             continue
 
+        category_id = service_category if item.is_delivery else other_category
+        if not item.is_delivery:
+            cache_key = normalize(item.name)
+            if cache_key not in category_cache:
+                category_cache[cache_key] = _classify_receipt_item_category(
+                    conn,
+                    item.name,
+                    fallback_category_id=other_category,
+                )
+            category_id = category_cache.get(cache_key, {}).get("category_id") or other_category
+
         item_id = insert_receipt_item(
             conn,
             name=item.name,
             price=item.price,
             purchase_date=receipt.date,
-            category_id=service_category if item.is_delivery else other_category,
+            category_id=category_id,
             purchase_id=purchase_id,
             is_delivery=item.is_delivery,
             data_origin=data_origin,
         )
         result.created_item_ids.append(item_id)
+        if not item.is_delivery:
+            classification = category_cache.get(normalize(item.name), {})
+            if classification.get("needs_review"):
+                result.category_reviews.append({
+                    "item_id": item_id,
+                    "item_name": item.name,
+                    "attempts": 0,
+                    "options": classification.get("options", []),
+                    "rejected_category_ids": [],
+                })
 
     conn.commit()
     return result

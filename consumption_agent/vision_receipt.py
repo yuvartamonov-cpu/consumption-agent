@@ -8,11 +8,12 @@ vision_receipt.py — Распознавание чеков через Vision AP
     # result = {"store": "Ozon", "date": "2025-11-25", "items": [...], "delivery": {...}, "total": 7076.00}
 """
 
-import base64
 import json
 import logging
 import os
 import re
+
+from services.vision_router import call_vision_with_fallback
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +45,8 @@ RECEIPT_PROMPT = """Распознай кассовый чек на фото. В
 
 def recognize_receipt(image_path: str, model: str = None) -> dict:
     """
-    Распознаёт чек с фото через OpenAI Vision API.
+    Распознаёт чек с фото через Vision router:
+    OpenAI -> Gemini -> xAI.
     
     Args:
         image_path: путь к изображению чека
@@ -54,65 +56,34 @@ def recognize_receipt(image_path: str, model: str = None) -> dict:
         dict с полями: store, date, items, delivery, total
         При ошибке возвращает {"error": "описание"}
     """
-    try:
-        import openai
-    except ImportError:
-        return {"error": "openai не установлен (pip install openai)"}
-    
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return {"error": "OPENAI_API_KEY не задан"}
-    
     if not os.path.exists(image_path):
         return {"error": f"Файл не найден: {image_path}"}
     
     model = model or VISION_MODEL
     
     try:
-        with open(image_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        
-        # Определяем MIME-тип
-        ext = os.path.splitext(image_path)[1].lower()
-        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(ext.lstrip('.'), "image/jpeg")
-        
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": RECEIPT_PROMPT},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:{mime};base64,{b64}",
-                        "detail": "high"
-                    }}
-                ]
-            }],
+        response = call_vision_with_fallback(
+            image_path,
+            RECEIPT_PROMPT,
+            openai_model=model,
             max_tokens=2000,
-            temperature=0.1
         )
-        
-        text = response.choices[0].message.content.strip()
-        tokens_in = response.usage.prompt_tokens
-        tokens_out = response.usage.completion_tokens
-        log.info(f"Vision API: {model}, {tokens_in}+{tokens_out} tokens")
+        text = response["text"].strip()
         
         # Убираем markdown-обёртку если есть
         text = re.sub(r'^```(?:json)?\s*', '', text)
         text = re.sub(r'\s*```$', '', text)
         
         result = json.loads(text)
-        result['_tokens'] = {'input': tokens_in, 'output': tokens_out}
-        result['_model'] = model
+        if response.get("usage"):
+            result['_tokens'] = response["usage"]
+        result['_model'] = response.get("model", model)
+        result['_provider'] = response.get("provider", "openai")
         return result
         
     except json.JSONDecodeError as e:
         log.error(f"Vision API вернул невалидный JSON: {text[:200]}")
         return {"error": f"Невалидный JSON от API: {str(e)}", "raw": text[:500]}
-    except openai.APIError as e:
-        log.error(f"OpenAI API error: {e}")
-        return {"error": f"OpenAI API: {str(e)}"}
     except Exception as e:
         log.error(f"Vision receipt error: {e}")
         return {"error": str(e)}

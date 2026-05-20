@@ -19,6 +19,8 @@ import os
 import re
 from typing import Any, Optional
 
+from services.llm_router import call_text_with_fallback
+
 log = logging.getLogger(__name__)
 
 _QUERY_TRANSLATIONS: dict[str, str] | None = None
@@ -26,11 +28,16 @@ _EN_TO_DE: dict[str, str] | None = None
 
 
 _TRANSLATE_SYSTEM_PROMPT = (
-    "Ты переводчик поисковых запросов для интернет-магазинов. "
-    "Пользователь (русскоязычный) ищет товар по текстовому описанию. "
-    "Твоя задача — перевести запрос на указанный язык максимально "
-    "естественно для поиска на маркетплейсах, сохраняя все значимые "
-    "слова (бренд, модель, артикул, материал, цвет, размер, тип). "
+    "Ты переводчик и нормализатор поисковых запросов для интернет-магазинов. "
+    "Пользователь ищет товар не только по тексту, но и по самому изображению товара: "
+    "тебе уже даны атрибуты, извлечённые из фото. "
+    "Твоя задача — не переводить шумную подпись дословно, а собрать короткий, "
+    "естественный и товарный запрос для маркетплейса на указанном языке. "
+    "Опирайся в первую очередь на визуально распознанный тип товара, бренд, модель, "
+    "артикул, материал, цвет и другие атрибуты. "
+    "Игнорируй эмоциональные слова, случайные детали сцены и лишние описания. "
+    "Запрос должен быть компактным: обычно 3-8 токенов. "
+    "Сохраняй все значимые слова (бренд, модель, артикул, материал, цвет, размер, тип). "
     "Если бренд или модель уже на латинице — не меняй их. "
     "Ответь ТОЛЬКО текстом запроса, без пояснений, без кавычек."
 )
@@ -46,13 +53,17 @@ _TRANSLATE_USER_TEMPLATE = """
 - Цвет: {color}
 - Материал: {material}
 - Крой/посадка: {fit}
+- Длина: {length}
 - Пол: {gender}
 - Сезон: {season}
+- Визуальные стили: {visual_style}
+- Канонический запрос по изображению: {visual_query}
 
 Исходный поисковый запрос (на русском):
 {query}
 
-Переведи этот запрос на язык "{target_lang}" для поиска товара на маркетплейсе. 
+Собери по этим данным лучший запрос на язык "{target_lang}" для поиска товара на маркетплейсе.
+Если исходный текст шумный или буквальный, переформулируй его по смыслу, опираясь на фото и атрибуты.
 Сохрани бренды и модели как есть, если они уже на латинице.
 Только текст запроса, ничего лишнего.
 """
@@ -69,8 +80,13 @@ def _init_fallback() -> None:
         _EN_TO_DE = {}
 
 
-def _has_openai_key() -> bool:
-    return bool(os.getenv('OPENAI_API_KEY'))
+def _has_llm_key() -> bool:
+    return bool(
+        os.getenv('OPENAI_API_KEY')
+        or os.getenv('GEMINI_API_KEY')
+        or os.getenv('GOOGLE_API_KEY')
+        or os.getenv('XAI_API_KEY')
+    )
 
 
 def _call_llm_translate(
@@ -78,45 +94,47 @@ def _call_llm_translate(
     target_lang: str,
     context: dict[str, Any] | None = None,
 ) -> str | None:
-    if not _has_openai_key():
+    if not _has_llm_key():
         return None
 
+    style_tags = _normalize_list((context or {}).get('style_tags'))
+    visual_style = _normalize_list((context or {}).get('style'))
+    visual_query = build_visual_search_query(context, fallback_query=query)
     user_prompt = _TRANSLATE_USER_TEMPLATE.format(
         name=(context or {}).get('name', '—') or '—',
         brand=(context or {}).get('brand', '—') or '—',
         category=(context or {}).get('category', '—') or '—',
         subcategory=(context or {}).get('subcategory', '—') or '—',
         description=(context or {}).get('description', '—') or '—',
-        style_tags=', '.join((context or {}).get('style_tags', [])) or '—',
+        style_tags=', '.join(style_tags) or '—',
         color=(context or {}).get('primary_color', '—') or '—',
         material=(context or {}).get('material', '—') or '—',
         fit=(context or {}).get('fit', '—') or '—',
+        length=(context or {}).get('length', '—') or '—',
         gender=(context or {}).get('gender', '—') or '—',
         season=(context or {}).get('season', '—') or '—',
+        visual_style=', '.join(visual_style) or '—',
+        visual_query=visual_query or '—',
         query=query,
         target_lang=target_lang,
     )
 
     try:
-        import openai
-        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'),
-                               timeout=12.0)
-        response = client.chat.completions.create(
-            model='gpt-4o-mini',
-            messages=[
-                {'role': 'system', 'content': _TRANSLATE_SYSTEM_PROMPT},
-                {'role': 'user', 'content': user_prompt},
-            ],
+        response = call_text_with_fallback(
+            system_prompt=_TRANSLATE_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            openai_model='gpt-4o-mini',
             max_tokens=150,
             temperature=0.1,
+            response_mime_type='text/plain',
         )
-        result = response.choices[0].message.content.strip()
+        result = response['text'].strip()
         result = result.strip('"\'«»')
         if not result:
             return None
         log.info(
-            "ml_translate: LLM %s->%s: %r -> %r",
-            'ru', target_lang, query[:80], result[:80],
+            "ml_translate: LLM %s provider=%s %r -> %r",
+            target_lang, response.get('provider', 'unknown'), query[:80], result[:80],
         )
         return result
     except Exception as e:
@@ -138,6 +156,92 @@ _RU_ADJ_SUFFIXES = (
     'ённый', 'енный', 'ённая', 'ённое', 'ённые',
     'нный', 'нная', 'нное', 'нные',
 )
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ''
+    text = str(value).strip()
+    if text.lower() in {'', 'null', 'none', '—', '-'}:
+        return ''
+    return re.sub(r"\s+", " ", text)
+
+
+def _normalize_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [_clean_text(v) for v in value if _clean_text(v)]
+    if not value:
+        return []
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [_clean_text(v) for v in parsed if _clean_text(v)]
+        return [_clean_text(part) for part in re.split(r'[,;/]+', raw) if _clean_text(part)]
+    return []
+
+
+def _merge_query_parts(*groups: list[str], max_parts: int = 8) -> str:
+    out: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for part in group:
+            cleaned = _clean_text(part)
+            if not cleaned:
+                continue
+            key = cleaned.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(cleaned)
+            if len(out) >= max_parts:
+                return ' '.join(out)
+    return ' '.join(out)
+
+
+def build_visual_search_query(
+    context: dict[str, Any] | None,
+    *,
+    fallback_query: str = '',
+) -> str:
+    """Build a compact search query that prioritizes image-derived meaning."""
+    ctx = context or {}
+    style_tags = _normalize_list(ctx.get('style_tags'))
+    visual_style = _normalize_list(ctx.get('style'))
+    secondary_colors = _normalize_list(ctx.get('secondary_colors'))
+
+    brand = _clean_text(ctx.get('brand'))
+    model = _clean_text(ctx.get('model'))
+    article = _clean_text(ctx.get('article'))
+    subcategory = _clean_text(ctx.get('subcategory'))
+    category = _clean_text(ctx.get('category'))
+    primary_color = _clean_text(ctx.get('primary_color'))
+    material = _clean_text(ctx.get('material'))
+    fit = _clean_text(ctx.get('fit'))
+    length = _clean_text(ctx.get('length'))
+    gender = _clean_text(ctx.get('gender'))
+    season = _clean_text(ctx.get('season'))
+    item_name = _clean_text(ctx.get('name'))
+
+    # Prefer the visual noun over a potentially noisy stored item name.
+    noun = subcategory or category or item_name
+
+    core = [v for v in (brand, model, article, noun) if v]
+    descriptors = [v for v in (
+        primary_color,
+        secondary_colors[0] if secondary_colors else '',
+        material,
+        fit or length,
+        gender,
+        season,
+    ) if v]
+    query = _merge_query_parts(core, descriptors, visual_style[:2], style_tags[:2], max_parts=8)
+    return query or _clean_text(fallback_query)
 
 
 def _stem_lookup(word: str) -> str | None:
@@ -220,12 +324,15 @@ def translate_query(
     if target_lang in ('ru', 'kz', 'kk'):
         return query
 
+    semantic_query = build_visual_search_query(context, fallback_query=query)
+    query_for_translation = semantic_query or query
+
     if use_llm:
-        llm_result = _call_llm_translate(query, target_lang, context)
+        llm_result = _call_llm_translate(query_for_translation, target_lang, context)
         if llm_result:
             return llm_result
 
-    english = _dict_translate_to_english(query)
+    english = _dict_translate_to_english(query_for_translation)
     if target_lang == 'en':
         return english
     return _dict_en_to_locale(english, target_lang)

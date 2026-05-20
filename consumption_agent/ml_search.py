@@ -141,44 +141,30 @@ async def enrich_item_from_photo(item: Dict) -> Dict:
         return item
     
     try:
-        import base64
-        import openai
-        
-        # Читаем фото
-        with open(photo_path, 'rb') as f:
-            image_data = base64.b64encode(f.read()).decode('utf-8')
-        
-        # Запрос к OpenAI Vision
-        client = openai.OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Ты эксперт по распознаванию товаров. Опиши товар на фото для поиска в интернет-магазинах."
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Опиши товар на фото. Нужно:\n1. Точное название (на русском)\n2. Бренд (если виден)\n3. Категория (одежда, обувь, техника и т.д.)\n4. Артикул/модель (если виден)\n5. Ключевые признаки для поиска\n\nОтветь в формате JSON:\n{\n  \"name\": \"название\",\n  \"brand\": \"бренд\",\n  \"category\": \"категория\",\n  \"article\": \"артикул\",\n  \"search_query\": \"запрос для поиска\"\n}"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_data}"
-                            }
-                        }
-                    ]
-                }
-            ],
+        from services.vision_router import call_vision_with_fallback
+
+        response = call_vision_with_fallback(
+            photo_path,
+            "Ты эксперт по распознаванию товаров. Опиши товар на фото для поиска в интернет-магазинах.\n\n"
+            "Опиши товар на фото. Нужно:\n"
+            "1. Точное название (на русском)\n"
+            "2. Бренд (если виден)\n"
+            "3. Категория (одежда, обувь, техника и т.д.)\n"
+            "4. Артикул/модель (если виден)\n"
+            "5. Ключевые признаки для поиска\n\n"
+            "Ответь в формате JSON:\n"
+            "{\n"
+            "  \"name\": \"название\",\n"
+            "  \"brand\": \"бренд\",\n"
+            "  \"category\": \"категория\",\n"
+            "  \"article\": \"артикул\",\n"
+            "  \"search_query\": \"запрос для поиска\"\n"
+            "}",
             max_tokens=500,
-            temperature=0.3
         )
-        
+
         # Парсим ответ
-        content = response.choices[0].message.content
+        content = response["text"]
         # Извлекаем JSON из ответа
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:

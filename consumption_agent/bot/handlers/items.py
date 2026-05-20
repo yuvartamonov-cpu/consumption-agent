@@ -584,6 +584,9 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if has_photo:
             buttons.append(InlineKeyboardButton('📷 Фото', callback_data=f'item_photo:{item_id}'))
 
+        # Кнопка переноса в Memory Lane
+        buttons.append(InlineKeyboardButton('📸 В Memory Lane', callback_data=f'item_to_ml:{item_id}'))
+
         # Кнопка удаления если замена <30 дней
         if status_line and ('🔴' in status_line or '🟡' in status_line):
             buttons.append(InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}'))

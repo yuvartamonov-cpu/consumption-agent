@@ -18,6 +18,14 @@ Memory Lane — модуль consumption-agent для сохранения и к
 
 Дополнительно ведётся таблица `topic_rules` — ассоциации слово→тема, которые можно задавать вручную через Telegram.
 
+## Актуальный source of truth
+
+Подробное, актуальное описание алгоритма кнопки `🔍 Искать`, Vision enrichment и связанного Telegram UX лежит в:
+
+- `consumption_agent/docs/recognition_algorithms.md`
+
+Важно: старые разделы ниже местами описывают ранний план, а не текущую реализацию. Для production-flow приоритет у кода и этого документа.
+
 ## Memory Lane Price-Drop Watchlist (Day 5)
 
 После результатов `/ml_search` пользователь может нажать кнопку **«🔔 Следить за ценой»** — бот добавляет до 3 топ-товаров с ценой в `ml_watchlist`. Cron-задача ежедневно в 10:00 (`run_price_drop_check`) перепроверяет цены, и при падении ≥10% присылает Telegram-уведомление.
@@ -125,6 +133,13 @@ name, description, brand  ← добавочные, от Vision API
 ```
 
 ## Поиск товаров из Memory Lane
+
+Краткая актуализация:
+
+- поиск запускается через `ml_search_v2`, а не через старый плоский `search_query`;
+- используется cached/fresh extraction атрибутов фото;
+- foreign queries переводятся не буквально, а через semantic visual query;
+- в Telegram у результатов есть отдельные top-link кнопки, пагинация и watchlist.
 
 При нажатии 🔍 Искать в `/ml_last`:
 1. **Распознавание фото** — OpenAI Vision API (gpt-4o-mini) генерирует описание:

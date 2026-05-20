@@ -1,10 +1,10 @@
 import sqlite3
 import os
 import json
-from openai import OpenAI
+
+from services.llm_router import call_text_with_fallback
 
 db_path = os.path.join(os.path.dirname(__file__), 'consumption.db')
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def get_categories(conn):
     rows = conn.execute("SELECT id, slug, name FROM categories").fetchall()
@@ -33,13 +33,16 @@ def reclassify_batch(items, categories):
 ]
 Не пиши ничего кроме JSON."""
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0
+    response = call_text_with_fallback(
+        system_prompt=None,
+        user_prompt=prompt,
+        openai_model="gpt-4o-mini",
+        response_mime_type="application/json",
+        max_tokens=1200,
+        temperature=0.0,
     )
-    
-    content = response.choices[0].message.content.strip()
+
+    content = response["text"].strip()
     if content.startswith("```json"):
         content = content[7:-3].strip()
     elif content.startswith("```"):

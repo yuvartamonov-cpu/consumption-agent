@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from consumption.db import connect
-from services.receipt_pipeline import persist_receipt, process_source
+from services.receipt_pipeline import (
+    StructuredReceipt,
+    StructuredReceiptItem,
+    persist_receipt,
+    process_source,
+)
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "receipt_samples"
@@ -52,6 +57,7 @@ def _make_db(path: Path):
     )
     conn.execute("INSERT INTO categories (id, slug, name) VALUES ('other', 'other', 'Other')")
     conn.execute("INSERT INTO categories (id, slug, name) VALUES ('service', 'service', 'Service')")
+    conn.execute("INSERT INTO categories (id, slug, name) VALUES ('cat_food', 'food', 'Food')")
     conn.commit()
     return conn
 
@@ -119,4 +125,73 @@ def test_apply_creates_purchase_items_and_delivery(tmp_path):
     linked = conn.execute("SELECT purchase_id, purchase_price FROM items WHERE id = 1").fetchone()
     assert linked["purchase_id"] == result.purchase_id
     assert linked["purchase_price"] == 89.90
+    conn.close()
+
+
+def test_apply_uses_llm_category_for_new_receipt_items_when_confident(tmp_path, monkeypatch):
+    db_path = tmp_path / "consumption.db"
+    conn = _make_db(db_path)
+
+    def fake_suggest(conn, item_name, *, fallback_category_id, min_confidence=60):
+        assert item_name == "Бананы"
+        assert fallback_category_id == "other"
+        return {
+            "category_id": "cat_food",
+            "confidence": 88,
+            "needs_review": False,
+            "options": [{"category_id": "cat_food", "category_name": "Food", "confidence": 88}],
+        }
+
+    monkeypatch.setattr("services.receipt_pipeline._classify_receipt_item_category", fake_suggest)
+
+    receipt = StructuredReceipt(
+        store="Тест",
+        date="2026-05-21",
+        total=120.0,
+        items=[StructuredReceiptItem(name="Бананы", price=120.0)],
+    )
+    result = persist_receipt(conn, receipt, dry_run=False)
+
+    row = conn.execute(
+        "SELECT name, category_id FROM items WHERE id = ?",
+        (result.created_item_ids[0],),
+    ).fetchone()
+    assert row["name"] == "Бананы"
+    assert row["category_id"] == "cat_food"
+    conn.close()
+
+
+def test_apply_keeps_other_when_llm_category_is_low_confidence(tmp_path, monkeypatch):
+    db_path = tmp_path / "consumption.db"
+    conn = _make_db(db_path)
+
+    def fake_suggest(conn, item_name, *, fallback_category_id, min_confidence=60):
+        return {
+            "category_id": fallback_category_id,
+            "confidence": 41,
+            "needs_review": True,
+            "options": [
+                {"category_id": "cat_food", "category_name": "Food", "confidence": 41},
+                {"category_id": "other", "category_name": "Other", "confidence": 35},
+            ],
+        }
+
+    monkeypatch.setattr("services.receipt_pipeline._classify_receipt_item_category", fake_suggest)
+
+    receipt = StructuredReceipt(
+        store="Тест",
+        date="2026-05-21",
+        total=321.0,
+        items=[StructuredReceiptItem(name="Неизвестный товар", price=321.0)],
+    )
+    result = persist_receipt(conn, receipt, dry_run=False)
+
+    row = conn.execute(
+        "SELECT name, category_id FROM items WHERE id = ?",
+        (result.created_item_ids[0],),
+    ).fetchone()
+    assert row["name"] == "Неизвестный товар"
+    assert row["category_id"] == "other"
+    assert len(result.category_reviews) == 1
+    assert result.category_reviews[0]["item_name"] == "Неизвестный товар"
     conn.close()

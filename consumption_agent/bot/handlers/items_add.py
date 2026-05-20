@@ -70,11 +70,6 @@ async def _ask_category_suggestion(update: Update, ctx: ContextTypes.DEFAULT_TYP
     item_data['attempts'] = attempts
     item_data['current_suggestion'] = suggestion
     
-    # Auto-accept if confidence >= 80 and not a new category, and it's the first attempt
-    if confidence >= 80 and suggestion.get('action') == 'existing' and attempts == 1:
-        await _save_item_final(update, ctx, item_data, suggestion['category_id'], get_db, msg)
-        return
-
     # Store state
     ctx.user_data['pending_add_item'] = item_data
 
@@ -216,4 +211,3 @@ async def _save_item_final(update, ctx, item_data, cat_id, get_db, msg):
         await msg.edit_text(f"❌ Ошибка при сохранении: {e}")
     finally:
         conn.close()
-

@@ -358,9 +358,9 @@ def search_product_info_gemini(brand: str, article: str, barcode: str = None) ->
     """Ищет информацию о товаре через Gemini API по данным бирки."""
     try:
         import google.generativeai as genai
-        api_key = os.environ.get('GEMINI_API_KEY')
+        api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
         if not api_key:
-            log.warning('GEMINI_API_KEY not set, skipping Gemini search')
+            log.warning('GEMINI_API_KEY/GOOGLE_API_KEY not set, skipping Gemini search')
             return {}
 
         genai.configure(api_key=api_key)

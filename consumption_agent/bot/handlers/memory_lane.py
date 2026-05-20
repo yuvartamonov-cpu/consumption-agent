@@ -17,6 +17,54 @@ from telegram.ext import ContextTypes
 log = logging.getLogger(__name__)
 
 
+def _format_top_link_button(group: dict[str, Any], index: int) -> InlineKeyboardButton | None:
+    """Build a compact URL button for a top search result."""
+    url = (group.get('url') or '').strip()
+    if not url:
+        return None
+    store = (group.get('store') or group.get('source') or 'Ссылка').strip()
+    price = group.get('price_min')
+    price_text = ''
+    if isinstance(price, (int, float)) and price > 0:
+        price_text = f" · {int(price):,} ₽".replace(',', ' ')
+    text = f"🔗 {index}. {store[:20]}{price_text}"
+    return InlineKeyboardButton(text[:64], url=url)
+
+
+def _build_ml_search_keyboard(
+    result: dict[str, Any],
+    ml_id: int,
+    *,
+    remaining_pages: int = 0,
+) -> InlineKeyboardMarkup | None:
+    """Compose inline keyboard for /ml_search results."""
+    groups = result.get('canonical_groups', []) or []
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    top_buttons: list[InlineKeyboardButton] = []
+    for idx, group in enumerate(groups[:3], start=1):
+        button = _format_top_link_button(group, idx)
+        if button is not None:
+            top_buttons.append(button)
+    for button in top_buttons:
+        buttons.append([button])
+
+    if remaining_pages > 0:
+        buttons.append([InlineKeyboardButton(
+            f'📄 Продолжить вывод ({remaining_pages} ещё)',
+            callback_data=f'ml_page:{ml_id}:1'
+        )])
+
+    has_priced = any(g.get('price_min') for g in groups[:3])
+    if has_priced:
+        buttons.append([InlineKeyboardButton(
+            '🔔 Следить за ценой (топ-3)',
+            callback_data=f'ml_watch:{ml_id}'
+        )])
+
+    return InlineKeyboardMarkup(buttons) if buttons else None
+
+
 def configure(*, shared: dict[str, Any] | None = None, logger: Any | None = None, **_: Any) -> None:
     global log
     if shared:
@@ -236,26 +284,14 @@ async def cmd_ml_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Сохраняем результат в user_data для watchlist (нужен URL и цена)
         ctx.user_data[f'ml_result_{ml_id}'] = result
 
-        # Собираем кнопки: пагинация + «следить за ценой»
-        buttons = []
         if len(pages) > 1:
             page_key = f'ml_pages_{ml_id}'
             ctx.user_data[page_key] = pages[1:]
-            buttons.append([InlineKeyboardButton(
-                f'📄 Продолжить вывод ({len(pages) - 1} ещё)',
-                callback_data=f'ml_page:{ml_id}:1'
-            )])
-
-        # Кнопка «следить» если есть товары с ценой
-        groups = result.get('canonical_groups', [])
-        has_priced = any(g.get('price_min') for g in groups[:3])
-        if has_priced:
-            buttons.append([InlineKeyboardButton(
-                '🔔 Следить за ценой (топ-3)',
-                callback_data=f'ml_watch:{ml_id}'
-            )])
-
-        reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
+        reply_markup = _build_ml_search_keyboard(
+            result,
+            ml_id,
+            remaining_pages=max(0, len(pages) - 1),
+        )
 
         await ctx.bot.send_message(
             chat_id=chat_id,
