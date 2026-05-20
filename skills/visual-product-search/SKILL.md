@@ -19,6 +19,59 @@ description: Многоэтапный конвейер поиска товаро
 - foreign retrieval теперь строится через semantic visual query, а не буквальный перевод текста;
 - top-3 результата в Telegram выводятся отдельными URL-кнопками;
 - поиск после `inventory -> Memory Lane` использует тот же `ml_search_v2` pipeline.
+- `site:google.com` URL-кнопки больше не создаются (Telegram их не открывает нормально).
+- `.env` загружается при старте бота через `dotenv.load_dotenv()`, так что Gemini и xAI ключи работают.
+
+## Production Update (2026-05-21, late session)
+
+### 🔑 Категорийный индекс источников (`ml_sources_index.py`)
+Создан модуль `ml_sources_index.py` и таблица `ml_sources` в consumption.db:
+
+```sql
+CREATE TABLE ml_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    source_type TEXT DEFAULT 'link_only',
+    search_url_template TEXT,
+    domain TEXT,
+    priority INTEGER DEFAULT 0,
+    last_used_at TIMESTAMP,
+    use_count INTEGER DEFAULT 1,
+    UNIQUE(category, source_name)
+);
+```
+
+**Логика:**
+1. При поиске товара проверяется его категория (из memory_lane_items)
+2. `get_sources_for_item(category)` сначала ищет источники в таблице `ml_sources` для этой категории
+3. Если не найдено — отдаёт дефолтные провайдеры + геолокационные поставщики
+4. После завершения поиска `record_sources_from_search()` записывает все реально использованные источники в БД
+5. При следующем поиске товара из той же категории база уже знает, где искать
+
+### 🌍 Геолокационные провайдеры (`get_geo_providers`)
+Модуль определяет поставщиков на основе геолокации пользователя:
+- **RU**: Ozon, Яндекс.Маркет, Wildberries, DNS, М.Видео, Lamoda, Citilink, Hoff, AliExpress
+- **EU/UK/DE/FR/IT**: Amazon (US/DE/FR/IT), eBay, Idealo, Billiger, Farfetch, Luisaviaroma, Net-a-Porter, Vestiaire Collective, Grailed, StockX
+- **KZ/BY**: Kaspi, Satu, Onliner
+- Другие регионы: Amazon, eBay, AliExpress
+
+Геолокация определяется по IP (через ip-api.com или захардкоженный fallback на RU для текущей конфигурации)
+
+### ⏭️ Фильтрация site:google кнопок
+В `_format_top_link_button()`: если URL содержит `google.com/search?q=site:` — кнопка не создаётся. Такие ссылки остаются только в текстовом выводе, но не как inline-кнопки.
+
+### 📝 Прямые поставщики и дистрибьюторы
+Добавлены прямые search URL для:
+- Ozon: `https://www.ozon.ru/search/?text={query}`
+- Яндекс.Маркет: `https://market.yandex.ru/search?text={query}`
+- Wildberries: через live API (card v2)
+- Megamarket: `https://megamarket.ru/catalog/?q={query}`
+
+### 🚧 Планируется
+- Ручное добавление/удаление источников для категории через Telegram-команду
+- Приоритизация источников на основе прошлых переходов (CTR per source)
+- Автоматическое обновление `ml_sources` при импорте чеков (определение поставщика по магазину в чеке)
 
 ---
 
