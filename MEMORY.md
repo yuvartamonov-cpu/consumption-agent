@@ -5,7 +5,7 @@
 - **БД:** consumption.db — 498 активных товаров, 74 покупки, 34 категории, 103 чека, 2428 OCR-записей (1198 заматчено rapidfuzz)
 - **Telegram-бот:** @ConsumptionAgentBot (token 788548...) — запущен как systemd-юнит (`consumption-bot.service`), работает через VPN на Windows (порт 443)
 - **Доступ из WSL к Telegram API:** только при включённом VPN на Windows (curl connect timeout без него)
-- **Команды бота:** /start, /list, /alerts, /check, /add, /add_photo, /help
+- **Команды бота:** /start, /list, /alerts, /check, /add, /add_tag, /help
 - **IMAP (Gmail):** yu.v.artamonov@gmail.com / пароль [REDACTED_OLD_GMAIL_APP_PASSWORD] (app password)
 - **Путь проекта:** ~/.openclaw/workspace/consumption_agent/
 - **Конфиг marketplace:** MARKETPLACE_SENDERS — Ozon + Яндекс.Маркет, WB и Megamarket не найдены (писем нет)
@@ -23,7 +23,7 @@
 - `/alerts` — активные алерты (0 на данный момент)
 - `/check` — статистика
 - `/add <name> [<price>] [<category>]` — ручное добавление товара
-- `/add_photo` — добавление чека по фото (OCR + QR-коды)
+- `/add_tag` — добавление чека по фото (OCR + QR-коды)
 - service: `systemctl --user <start|stop|status> consumption-bot.service`
 - **Нюанс:** бот висит при отключении VPN на Windows — перезапускается автоматически (Restart=always)
 
@@ -33,7 +33,7 @@
 - **WB / Megamarket**: 0 писем на почте (проверено).
 
 ### Фаза 3: Smart Features (частично готово)
-- **Фото-ввод чеков** (`/add_photo` в Telegram-боте):
+- **Фото-ввод чеков** (`/add_tag` в Telegram-боте):
   - OCR (Tesseract) + декодирование QR-кодов (pyzbar).
   - Парсинг товаров и итоговой суммы.
   - Автоматическое определение категорий (например, "корм" → "Животные").
@@ -57,7 +57,7 @@
 ## Технические детали
 - **PDF-генерация:** fpdf2 (fpdf), шрифт DejaVu, баг с символом \n (не критично)
 - **Telegram API:** python-telegram-bot (httpx), service не стартуется при отсутствии сети
-- **Добавленные команды в скрипт:** `list`, `alerts`, `add`, `/add_photo` (OCR + QR-коды)
+- **Добавленные команды в скрипт:** `list`, `alerts`, `add`, `/add_tag` (OCR + QR-коды)
 - **Порог fuzzy match = 70:** OCR-названия зашумлены
 - **Куки Ozon:** ~/.openclaw/workspace/consumption_agent/.ozon_cookies.txt (протухли)
 

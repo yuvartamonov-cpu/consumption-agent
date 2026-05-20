@@ -154,7 +154,7 @@ async def cmd_parse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         lines.append('')
         lines.append('Для обработки нужны свежие куки Ozon.')
-        lines.append('Обновите куки в .ozon_cookies.txt или используйте /add_photo')
+        lines.append('Обновите куки в .ozon_cookies.txt или используйте /add_tag')
 
         await update.message.reply_text('\n'.join(lines))
         conn.close()
@@ -215,194 +215,25 @@ async def cmd_add_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('❌ Название не может быть пустым')
         return
 
-    # Определяем категорию по ключевым словам в названии
-    cat_map = {
-        'стремян': 'cat_home', 'пылесос': 'cat_tech', 'утюг': 'cat_home',
-        'утюж': 'cat_home', 'фен': 'cat_cosmetics', 'расчес': 'cat_cosmetics',
-        'щётк': 'cat_home', 'зубн': 'cat_health_med', 'полотен': 'cat_home',
-        'постель': 'cat_home', 'простын': 'cat_home', 'наволочк': 'cat_home',
-        'одеял': 'cat_home', 'подушк': 'cat_home', 'ковёр': 'cat_home_furn',
-        'ковер': 'cat_home_furn', 'штора': 'cat_home_furn', 'светиль': 'cat_home_furn',
-        'лампа': 'cat_home_furn', 'люстр': 'cat_home_furn', 'торшер': 'cat_home_furn',
-        'кресл': 'cat_home_furn', 'диван': 'cat_home_furn', 'стол': 'cat_home_furn',
-        'стул': 'cat_home_furn', 'кроват': 'cat_home_furn', 'комод': 'cat_home_furn',
-        'тумб': 'cat_home_furn', 'шкаф': 'cat_home_furn', 'стеллаж': 'cat_home_furn',
-        'куртк': 'cat_clo_everyday', 'пальт': 'cat_clo_everyday', 'пухов': 'cat_clo_everyday',
-        'плащ': 'cat_clo_everyday', 'пиджак': 'cat_clo_everyday', 'костюм': 'cat_clo_everyday',
-        'джинс': 'cat_clo_everyday', 'брюк': 'cat_clo_everyday', 'штаны': 'cat_clo_everyday',
-        'футболк': 'cat_clo_everyday', 'рубашк': 'cat_clo_everyday', 'свитер': 'cat_clo_everyday',
-        'водолаз': 'cat_clo_everyday', 'толстов': 'cat_clo_everyday', 'худи': 'cat_clo_everyday',
-        'носк': 'cat_clo_underwear', 'трус': 'cat_clo_underwear', 'майк': 'cat_clo_underwear',
-        'ботинк': 'cat_clo_shoes', 'кроссов': 'cat_clo_shoes', 'туфл': 'cat_clo_shoes',
-        'сапог': 'cat_clo_shoes', 'тапк': 'cat_clo_shoes', 'шлёпан': 'cat_clo_shoes',
-        'шарф': 'cat_clo_access', 'шапк': 'cat_clo_access', 'ремен': 'cat_clo_access',
-        'перчат': 'cat_clo_access', 'сумк': 'cat_clo_access', 'рюкзак': 'cat_clo_access',
-        'часы': 'cat_clo_access', 'браслет': 'cat_clo_access', 'очк': 'cat_clo_access',
-        'телефон': 'cat_tech', 'ноутбук': 'cat_tech', 'планшет': 'cat_tech',
-        'наушник': 'cat_tech', 'колонк': 'cat_tech', 'роутер': 'cat_tech',
-        'монитор': 'cat_tech', 'клавиатур': 'cat_tech', 'мышк': 'cat_tech',
-        'камер': 'cat_tech', 'принтер': 'cat_tech', 'провод': 'cat_tech',
-        'зарядк': 'cat_tech', 'кабель': 'cat_tech', 'адаптер': 'cat_tech',
-        'холодиль': 'cat_tech', 'микроволн': 'cat_tech', 'тостер': 'cat_tech',
-        'блендер': 'cat_tech', 'кофемолк': 'cat_tech', 'чайник': 'cat_home_kitchen',
-        'сковород': 'cat_home_kitchen', 'кастрюл': 'cat_home_kitchen', 'нож': 'cat_home_kitchen',
-        'тарелк': 'cat_home_kitchen', 'кружк': 'cat_home_kitchen', 'чашк': 'cat_home_kitchen',
-        'косметик': 'cat_cosmetics', 'крем': 'cat_cosmetics', 'шампун': 'cat_cosmetics',
-        'кондиционер': 'cat_cosmetics', 'мыл': 'cat_cosmetics', 'дух': 'cat_cosmetics',
-        'игрушк': 'cat_hobbies', 'настольн': 'cat_hobbies', 'книг': 'cat_culture_books',
-        'корм': 'cat_pets', 'игрушк.*животн': 'cat_pets', 'лежак': 'cat_pets',
+    item_data = {
+        'name': name,
+        'brand': brand,
+        'replace_months': replace_months,
+        'replace_days': replace_days,
+        'photos': []
     }
-    category = None
-    nl = name.lower()
-    for kw, cid in cat_map.items():
-        if kw in nl:
-            category = cid
-            break
-    if not category:
-        category = 'cat_other'
-
-    # Формируем notes с информацией о замене
-    notes_parts = ['Добавлено через /add_item']
-    replace_days = bp.get('replace_days')
-    if replace_days:
-        notes_parts.append(f'Ожидается замена через {replace_days} дн.')
-    elif replace_months:
-        notes_parts.append(f'Ожидается замена через {replace_months} мес.')
-    notes = '\n'.join(notes_parts)
-
-    # Сохраняем в БД
-    conn = get_db()
-    try:
-        item_id = insert_manual_item(
-            conn,
-            name=name,
-            brand=brand,
-            category_id=category,
-            replace_months=replace_months,
-            replace_days=replace_days,
-            notes=notes,
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    # Если есть фото — сохраняем и обогащаем через Vision API
-    has_photo = False
-    vision_enriched = {}
-    photos = []
+    
     if update.message and update.message.photo:
-        photos = update.message.photo
-    # Если это reply на сообщение с фото — берём фото из оригинального сообщения
+        item_data['photos'] = update.message.photo
     elif update.message and update.message.reply_to_message and update.message.reply_to_message.photo:
-        photos = update.message.reply_to_message.photo
+        item_data['photos'] = update.message.reply_to_message.photo
         log.info(f'add_item: using photo from reply_to_message {update.message.reply_to_message.message_id}')
 
-    if photos:
-        best = photos[-1]
-        try:
-            file = await best.get_file()
-            file_bytes = await file.download_as_bytearray()
-
-            # Сохраняем фото
-            media_dir = os.path.join(os.path.dirname(DB_PATH), 'data', 'media')
-            mconn = get_db()
-            try:
-                asset_id = save_media_asset(mconn, file_bytes, mime='image/jpeg', base_dir=media_dir)
-                if asset_id:
-                    link_item_photo(mconn, item_id=item_id, media_asset_id=asset_id)
-                    mconn.commit()
-                    has_photo = True
-                    log.info(f'add_item photo saved: item_id={item_id}, asset_id={asset_id}')
-            finally:
-                mconn.close()
-
-            # Vision API обогащение: бренд, цвет, описание
-            try:
-                tmp_path = os.path.join(RECEIPTS_DIR, f'_additem_{update.message.message_id}.jpg')
-                with open(tmp_path, 'wb') as fh:
-                    fh.write(file_bytes)
-                from vision_item import recognize_item
-                vision_enriched = recognize_item(tmp_path)
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-                if vision_enriched and 'error' not in vision_enriched:
-                    # Бренд из текста приоритетнее, Vision как fallback
-                    if not brand and vision_enriched.get('brand'):
-                        brand = vision_enriched['brand']
-                    # Обновляем запись в БД: attributes + notes
-                    uconn = get_db()
-                    attrs = json.dumps({
-                        'color': vision_enriched.get('color'),
-                        'description': vision_enriched.get('description'),
-                        'style_tags': vision_enriched.get('style_tags', []),
-                        'material': vision_enriched.get('material'),
-                        'estimated_price_rub': vision_enriched.get('estimated_price_rub'),
-                    }, ensure_ascii=False)
-                    # Дополняем notes данными от Vision
-                    vision_notes = []
-                    if vision_enriched.get('color'):
-                        vision_notes.append(f"Цвет: {vision_enriched['color']}")
-                    if vision_enriched.get('material'):
-                        vision_notes.append(f"Материал: {vision_enriched['material']}")
-                    if vision_enriched.get('description'):
-                        vision_notes.append(f"Описание: {vision_enriched['description']}")
-                    if vision_enriched.get('estimated_price_rub'):
-                        vision_notes.append(f"Оценочная цена: ~{vision_enriched['estimated_price_rub']} ₽")
-                    if vision_notes:
-                        new_notes = notes + '\n' + '\n'.join(vision_notes)
-                        update_item_vision_metadata(
-                            uconn,
-                            item_id=item_id,
-                            brand=brand,
-                            attributes=attrs,
-                            notes=new_notes,
-                        )
-                    else:
-                        update_item_vision_metadata(
-                            uconn,
-                            item_id=item_id,
-                            brand=brand,
-                            attributes=attrs,
-                        )
-                    uconn.commit()
-                    uconn.close()
-                    log.info(f'Vision enriched add_item #{item_id}: brand={brand}, fields={list(vision_enriched.keys())}')
-            except Exception as e:
-                log.warning(f'Vision enrich for add_item failed: {e}')
-        except Exception as e:
-            log.warning(f'add_item photo save failed: {e}')
-
-    # Формируем ответ
-    lines = [f'✅ Добавлено: *{esc_md(name)}*']
-    if brand:
-        lines.append(f'🏷 Бренд: {esc_md(brand)}')
-    lines.append(f'📂 Категория: {esc_md(category)}')
-    if replace_days:
-        lines.append(f'🔄 Замена: через {replace_days} дн.')
-    elif replace_months:
-        lines.append(f'🔄 Замена: через {replace_months} мес.')
-    if vision_enriched and 'error' not in vision_enriched:
-        if vision_enriched.get('color'):
-            lines.append(f'🎨 Цвет: {vision_enriched["color"]}')
-        if vision_enriched.get('description'):
-            lines.append(f'📝 {vision_enriched["description"]}')
-        if vision_enriched.get('style_tags'):
-            lines.append(f'🏷️ Теги: {", ".join(vision_enriched["style_tags"])}')
-        if vision_enriched.get('estimated_price_rub'):
-            lines.append(f'💰 Оценка: ~{vision_enriched["estimated_price_rub"]} ₽')
-    if has_photo:
-        lines.append('📸 Фото сохранено')
-    lines.append(f'\nID: {item_id}')
-
-    # Кнопка удаления
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton('🗑 Удалить', callback_data=f'item_delete:{item_id}')
-    ]])
-
-    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown', reply_markup=kb)
+    from bot.handlers.items_add import start_interactive_add
+    
+    # get_db is available in globals since it's injected
+    await start_interactive_add(update, ctx, item_data, get_db)
+    return
 
 async def cmd_items(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Команда /items — список вещей с группировкой и сроками замены.
@@ -794,6 +625,48 @@ async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
+async def cmd_items_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Команда /items_last [N] — список N последних добавленных вещей."""
+    limit = 10
+    if ctx.args and ctx.args[0].isdigit():
+        limit = max(1, min(int(ctx.args[0]), 50))
+        
+    conn = get_db()
+    try:
+        rows = conn.execute('''
+            SELECT i.id, i.name, i.brand, i.purchase_date, i.purchase_price,
+                   COALESCE(c.name, i.category_id) AS category_name
+            FROM items i
+            LEFT JOIN categories c ON c.id = i.category_id
+            WHERE i.deleted_at IS NULL AND i.is_delivery = 0
+            ORDER BY i.id DESC
+            LIMIT ?
+        ''', (limit,)).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text('📭 В инвентаре пока нет вещей.')
+        return
+
+    from bot.markdown import esc_md
+    lines = [f'🆕 *Последние {len(rows)} добавленных вещей:*', '']
+    for r in rows:
+        item_id = r[0]
+        name = r[1]
+        brand = r[2]
+        date_str = r[3][:10] if r[3] else '?'
+        price = r[4]
+        cat = r[5] or '?'
+        
+        name_str = esc_md(name) if name else '?'
+        if brand:
+            name_str += f' ({esc_md(brand)})'
+            
+        price_str = f', {price:.0f} ₽' if price is not None else ''
+        lines.append(f'• `#{item_id}` *{name_str}* — {cat}{price_str} ({date_str})')
+
+    await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
 
 def register_handlers(app: Any, deps: Any = None) -> None:
     from bot.app import _add_command
@@ -807,6 +680,7 @@ def register_handlers(app: Any, deps: Any = None) -> None:
         ('add_item', cmd_add_item),
         ('items', cmd_items),
         ('items_full', cmd_items_full),
+        ('items_last', cmd_items_last),
         ('warranties', cmd_warranties),
         ('set_warranty', cmd_set_warranty),
     ):

@@ -3,7 +3,7 @@
 dedup.py — Phase 2.5 deduplication of purchases.
 
 A single real-world purchase can land in `purchases` twice:
-  1. via /add_photo (screenshot from a mobile app)
+  1. via /add_tag (screenshot from a mobile app)
   2. via email-import (parsed receipt from the same vendor)
 
 This module finds clusters of likely duplicates and merges them, keeping

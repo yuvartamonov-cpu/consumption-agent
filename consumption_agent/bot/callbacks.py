@@ -867,5 +867,10 @@ def register_handlers(app: Any, deps: Any = None) -> None:
     add(app, CallbackQueryHandler(ml_remind_set_callback, pattern=r'^ml_remind_set:\d+$'))
     add(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
     add(app, CallbackQueryHandler(vision_reject_callback, pattern=r'^vision_reject$'))
+    
+    # AI Categorization 
+    from bot.handlers.items_add import handle_addcat_callback
+    add(app, CallbackQueryHandler(lambda u, c: handle_addcat_callback(u, c, deps.get_db), pattern=r'^addcat_'))
+
     add(app, CallbackQueryHandler(dedup_delete_callback, pattern=r'^dedup_delete:'))
     add(app, CallbackQueryHandler(dedup_keep_callback, pattern=r'^dedup_keep:'))

@@ -548,10 +548,12 @@ def get_db(max_retries=3, delay=1):
 
 
 
-async def add_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def add_tag(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Флаг: следующее фото будет принудительно обработано как бирка
+    ctx.user_data['force_tag'] = True
     await update.message.reply_text(
-        '📸 Отправьте фото чека (одно фото за раз).\n'
-        'Я распознаю текст и добавлю товары в инвентарь.'
+        '📸 Отправьте фото бирки одежды/вещи.\n'
+        'Я распознаю бренд, артикул, штрихкод и добавлю вещь в инвентарь.'
     )
 
 
@@ -590,6 +592,8 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    import asyncio  # Fix for UnboundLocalError when skipping vision api
+    
     if not update.message.photo:
         await update.message.reply_text('❌ Это не фото. Пожалуйста, отправьте изображение.')
         return
@@ -599,9 +603,38 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     caption = update.message.caption or ''
     log.info(f'photo_handler: message_id={update.message.message_id}, caption={caption!r}')
 
+    force_receipt = False
+    
+    # Проверяем, есть ли активная сессия загрузки чеков
+    remaining_receipts = ctx.user_data.get('receipts_remaining', 0)
+    if remaining_receipts > 0:
+        force_receipt = True
+        ctx.user_data['receipts_remaining'] = remaining_receipts - 1
+        log.info(f"Forcing receipt processing from session. Remaining: {ctx.user_data['receipts_remaining']}")
+        
+    caption_lower = caption.strip().lower()
+    if caption_lower.startswith('чек'):
+        force_receipt = True
+        parts = caption_lower.split()
+        if len(parts) > 1 and parts[1].isdigit():
+            count = int(parts[1])
+            if count > 1:
+                ctx.user_data['receipts_remaining'] = count - 1
+            log.info(f"Started receipt session with {count} items")
+        log.info("Forcing receipt processing due to caption.")
+
+    force_tag = ctx.user_data.pop('force_tag', False)
+    if caption_lower.startswith('бирка') or caption_lower.startswith('tag'):
+        force_tag = True
+        log.info("Forcing tag processing due to caption.")
+
+    # Взаимоисключающие режимы: если чек, то не бирка
+    if force_receipt:
+        force_tag = False
+
     # === Редирект: /add_item + фото ===
     # Если caption начинается с /add_item — перенаправляем в cmd_add_item
-    if caption.strip().startswith('/add_item'):
+    if not force_receipt and caption.strip().startswith('/add_item'):
         log.info(f'photo_handler: redirecting to cmd_add_item, args={caption.strip().split()[1:]}')
         ctx.args = caption.strip().split()[1:]
         await cmd_add_item(update, ctx)
@@ -609,7 +642,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Если caption выглядит как описание вещи (есть бренд или срок замены)
     # — тоже перенаправляем в cmd_add_item
-    if caption.strip():
+    if not force_receipt and caption.strip():
         from brand_parser import parse_brand_and_name
         bp = parse_brand_and_name(caption)
         if bp['name'] and (bp['brand'] or bp['replace_months']):
@@ -625,7 +658,7 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         import memory_lane as _ml
     except ImportError:
         _ml = None
-    if _ml is not None and _ml.is_memory_lane_caption(caption):
+    if not force_receipt and _ml is not None and _ml.is_memory_lane_caption(caption):
         try:
             file = await photo.get_file()
             tmp_path = os.path.join(RECEIPTS_DIR, f'_ml_{update.message.message_id}.jpg')
@@ -698,20 +731,26 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # === Быстрая классификация типа фото (Vision API, ~1-2 токена) ===
     # Определяем тип ДО OCR/QR, чтобы не тратить время на чеки для фото предметов
     image_type = 'other'
-    try:
-        import asyncio
-        from vision_item import classify_photo_async
-        v_type = await asyncio.wait_for(
-            classify_photo_async(receipt_path),
-            timeout=15.0
-        )
-        if v_type and v_type != 'unknown':
-            image_type = v_type
-            log.info(f"Vision classify (fast path): {v_type}")
-    except asyncio.TimeoutError:
-        log.warning("Vision classify timeout after 15s (fast path)")
-    except Exception as e:
-        log.warning(f"Vision classify failed (fast path): {e}")
+    if force_receipt:
+        image_type = 'receipt'
+        log.info("Forcing image_type to 'receipt' due to caption or session")
+    elif force_tag:
+        image_type = 'tag'
+        log.info("Forcing image_type to 'tag' due to command or caption")
+    else:
+        try:
+            from vision_item import classify_photo_async
+            v_type = await asyncio.wait_for(
+                classify_photo_async(receipt_path),
+                timeout=15.0
+            )
+            if v_type and v_type != 'unknown':
+                image_type = v_type
+                log.info(f"Vision classify (fast path): {v_type}")
+        except asyncio.TimeoutError:
+            log.warning("Vision classify timeout after 15s (fast path)")
+        except Exception as e:
+            log.warning(f"Vision classify failed (fast path): {e}")
 
     # QR/OCR только для чеков и бирок — для предметов не нужен
     qr_data = None
@@ -776,11 +815,21 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
     # Если Vision API сказал tech/other, но есть признаки бирки — переопределяем
-    if image_type in ('unknown', 'other', 'tech') and is_real_tag and not total_amount:
+    if not force_receipt and image_type in ('unknown', 'other', 'tech') and is_real_tag and not total_amount:
         image_type = 'tag'
         log.info(f"Тип изображения: tag (brand={tag_probe.get('brand')}, article={tag_probe.get('article')}, barcode={pyzbar_barcode or tag_probe.get('barcode')})")
-    else:
-        log.info(f"Тип изображения: {image_type} (is_real_tag={is_real_tag}, has_brand={has_brand}, has_article={has_article}, has_barcode={has_barcode}, pyzbar={pyzbar_barcode})")
+
+    # === Корректировка 'tag' -> 'receipt', если Vision API ошибся ===
+    # (Например, если на чеке Самоката есть штрихкод, и is_real_tag стал True, или Vision определил чек как бирку)
+    receipt_indicators = ['КАССОВЫЙ ЧЕК', 'ФИСКАЛЬНЫЙ', 'ФН ', 'ФПД', 'ОФД', 'ИНН', 'ИТОГ', 'БЕЗНАЛИЧ', 'СУММА', 'ДОСТАВКА']
+    has_receipt_indicators = len([ind for ind in receipt_indicators if ind in raw_text]) >= 2
+    has_fns_qr = bool(qr_data and 't' in qr_data and 's' in qr_data and 'fn' in qr_data)
+
+    if image_type == 'tag' and (force_receipt or has_fns_qr or has_receipt_indicators or (total_amount and not is_real_tag)):
+        log.info(f"Корректировка: переопределяем 'tag' -> 'receipt' (force_receipt={force_receipt}, has_fns_qr={has_fns_qr}, has_receipt_indicators={has_receipt_indicators}, total_amount={total_amount})")
+        image_type = 'receipt'
+
+    log.info(f"Итоговый тип изображения: {image_type} (is_real_tag={is_real_tag}, has_brand={has_brand}, has_article={has_article}, has_barcode={has_barcode}, pyzbar={pyzbar_barcode})")
 
     items = []
 
@@ -788,7 +837,6 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if image_type in ('clothing', 'food', 'interior', 'tech', 'item', 'other', 'unknown') and not qr_data:
         log.info(f'photo_handler: recognizing item, image_type={image_type}, path={receipt_path}')
         try:
-            import asyncio
             from vision_item import recognize_item_async
             import time
             start_time = time.time()
@@ -1112,9 +1160,6 @@ async def photo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     response_text = '\n'.join(response_parts)
 
-    if purchase_id:
-        conn.commit()
-    conn.close()
     await update.message.reply_text(response_text)
 
 
@@ -1205,9 +1250,10 @@ def main():
         BotCommand('list', 'Инвентарь по категориям'),
         BotCommand('items', 'Вещи со сроком замены'),
         BotCommand('items_full', 'Вещи с полной инфой'),
+        BotCommand('items_last', 'Последние добавленные вещи'),
         BotCommand('add', 'Добавить товар /add name price category'),
         BotCommand('add_item', 'Мастер добавления товара'),
-        BotCommand('add_photo', 'Добавить чек по фото'),
+        BotCommand('add_tag', 'Распознать бирку по фото'),
         BotCommand('alerts', 'Активные алерты'),
         BotCommand('dayexp', 'Расходы за сегодня'),
         BotCommand('monthexp', 'Расходы за месяц'),
@@ -1241,7 +1287,7 @@ def main():
         shared=globals(),
     )
     register_command_handlers(app, handler_deps)
-    add_authorized_handler(app, CommandHandler('add_photo', add_photo))
+    add_authorized_handler(app, CommandHandler('add_tag', add_tag))
     add_authorized_handler(app, MessageHandler(filters.PHOTO, photo_handler))
     add_authorized_handler(app, MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
