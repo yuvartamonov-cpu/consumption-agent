@@ -31,9 +31,9 @@ def register_basic_handlers(app: Any, deps: HandlerDeps) -> None:
 
 
 def register_command_handlers(app: Any, deps: HandlerDeps) -> None:
-    from bot.handlers import carsharing, finance, help as help_handlers, items, memory_lane
+    from bot.handlers import carsharing, finance, help as help_handlers, items, memory_lane, photos
 
-    for module in (help_handlers, finance, carsharing, items, memory_lane):
+    for module in (help_handlers, finance, carsharing, items, memory_lane, photos):
         module.register_handlers(app, deps)
 
 
