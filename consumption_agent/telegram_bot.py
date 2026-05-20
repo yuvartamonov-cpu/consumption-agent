@@ -58,12 +58,35 @@ def extract_sms_display_time(notes: str | None) -> str:
     return ''
 
 
-def append_expense_row(lines, row, source_icons, *, note_limit=80):
+def sanitize_expense_note(notes: str | None) -> str:
+    """Скрывает служебные OCR/Vision notes из пользовательских отчётов."""
+    notes_clean = (notes or '').replace('\n', ' ').strip()
+    if not notes_clean:
+        return ''
+
+    if notes_clean.startswith('{') and notes_clean.endswith('}'):
+        try:
+            parsed = json.loads(notes_clean)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict) and {'engine', 'ocr_score', 'source_path'} & set(parsed):
+            return ''
+
+    lower_notes = notes_clean.lower()
+    tech_markers = ('engine', 'ocr_score', 'source_path')
+    if sum(marker in lower_notes for marker in tech_markers) >= 2:
+        return ''
+
+    return notes_clean
+
+
+def append_expense_row(lines, row, source_icons, *, note_limit=80, show_notes=True):
     """Добавляет строку расхода в Markdown-отчёт безопасно для Telegram."""
     _date_str, amount, store, source, notes = row
     amt = amount or 0
     src_icon = source_icons.get(source or '', '📧')
     notes_clean = (notes or '').replace('\n', ' ').strip()
+    display_note = sanitize_expense_note(notes)
 
     lines.append(f'{src_icon} *{esc_md(store or "—")}* — {amt:,.0f} ₽'.replace(',', ' '))
 
@@ -73,8 +96,8 @@ def append_expense_row(lines, row, source_icons, *, note_limit=80):
             lines.append(f'   🕐 {sms_time}')
         return
 
-    if notes_clean:
-        lines.append(f'   {esc_md(notes_clean[:note_limit])}')
+    if show_notes and display_note:
+        lines.append(f'   {esc_md(display_note[:note_limit])}')
 
 
 def append_store_totals(lines, rows, heading):

@@ -1,4 +1,10 @@
-from telegram_bot import append_expense_row, append_store_totals, extract_sms_display_time, markdown_to_plain_text
+from telegram_bot import (
+    append_expense_row,
+    append_store_totals,
+    extract_sms_display_time,
+    markdown_to_plain_text,
+    sanitize_expense_note,
+)
 
 
 def test_extract_sms_display_time_supports_explicit_marker():
@@ -25,6 +31,32 @@ def test_append_expense_row_for_sms_hides_balance_and_shows_time():
         '📱 *АЗС\\_77718* — 1 858 ₽',
         '   🕐 15:43',
     ]
+
+
+def test_append_expense_row_can_hide_notes_for_compact_reports():
+    lines = []
+    row = (
+        '2026-05-16',
+        1290.0,
+        'Самокат',
+        'gmail',
+        'Распознано из email-чека через OCR',
+    )
+    append_expense_row(lines, row, {'gmail': '📧'}, show_notes=False)
+
+    assert lines == [
+        '📧 *Самокат* — 1 290 ₽',
+    ]
+
+
+def test_sanitize_expense_note_hides_raw_recognition_json():
+    note = '{"engine":"vision:gpt-4o-mini","ocr_score":100,"source_path":"/tmp/receipt.jpg"}'
+    assert sanitize_expense_note(note) == ''
+
+
+def test_sanitize_expense_note_keeps_human_text():
+    note = 'Заказ с доставкой к 19:00'
+    assert sanitize_expense_note(note) == 'Заказ с доставкой к 19:00'
 
 
 def test_append_store_totals_escapes_markdown_sensitive_store_names():

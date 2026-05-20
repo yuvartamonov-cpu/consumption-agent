@@ -388,7 +388,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines.append(f'_{len(rows)} покупок, всего {total:,.0f} ₽_\n'.replace(',', ' '))
 
     for row in rows:
-        append_expense_row(lines, row, source_icons, note_limit=80)
+        append_expense_row(lines, row, source_icons, note_limit=80, show_notes=False)
 
     append_store_totals(lines, rows, '📌 *По магазинам:*')
 
@@ -486,7 +486,7 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f'\n📅 *{day_label}* — {day_total:,.0f} ₽ ({len(day_rows)} покупок)'.replace(',', ' '))
 
         for row in day_rows:
-            append_expense_row(lines, row, source_icons, note_limit=60)
+            append_expense_row(lines, row, source_icons, note_limit=60, show_notes=False)
 
     append_store_totals(lines, rows, '📌 *Всего по магазинам:*')
 
