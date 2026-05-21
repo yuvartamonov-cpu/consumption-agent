@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import sys
 import traceback
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from bot.markdown import markdown_to_plain_text, safe_edit_markdown_message, safe_send_markdown_message
+
 
 log = logging.getLogger(__name__)
 _get_db: Callable[..., Any] | None = None
+SCAN_TIMEOUT_SECONDS = 90
 
 
 def configure(*, get_db: Callable[..., Any] | None = None, logger: Any | None = None, shared: dict[str, Any] | None = None) -> None:
@@ -30,6 +36,58 @@ def get_db(*args: Any, **kwargs: Any) -> Any:
     if _get_db is None:
         raise RuntimeError('Telegram finance handlers are not configured with get_db')
     return _get_db(*args, **kwargs)
+
+
+def _project_root() -> str:
+    script_dir = globals().get('SCRIPT_DIR')
+    if script_dir:
+        return str(script_dir)
+    return str(Path(__file__).resolve().parents[2])
+
+
+async def _run_daily_scan(tag: str) -> tuple[bool, str | None]:
+    """Run the daily scan helper with a bounded timeout.
+
+    Returns (completed, log_excerpt_or_error).
+    """
+    script_path = os.path.join(_project_root(), 'daily_cheque_scan.py')
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        script_path,
+        cwd=_project_root(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SCAN_TIMEOUT_SECONDS)
+        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
+        print(f'[{tag}] scan result:\n{log_text}')
+        return True, log_text
+    except asyncio.TimeoutError:
+        proc.kill()
+        try:
+            await proc.communicate()
+        except Exception:
+            pass
+        print(f'[{tag}] scan timeout after {SCAN_TIMEOUT_SECONDS}s')
+        return False, f'timeout after {SCAN_TIMEOUT_SECONDS}s'
+    except Exception as e:
+        print(f'[{tag}] scan error: {e}')
+        return False, str(e)
+
+
+async def _safe_publish_report_message(update: Update, msg: Any, text: str) -> None:
+    """Try editing the progress message; fall back to a new plain-text reply."""
+    try:
+        await safe_edit_markdown_message(msg, text)
+        return
+    except Exception as e:
+        log.warning('expense report edit failed, fallback to reply_text: %s', e)
+
+    try:
+        await update.message.reply_text(markdown_to_plain_text(text))
+    except Exception as send_error:
+        log.warning('expense report fallback reply failed: %s', send_error)
 
 
 def _resolve_duplicate_groups(conn: Any, *, days_back: int) -> list[dict[str, Any]]:
@@ -361,21 +419,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     day_label = f'последние {n_days} дн.' if n_days > 1 else 'сегодня'
     msg = await update.message.reply_text(f'🔍 Сканирую почты и SMS за {day_label}...')
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, 'daily_cheque_scan.py',
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
-        print(f'[dayexp] scan result:\n{log_text}')
-    except asyncio.TimeoutError:
-        print('[dayexp] scan timeout')
-    except Exception as e:
-        print(f'[dayexp] scan error: {e}')
-        await msg.edit_text('⚠️ Ошибка сканирования почт.')
-        return
+    scan_completed, _scan_note = await _run_daily_scan('dayexp')
 
     conn = get_db()
     try:
@@ -393,7 +437,8 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not rows:
         date_range = f'{datetime.now().strftime("%d.%m.%Y")}' if n_days == 1 else f'за последние {n_days} дн. (по {datetime.now().strftime("%d.%m.%Y")})'
-        await msg.edit_text(f'📭 {date_range} покупок не найдено.')
+        suffix = '' if scan_completed else '\n⚠️ Сканирование источников завершилось с таймаутом/ошибкой, показаны текущие данные БД.'
+        await _safe_publish_report_message(update, msg, f'📭 {date_range} покупок не найдено.{suffix}')
         return
 
     total = sum(r[1] or 0 for r in rows)
@@ -408,8 +453,10 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         append_expense_row(lines, row, source_icons, note_limit=80, show_notes=False)
 
     append_store_totals(lines, rows, '📌 *По магазинам:*')
+    if not scan_completed:
+        lines.append('\n⚠️ _Сканирование источников завершилось с таймаутом/ошибкой, показаны текущие данные БД._')
 
-    await safe_edit_markdown_message(msg, '\n'.join(lines))
+    await _safe_publish_report_message(update, msg, '\n'.join(lines))
 
     # Проверка на подозрительные дубли (SMS/Email, близкие суммы)
     try:
@@ -433,20 +480,7 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     За текущий день — принудительное сканирование почт + SMS (фоново)."""
     msg = await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за месяц...')
 
-    # Фоновое сканирование
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, 'daily_cheque_scan.py',
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
-        print(f'[monthexp] scan result:\n{log_text}')
-    except asyncio.TimeoutError:
-        print('[monthexp] scan timeout')
-    except Exception as e:
-        print(f'[monthexp] scan error: {e}')
+    scan_completed, _scan_note = await _run_daily_scan('monthexp')
 
     today = datetime.now()
     month_start = today.strftime('%Y-%m-01')
@@ -500,7 +534,10 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     append_store_totals(lines, rows, '📌 *Всего по магазинам:*')
 
-    await safe_edit_markdown_message(msg, '\n'.join(lines))
+    if not scan_completed:
+        lines.append('\n⚠️ _Сканирование источников завершилось с таймаутом/ошибкой, показаны текущие данные БД._')
+
+    await _safe_publish_report_message(update, msg, '\n'.join(lines))
 
     # Проверка на подозрительные дубли
     try:
