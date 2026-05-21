@@ -222,7 +222,7 @@ CREATE TABLE ml_sources (
 - **Tier-based sorting** в `ml_search_v2.py` (Day 2): результаты сортируются по tier перед canonicalization.
 - **Strict brand gating** в `ml_search_v2.py`: если бренд распознан, в provider уходит только брендовый query.
 - **Dynamic Retailer Discovery** (Day 9): Агент запрашивает через LLM подборку специализированных магазинов для категории (topic) товара. Ссылки сохраняются в `category_retailers` и используются при следующих поисках как высший приоритет.
-- **LLM-адаптивность (роутинг провайдеров)**: Запросы переводятся и формируются не через жестко зашитую нейросеть, а через `call_text_with_fallback`, обеспечивая плавное переключение OpenAI ⇄ Gemini ⇄ xAI без зависаний. Тесты переписаны под семантические проверки, чтобы не падать из-за синонимов (gray/grey, sweater/jumper).
+- **LLM-адаптивность (роутинг провайдеров)**: Запросы переводятся и формируются не через жестко зашитую нейросеть, а через `call_text_with_fallback`, обеспечивая плавное переключение `OpenAI ⇄ Anthropic (Claude Opus) ⇄ DeepSeek ⇄ Gemini ⇄ xAI` без зависаний. Тесты переписаны под семантические проверки, чтобы не падать из-за синонимов (gray/grey, sweater/jumper).
 - **Геолокация источников** (Day 3): `GEO_FOREIGN_SOURCES` по регионам — китайские маркетплейсы доступны в RU/KZ/BY, исключаются в неизвестных регионах. `set_client_geo()` для runtime-config, `_filter_sources_by_geo()` в `route_sources()`.
 
 ### 10. Telegram UX — Pagination (Day 4)
