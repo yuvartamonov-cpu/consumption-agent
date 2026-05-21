@@ -295,16 +295,60 @@ def resolve_brand_links(
 ) -> list[dict]:
     """Возвращает упорядоченные ссылки для бренда.
 
-    Порядок: official > distributor > authorized > brand_page > fallback_search.
+    Порядок: DB user links > DB category retailers > official > distributor > authorized > brand_page > fallback_search.
     Каждый элемент — dict с полями title, url, store, source, tier, _link_only.
 
-    tier: 'official' | 'distributor' | 'authorized' | 'brand_page' | 'search_fallback'
+    tier: 'user_db' | 'category_db' | 'official' | 'distributor' | 'authorized' | 'brand_page' | 'search_fallback'
     """
-    info = lookup_brand(brand)
     out: list[dict] = []
+    
+    # 0. User DB links
+    try:
+        import sqlite3
+        from consumption.db import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT store_name, url FROM user_brand_links WHERE brand = ?", (brand.lower().strip(),)).fetchall()
+        for r in rows:
+            store_name = r[0]
+            url_pattern = r[1]
+            url = url_pattern.replace('{query}', urllib.parse.quote(query)) if '{query}' in url_pattern else url_pattern
+            out.append({
+                'title': f'💾 Из вашей базы: {store_name} ({brand})',
+                'url': url,
+                'store': store_name,
+                'source': 'user_db',
+                'tier': 'user_db',
+                '_link_only': True,
+            })
+        conn.close()
+    except Exception as e:
+        log.warning(f"Failed to fetch user brand links: {e}")
 
-    if not info:
-        # Бренд не в справочнике — делаем web-search fallback
+    # 0.5 Category DB links (LLM discovered)
+    if category:
+        try:
+            from ml_retailer_discovery import get_or_discover_retailers
+            retailers = get_or_discover_retailers(category)
+            for r in retailers:
+                store_name = r['store_name']
+                url_pattern = r['url_template']
+                search_term = query or brand or category
+                url = url_pattern.replace('{query}', urllib.parse.quote(search_term))
+                out.append({
+                    'title': f'🌐 Продавец ({category}): {store_name}',
+                    'url': url,
+                    'store': store_name,
+                    'source': 'category_db',
+                    'tier': 'category_db',
+                    '_link_only': True,
+                })
+        except Exception as e:
+            log.warning(f"Failed to fetch category retailers: {e}")
+
+    info = lookup_brand(brand)
+
+    if not info and not out:
+        # Бренд не в справочнике и нет в БД — делаем web-search fallback
         return _search_fallback_links(brand, query)
 
     search_query = query or brand

@@ -130,7 +130,7 @@ async def _save_memory_lane(update, photo, caption: str) -> bool:
 
         liked = ', '.join(parsed.get('liked', [])) or '—'
         tags = ', '.join(parsed.get('style_tags', [])) or '—'
-        topic = parsed.get('topic') or '—'
+        topic = parsed.get('topic')
         desc = vision_info.get('description', '')
         name = parsed.get('item_name') or vision_info.get('name', '')
         brand = parsed.get('brand') or vision_info.get('brand')
@@ -142,13 +142,36 @@ async def _save_memory_lane(update, photo, caption: str) -> bool:
             parts.append(f'🏷️ Бренд: {brand}')
         parts.append(f'Реакция: {liked}')
         parts.append(f'Стиль: {tags}')
-        parts.append(f'Тема: {topic}')
         if desc:
             parts.append(f'📝 {desc}')
         if vision_info.get('estimated_price_rub'):
             parts.append(f'💰 Оценка: ~{vision_info["estimated_price_rub"]} ₽')
 
-        await update.message.reply_text('\n'.join(parts))
+        conn = get_db()
+        try:
+            all_topics = [r[0] for r in conn.execute("SELECT DISTINCT topic FROM topic_rules WHERE topic IS NOT NULL ORDER BY topic").fetchall()]
+        finally:
+            conn.close()
+
+        kb = None
+        if not topic or topic not in all_topics:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            buttons = []
+            row = []
+            for t in all_topics:
+                row.append(InlineKeyboardButton(t, callback_data=f'ml_set_topic:{item_id}:{t}'))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            
+            kb = InlineKeyboardMarkup(buttons) if buttons else None
+            parts.append("❓ Тема не распознана. Выберите из списка:")
+        else:
+            parts.append(f'Тема: {topic}')
+
+        await update.message.reply_text('\n'.join(parts), reply_markup=kb)
         return True
     except Exception as e:
         log.warning(f'memory_lane save failed: {e}')

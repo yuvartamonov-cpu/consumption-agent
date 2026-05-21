@@ -19,7 +19,7 @@ from bot.markdown import markdown_to_plain_text, safe_edit_markdown_message, saf
 
 log = logging.getLogger(__name__)
 _get_db: Callable[..., Any] | None = None
-SCAN_TIMEOUT_SECONDS = 90
+SCAN_TIMEOUT_SECONDS = 300
 
 
 def configure(*, get_db: Callable[..., Any] | None = None, logger: Any | None = None, shared: dict[str, Any] | None = None) -> None:
@@ -45,11 +45,12 @@ def _project_root() -> str:
     return str(Path(__file__).resolve().parents[2])
 
 
-async def _run_daily_scan(tag: str) -> tuple[bool, str | None]:
-    """Run the daily scan helper with a bounded timeout.
+async def _run_daily_scan(tag: str, msg=None) -> tuple[bool, str | None]:
+    """Run the daily scan helper with a bounded timeout and periodic Telegram updates.
 
     Returns (completed, log_excerpt_or_error).
     """
+    import time
     script_path = os.path.join(_project_root(), 'daily_cheque_scan.py')
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -58,22 +59,35 @@ async def _run_daily_scan(tag: str) -> tuple[bool, str | None]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SCAN_TIMEOUT_SECONDS)
-        log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
-        print(f'[{tag}] scan result:\n{log_text}')
-        return True, log_text
-    except asyncio.TimeoutError:
-        proc.kill()
-        try:
-            await proc.communicate()
-        except Exception:
-            pass
-        print(f'[{tag}] scan timeout after {SCAN_TIMEOUT_SECONDS}s')
-        return False, f'timeout after {SCAN_TIMEOUT_SECONDS}s'
-    except Exception as e:
-        print(f'[{tag}] scan error: {e}')
-        return False, str(e)
+    
+    task = asyncio.create_task(proc.communicate())
+    start_time = time.time()
+    next_alert = 60
+    
+    while True:
+        done, pending = await asyncio.wait([task], timeout=5.0)
+        if done:
+            stdout, stderr = task.result()
+            log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
+            print(f'[{tag}] scan result:\n{log_text}')
+            return True, log_text
+            
+        elapsed = time.time() - start_time
+        if elapsed >= SCAN_TIMEOUT_SECONDS:
+            proc.kill()
+            try:
+                await task
+            except Exception:
+                pass
+            print(f'[{tag}] scan timeout after {SCAN_TIMEOUT_SECONDS}s')
+            return False, f'timeout after {SCAN_TIMEOUT_SECONDS}s'
+            
+        if msg and elapsed >= next_alert:
+            try:
+                await msg.edit_text(f"⏳ Подождите, процесс сканирования ещё продолжается ({int(elapsed)} сек)...")
+            except Exception:
+                pass
+            next_alert += 30
 
 
 async def _safe_publish_report_message(update: Update, msg: Any, text: str) -> None:
@@ -423,7 +437,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     day_label = f'последние {n_days} дн.' if n_days > 1 else 'сегодня'
     msg = await update.message.reply_text(f'🔍 Сканирую почты и SMS за {day_label}...')
 
-    scan_completed, _scan_note = await _run_daily_scan('dayexp')
+    scan_completed, _scan_note = await _run_daily_scan('dayexp', msg)
 
     conn = get_db()
     try:
@@ -484,7 +498,7 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     За текущий день — принудительное сканирование почт + SMS (фоново)."""
     msg = await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за месяц...')
 
-    scan_completed, _scan_note = await _run_daily_scan('monthexp')
+    scan_completed, _scan_note = await _run_daily_scan('monthexp', msg)
 
     today = datetime.now()
     month_start = today.strftime('%Y-%m-01')

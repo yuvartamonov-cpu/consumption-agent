@@ -184,6 +184,7 @@ def calculate_drive_cost(tariff, hours, km):
 | `ml_search_v2.py` | Visual product search v2 + Telegram-пагинация |
 | `ml_providers.py` | WB API + 13 retailers + AliExpress/Alibaba (RU→EN перевод, гео-фильтр) |
 | `ml_official_sites.py` | **Day 2:** resolver official sites / distributors / authorized retailers |
+| `ml_retailer_discovery.py` | LLM-поиск специализированных магазинов и сохранение в `category_retailers` |
 | `ml_watchlist.py` | **Day 5:** price-drop watchlist + cron-проверка цен |
 
 ## Поиск вещей: /items и /items_full

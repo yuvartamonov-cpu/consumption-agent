@@ -90,6 +90,7 @@ CREATE TABLE ml_sources (
 | 9 | Thompson-Sampling Bandit | `ml_bandit.py` | 19 | ✅ Done |
 | 10 | Telegram Integration | `telegram_bot.py` | — | ✅ Done |
 | 11 | CLIP Visual Gate | — | — | 🔲 Not started |
+| 11a | Dynamic Retailer Discovery | `ml_retailer_discovery.py` | — | ✅ Done |
 | 12 | Retrieval / Seller Links | `ml_providers.py` | 25 | ✅ Done (Day 1–3) |
 | 12a | Official/Distributor Resolver | `ml_official_sites.py` | 18 | ✅ Done (Day 2) |
 | 13 | Reverse Image Search | — | — | 🔲 Not started |
@@ -220,10 +221,8 @@ CREATE TABLE ml_sources (
   - Для неизвестных брендов — fallback на Google/Yandex search.
 - **Tier-based sorting** в `ml_search_v2.py` (Day 2): результаты сортируются по tier перед canonicalization.
 - **Strict brand gating** в `ml_search_v2.py`: если бренд распознан, в provider уходит только брендовый query.
-- **Translation layer** для AliExpress / Alibaba (Day 3):
-  - словарь `QUERY_TRANSLATIONS` (200+ слов): одежда, обувь, аксессуары, техника, мебель, косметика, цвета, материалы, fit, сезон, пол, стиль;
-  - стемминг `_stem_lookup()` отрезает окончания русских прилагательных (замшевые → suede, демисезонное → all-season);
-  - служебные слова (купить, цена, недорого) удаляются из foreign queries.
+- **Dynamic Retailer Discovery** (Day 9): Агент запрашивает через LLM подборку специализированных магазинов для категории (topic) товара. Ссылки сохраняются в `category_retailers` и используются при следующих поисках как высший приоритет.
+- **LLM-адаптивность (роутинг провайдеров)**: Запросы переводятся и формируются не через жестко зашитую нейросеть, а через `call_text_with_fallback`, обеспечивая плавное переключение OpenAI ⇄ Gemini ⇄ xAI без зависаний. Тесты переписаны под семантические проверки, чтобы не падать из-за синонимов (gray/grey, sweater/jumper).
 - **Геолокация источников** (Day 3): `GEO_FOREIGN_SOURCES` по регионам — китайские маркетплейсы доступны в RU/KZ/BY, исключаются в неизвестных регионах. `set_client_geo()` для runtime-config, `_filter_sources_by_geo()` в `route_sources()`.
 
 ### 10. Telegram UX — Pagination (Day 4)

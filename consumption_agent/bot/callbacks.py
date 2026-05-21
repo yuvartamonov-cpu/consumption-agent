@@ -1197,7 +1197,7 @@ def register_handlers(app: Any, deps: Any = None) -> None:
     add(app, CallbackQueryHandler(ml_unwatch_callback, pattern=r'^ml_unwatch:\d+$'))
     add(app, CallbackQueryHandler(ml_remind_callback, pattern=r'^ml_remind:\d+$'))
     add(app, CallbackQueryHandler(ml_remind_set_callback, pattern=r'^ml_remind_set:\d+$'))
-    add(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))
+    add(app, CallbackQueryHandler(ml_set_topic_callback, pattern=r'^ml_set_topic:\d+:.+$'))
     add(app, CallbackQueryHandler(vision_reject_callback, pattern=r'^vision_reject$'))
     add(app, CallbackQueryHandler(receipt_category_pick_callback, pattern=r'^rcat_pick:\d+:.+$'))
     add(app, CallbackQueryHandler(receipt_category_reject_callback, pattern=r'^rcat_reject:\d+$'))
@@ -1208,3 +1208,31 @@ def register_handlers(app: Any, deps: Any = None) -> None:
 
     add(app, CallbackQueryHandler(dedup_delete_callback, pattern=r'^dedup_delete:'))
     add(app, CallbackQueryHandler(dedup_keep_callback, pattern=r'^dedup_keep:'))
+
+async def ml_set_topic_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Pattern: ml_set_topic:{item_id}:{topic}
+    parts = query.data.split(':', 2)
+    if len(parts) != 3:
+        return
+        
+    item_id = int(parts[1])
+    topic = parts[2]
+    
+    conn = get_db()
+    try:
+        conn.execute("UPDATE memory_lane_items SET topic = ? WHERE id = ?", (topic, item_id))
+        conn.commit()
+    finally:
+        conn.close()
+        
+    # Remove keyboard and append topic
+    text = query.message.text
+    if "❓ Тема не распознана" in text:
+        text = text.split("❓ Тема не распознана")[0].strip()
+    
+    text += f"\nТема: {topic}"
+    await query.edit_message_text(text)
+    add(app, CallbackQueryHandler(vision_confirm_callback, pattern=r'^vision_confirm$'))

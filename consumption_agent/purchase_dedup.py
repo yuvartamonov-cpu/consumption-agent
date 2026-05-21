@@ -143,12 +143,11 @@ def is_duplicate_purchase(
 
     rows = conn.execute(
         '''
-        SELECT id, total_amount, notes, source, email_message_id
+        SELECT id, total_amount, notes, source, email_message_id, store_name
         FROM purchases
         WHERE purchase_date = ?
-          AND store_name = ?
         ''',
-        (normalized_date, canonical_store),
+        (normalized_date,),
     ).fetchall()
     if not rows:
         return False
@@ -160,6 +159,10 @@ def is_duplicate_purchase(
     current_base = current_total - float(delivery_fee or 0)
 
     for row in rows:
+        db_store = canonical_store_name(row[5])
+        if db_store != canonical_store:
+            continue
+            
         existing_time = extract_event_time(row[2])
         if existing_time:
             time_match = (existing_time == event_time)
