@@ -593,7 +593,17 @@ async def cmd_items_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         kb = InlineKeyboardMarkup([buttons]) if buttons else None
 
-        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        # safe send: Markdown с fallback на plain текст если есть непарные символы
+        try:
+            await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        except Exception as _e:
+            if 'parse entities' not in str(_e).lower():
+                raise
+            log.warning('cmd_items_full Markdown fallback: %s', _e)
+            await update.message.reply_text(
+                markdown_to_plain_text(text),
+                reply_markup=kb,
+            )
 
 async def cmd_set_warranty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if len(ctx.args) != 2:
@@ -652,7 +662,7 @@ async def cmd_items_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('📭 В инвентаре пока нет вещей.')
         return
 
-    from bot.markdown import esc_md
+    from bot.markdown import esc_md, markdown_to_plain_text
     lines = [f'🆕 *Последние {len(rows)} добавленных вещей:*', '']
     for r in rows:
         item_id = r[0]

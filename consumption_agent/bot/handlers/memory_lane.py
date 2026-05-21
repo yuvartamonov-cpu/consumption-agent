@@ -110,7 +110,11 @@ async def cmd_topic_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'\u2705 Обновлено правило: «{keyword}» \u2192 «{topic}»')
 
 async def cmd_topic_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Показать все правила тем: /topic_list [тема]"""
+    """Показать все правила тем: /topic_list [тема]
+
+    Отображает темы из Memory Lane (topic_rules) И категории товаров,
+    сгруппированные по topic_name. Темы синхронизированы с categories.topic_name.
+    """
     try:
         import memory_lane as _ml
     except ImportError:
@@ -122,31 +126,53 @@ async def cmd_topic_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     try:
         rules = _ml.list_topic_rules(conn, topic_filter)
+
+        # Добавляем категории, сгруппированные по темам
+        cats_by_topic = {}
+        for row in conn.execute(
+            "SELECT slug, name, topic_name FROM categories WHERE topic_name IS NOT NULL ORDER BY name"
+        ).fetchall():
+            t = row['topic_name']
+            if topic_filter and topic_filter not in t:
+                continue
+            if t not in cats_by_topic:
+                cats_by_topic[t] = []
+            cats_by_topic[t].append(row['name'])
     finally:
         conn.close()
 
-    if not rules:
+    lines = [f'\U0001f9f9 Темы и категории:']
+
+    # Все уникальные темы (из topic_rules + categories)
+    all_topics = set(r['topic'] for r in rules)
+    all_topics.update(cats_by_topic.keys())
+
+    for topic in sorted(all_topics):
+        topic_rules_kws = [r for r in rules if r['topic'] == topic]
+        topic_cats = cats_by_topic.get(topic, [])
+
+        if not topic_rules_kws and not topic_cats:
+            continue
+
+        lines.append(f'\n\U0001f539 {topic}')
+
+        if topic_cats:
+            lines.append(f'  \U0001f4c2 Категории: {', '.join(topic_cats)}')
+
+        if topic_rules_kws:
+            kws = []
+            for r in topic_rules_kws:
+                icon = '\U0001f3f7' if r['source'] == 'user' else ''
+                kws.append(f"{icon}{r['keyword']}")
+            lines.append(f'  \U0001f50d Ключевые слова: {', '.join(kws)}')
+
+    if not all_topics:
         if topic_filter:
-            await update.message.reply_text(f'Правил для темы «{topic_filter}» не найдено.')
+            await update.message.reply_text(f'Ничего не найдено по фильтру «{topic_filter}».')
         else:
-            await update.message.reply_text('Правил пока нет. Добавьте /topic_set <слово> <тема>')
+            await update.message.reply_text('Нет ни тем, ни категорий. Добавьте /topic_set <слово> <тема>')
         return
 
-    # Группируем по темам
-    groups = {}
-    for r in rules:
-        t = r['topic']
-        if t not in groups:
-            groups[t] = []
-        icon = '\U0001f3f7' if r['source'] == 'user' else ''
-        groups[t].append(f"{icon}{r['keyword']} ({r['usage_count']})")
-
-    lines = [f'\U0001f9f9 Правила тем ({len(rules)}):']
-    for topic in sorted(groups.keys()):
-        kws = ', '.join(groups[topic])
-        lines.append(f'\n\U0001f539 {topic}: {kws}')
-
-    # Разбиваем на части если длинно
     full = '\n'.join(lines)
     if len(full) > 4000:
         for chunk in [full[i:i+4000] for i in range(0, len(full), 4000)]:
