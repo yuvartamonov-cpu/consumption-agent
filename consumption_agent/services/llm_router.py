@@ -18,6 +18,8 @@ log = logging.getLogger(__name__)
 OPENAI_TEXT_MODEL = os.getenv("TEXT_MODEL_OPENAI", "gpt-4o-mini")
 GEMINI_TEXT_MODEL = os.getenv("TEXT_MODEL_GEMINI", "gemini-2.5-flash")
 XAI_TEXT_MODEL = os.getenv("TEXT_MODEL_XAI", "grok-4.20")
+ANTHROPIC_TEXT_MODEL = os.getenv("TEXT_MODEL_ANTHROPIC", "claude-3-opus-20240229")
+DEEPSEEK_TEXT_MODEL = os.getenv("TEXT_MODEL_DEEPSEEK", "deepseek-chat")
 
 
 def _usage_dict(*, input_tokens: int | None = None, output_tokens: int | None = None) -> dict[str, int]:
@@ -178,6 +180,108 @@ def call_gemini_text(
     }
 
 
+
+def call_anthropic_text(
+    *,
+    system_prompt: str | None,
+    user_prompt: str,
+    model: str | None = None,
+    max_tokens: int = 300,
+    temperature: float = 0.1,
+) -> dict[str, Any]:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+    chosen_model = model or ANTHROPIC_TEXT_MODEL
+    messages = [{"role": "user", "content": user_prompt}]
+    
+    payload = {
+        "model": chosen_model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": messages,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+
+    req = urllib_request.Request(
+        url="https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib_error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Anthropic API: HTTP {exc.code} {body}") from exc
+
+    content_data = body.get("content") or []
+    if not content_data:
+        raise RuntimeError(f"Anthropic returned no content: {body}")
+    text = content_data[0].get("text", "").strip()
+    
+    usage_meta = body.get("usage") or {}
+    return {
+        "provider": "anthropic",
+        "model": chosen_model,
+        "text": text,
+        "usage": _usage_dict(
+            input_tokens=usage_meta.get("input_tokens"),
+            output_tokens=usage_meta.get("output_tokens"),
+        ),
+    }
+
+def call_deepseek_text(
+    *,
+    system_prompt: str | None,
+    user_prompt: str,
+    model: str | None = None,
+    max_tokens: int = 300,
+    temperature: float = 0.1,
+    response_mime_type: str = "text/plain",
+) -> dict[str, Any]:
+    import openai
+
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise RuntimeError("DEEPSEEK_API_KEY not set")
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_prompt})
+    chosen_model = model or DEEPSEEK_TEXT_MODEL
+
+    client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com", timeout=30.0)
+    
+    kwargs = {
+        "model": chosen_model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if response_mime_type == "application/json":
+        kwargs["response_format"] = {"type": "json_object"}
+        
+    response = client.chat.completions.create(**kwargs)
+    usage = getattr(response, "usage", None)
+    return {
+        "provider": "deepseek",
+        "model": chosen_model,
+        "text": response.choices[0].message.content.strip(),
+        "usage": _usage_dict(
+            input_tokens=getattr(usage, "prompt_tokens", None),
+            output_tokens=getattr(usage, "completion_tokens", None),
+        ),
+    }
+
 def call_xai_text(
     *,
     system_prompt: str | None,
@@ -222,6 +326,8 @@ def call_text_with_fallback(
     openai_model: str | None = None,
     gemini_model: str | None = None,
     xai_model: str | None = None,
+    anthropic_model: str | None = None,
+    deepseek_model: str | None = None,
     max_tokens: int = 300,
     temperature: float = 0.1,
     response_mime_type: str = "text/plain",
@@ -235,6 +341,21 @@ def call_text_with_fallback(
             model=openai_model,
             max_tokens=max_tokens,
             temperature=temperature,
+        )),
+        ("anthropic", lambda: call_anthropic_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=anthropic_model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )),
+        ("deepseek", lambda: call_deepseek_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=deepseek_model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_mime_type=response_mime_type,
         )),
         ("gemini", lambda: call_gemini_text(
             system_prompt=system_prompt,
