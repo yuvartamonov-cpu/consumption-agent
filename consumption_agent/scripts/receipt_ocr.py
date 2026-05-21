@@ -82,6 +82,15 @@ _NOT_NAME_KEYWORDS = [
     'проверки',
 ]
 
+_RECEIPT_HEADER_MARKERS = (
+    'гостевой счет',
+    'кассовый чек',
+    'товарный чек',
+    'счет',
+    'наименование',
+    'итого',
+)
+
 
 def _is_junk_line(line: str) -> bool:
     """Проверяет, является ли строка мусором OCR."""
@@ -133,6 +142,43 @@ def _is_junk_line(line: str) -> bool:
         return True
 
     return False
+
+
+def _clean_shop_header_line(line: str) -> str:
+    line = re.sub(r'[*#=_]{2,}', ' ', line or '')
+    line = re.sub(r'[-]{2,}', ' ', line)
+    line = re.sub(r'\s+', ' ', line)
+    return line.strip(" -_*#\t")
+
+
+def _extract_shop_from_header(text: str) -> str:
+    lower = text.lower()
+    if not any(marker in lower for marker in _RECEIPT_HEADER_MARKERS):
+        return ''
+
+    header_lines = []
+    for raw_line in text.splitlines()[:8]:
+        line = _clean_shop_header_line(raw_line)
+        if not line:
+            continue
+        line_lower = line.lower()
+        if any(marker in line_lower for marker in _RECEIPT_HEADER_MARKERS[1:]):
+            break
+        header_lines.append(line)
+
+    for line in header_lines:
+        line_lower = line.lower()
+        if len(line) < 3 or len(line) > 40:
+            continue
+        if any(ch.isdigit() for ch in line):
+            continue
+        if ':' in line or 'qr' in line_lower or 'чаевые' in line_lower:
+            continue
+        if _is_junk_line(line):
+            continue
+        return line
+
+    return ''
 
 
 # ─────────────────────────────────────────────────────────────
@@ -508,7 +554,7 @@ def _detect_shop(text: str) -> str:
         return 'Fix Price'
     if 'dns' in lower and 'магазин' in lower:
         return 'DNS'
-    return ''  # не определено
+    return _extract_shop_from_header(text)
 
 
 # ─────────────────────────────────────────────────────────────

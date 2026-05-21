@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from consumption.db import connect
+from scripts.receipt_ocr import ReceiptResult
 from services.receipt_pipeline import (
     StructuredReceipt,
     StructuredReceiptItem,
@@ -195,3 +196,35 @@ def test_apply_keeps_other_when_llm_category_is_low_confidence(tmp_path, monkeyp
     assert len(result.category_reviews) == 1
     assert result.category_reviews[0]["item_name"] == "Неизвестный товар"
     conn.close()
+
+
+def test_image_pipeline_recovers_store_from_ocr_when_vision_returns_unknown(tmp_path, monkeypatch):
+    image_path = tmp_path / "receipt.jpg"
+    image_path.write_bytes(b"fake")
+
+    weak_ocr = ReceiptResult(
+        shop="",
+        date="2026-05-20",
+        total=None,
+        items=[],
+        delivery_cost=0.0,
+        raw_text="Ленинградка\nГОСТЕВОЙ СЧЕТ\nЗал: 1 этаж\nНаименование\nИТОГО К ОПЛАТЕ: 4 690,00",
+        ocr_score=10,
+    )
+
+    monkeypatch.setattr("services.receipt_pipeline.receipt_ocr.process_receipt", lambda _path: weak_ocr)
+    monkeypatch.setattr("services.receipt_pipeline.run_easyocr_text", lambda _path: ("", 0))
+    monkeypatch.setattr(
+        "vision_receipt.recognize_receipt",
+        lambda _path: {
+            "store": "Неизвестный",
+            "date": "2026-05-20",
+            "total": 4690.0,
+            "items": [{"name": "Шурпа", "qty": 1, "price": 790.0}],
+        },
+    )
+
+    receipt = process_source(str(image_path), easyocr_fallback=False, vision_fallback=True)
+
+    assert receipt.store == "Ленинградка"
+    assert receipt.total == 4690.0

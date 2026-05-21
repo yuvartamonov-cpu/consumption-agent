@@ -319,6 +319,11 @@ def is_weak_receipt(receipt: StructuredReceipt, *, min_ocr_score: int = 30) -> b
     return receipt.ocr_score < min_ocr_score or (not receipt.product_items and receipt.total is None)
 
 
+def _is_unknown_store(value: str | None) -> bool:
+    normalized = (value or "").strip().lower()
+    return normalized in {"", "неизвестный", "unknown", "-", "—", "n/a"}
+
+
 def process_source(
     source: str,
     *,
@@ -358,7 +363,12 @@ def process_source(
             from vision_receipt import recognize_receipt
 
             vision = recognize_receipt(source)
-            return receipt_from_vision_result(vision, source_path=source)
+            vision_receipt = receipt_from_vision_result(vision, source_path=source)
+            if _is_unknown_store(vision_receipt.store):
+                inferred_store = receipt_ocr._detect_shop(receipt.raw_text or "")
+                if inferred_store:
+                    vision_receipt.store = inferred_store
+            return vision_receipt
         except Exception as exc:
             receipt.meta["vision_error"] = str(exc)
             log.warning("Vision fallback failed for %s: %s", source, exc)
