@@ -59,11 +59,12 @@ async def _run_daily_scan(tag: str, msg=None) -> tuple[bool, str | None]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    
+
     task = asyncio.create_task(proc.communicate())
     start_time = time.time()
     next_alert = 60
-    
+    alerts_sent = 0
+
     while True:
         done, pending = await asyncio.wait([task], timeout=5.0)
         if done:
@@ -71,7 +72,7 @@ async def _run_daily_scan(tag: str, msg=None) -> tuple[bool, str | None]:
             log_text = (stdout + stderr).decode('utf-8', errors='replace')[:500]
             print(f'[{tag}] scan result:\n{log_text}')
             return True, log_text
-            
+
         elapsed = time.time() - start_time
         if elapsed >= SCAN_TIMEOUT_SECONDS:
             proc.kill()
@@ -81,10 +82,16 @@ async def _run_daily_scan(tag: str, msg=None) -> tuple[bool, str | None]:
                 pass
             print(f'[{tag}] scan timeout after {SCAN_TIMEOUT_SECONDS}s')
             return False, f'timeout after {SCAN_TIMEOUT_SECONDS}s'
-            
+
         if msg and elapsed >= next_alert:
+            alerts_sent += 1
+            progress_text = f"⏳ Подождите, процесс сканирования ещё продолжается ({int(elapsed)} сек)..."
             try:
-                await msg.edit_text(f"⏳ Подождите, процесс сканирования ещё продолжается ({int(elapsed)} сек)...")
+                # Avoid "message is not modified" error by ensuring text changes
+                if alerts_sent == 1:
+                    await msg.edit_text(progress_text)
+                else:
+                    await msg.edit_text(progress_text + f" [{alerts_sent}]")
             except Exception as e:
                 log.warning(f"Failed to edit progress message: {e}")
             next_alert += 30
