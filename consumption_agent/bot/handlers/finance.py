@@ -85,7 +85,11 @@ async def _safe_publish_report_message(update: Update, msg: Any, text: str) -> N
         log.warning('expense report edit failed, fallback to reply_text: %s', e)
 
     try:
-        await update.message.reply_text(markdown_to_plain_text(text))
+        await safe_send_markdown_message(
+            msg.get_bot(),
+            update.effective_chat.id,
+            markdown_to_plain_text(text),
+        )
     except Exception as send_error:
         log.warning('expense report fallback reply failed: %s', send_error)
 
@@ -506,7 +510,11 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
     if not rows:
-        await msg.edit_text(f'📭 За {month_name} (с 1 по {today.day}) покупок не найдено.')
+        await _safe_publish_report_message(
+            update,
+            msg,
+            f'📭 За {month_name} (с 1 по {today.day}) покупок не найдено.',
+        )
         return
 
     grand_total = sum(r[1] or 0 for r in rows)
