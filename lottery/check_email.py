@@ -17,7 +17,7 @@ CONFIG = {
     'imap_host': 'imap.gmail.com',
     'imap_port': 993,
     'user': 'yu.v.artamonov@gmail.com',
-    'password': '[REDACTED_OLD_GMAIL_APP_PASSWORD]',
+    'password': 'kzjjirsrhcsmptoc',
     'senders': ['stoloto'],
     'ozon_senders': ['sender.ozon.ru', 'news.ozon.ru', 'ozontravel@news.ozon.ru'],
     'fonbet_senders': ['fon.bet', 'fonbet'],
@@ -207,8 +207,10 @@ def check_stoloto(mail):
     today = datetime.date.today().strftime('%d-%b-%Y')
     import re
     
-    # Последние 30 дней
-    search_criteria = '(OR ' + ' '.join(f'FROM "{s}"' for s in CONFIG['senders']) + ' SINCE ' + (datetime.date.today() - datetime.timedelta(days=30)).strftime('%d-%b-%Y') + ')'
+    senders_query = ' OR '.join(f'FROM "{s}"' for s in CONFIG['senders'])
+    if len(CONFIG['senders']) > 1:
+        senders_query = f'({senders_query})'
+    search_criteria = f'{senders_query} SINCE {(datetime.date.today() - datetime.timedelta(days=30)).strftime("%d-%b-%Y")}'
     
     status, ids = mail.search(None, search_criteria)
     found = []
