@@ -85,8 +85,8 @@ async def _run_daily_scan(tag: str, msg=None) -> tuple[bool, str | None]:
         if msg and elapsed >= next_alert:
             try:
                 await msg.edit_text(f"⏳ Подождите, процесс сканирования ещё продолжается ({int(elapsed)} сек)...")
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"Failed to edit progress message: {e}")
             next_alert += 30
 
 
@@ -437,7 +437,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     day_label = f'последние {n_days} дн.' if n_days > 1 else 'сегодня'
     msg = await update.message.reply_text(f'🔍 Сканирую почты и SMS за {day_label}...')
 
-    scan_completed, _scan_note = await _run_daily_scan('dayexp', msg)
+    scan_completed, _scan_note = await _run_daily_scan('dayexp', msg=msg)
 
     conn = get_db()
     try:
@@ -498,7 +498,7 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     За текущий день — принудительное сканирование почт + SMS (фоново)."""
     msg = await update.message.reply_text('🔍 Сканирую почты и SMS — собираю данные за месяц...')
 
-    scan_completed, _scan_note = await _run_daily_scan('monthexp', msg)
+    scan_completed, _scan_note = await _run_daily_scan('monthexp', msg=msg)
 
     today = datetime.now()
     month_start = today.strftime('%Y-%m-01')
