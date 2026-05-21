@@ -181,7 +181,7 @@ def scan_sms_expenses(days_back: int = 7) -> List[Dict]:
         return []
     
     expenses = []
-    seen_bodies = set()  # дедупликация по телу SMS
+    seen_messages = set()  # дедупликация между двумя телефонами / повторным индексом
     
     for db_path in db_paths:
         temp_db = copy_db_to_temp(db_path)
@@ -216,11 +216,13 @@ def scan_sms_expenses(days_back: int = 7) -> List[Dict]:
             
             for row in rows:
                 body = row['body']
-                if body in seen_bodies:
+                sender = row['sender'] or ''
+                dedup_key = f'{str(sender).strip().lower()}|{re.sub(r"\\s+", " ", body.strip().lower())}'
+                if dedup_key in seen_messages:
                     continue
-                seen_bodies.add(body)
+                seen_messages.add(dedup_key)
                 
-                parsed = parse_sms_body(body, row['sender'])
+                parsed = parse_sms_body(body, sender)
                 if parsed:
                     # Фильтруем переводы и крупные операции
                     if 'перевод' in body.lower() and parsed['amount'] > 5000:

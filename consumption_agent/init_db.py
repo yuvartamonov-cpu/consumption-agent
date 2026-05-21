@@ -11,6 +11,8 @@ from datetime import date, datetime
 from consumption.db import DB_PATH, connect
 
 OLD_TABLES = ['purchases', 'purchase_items', 'recognized_items', 'cheques_log']
+MANAGED_TABLES = ['subscriptions', 'alerts', 'cheques_log', 'recognized_items_log', 'items',
+                  'purchases', 'categories', 'profiles']
 
 
 def load_old_data(conn):
@@ -327,78 +329,87 @@ def migrate(conn):
     print(f"  Мигрировано: {len(old.get('purchases',[]))} покупок, {len(old.get('purchase_items',[]))} позиций, {len(old.get('recognized_items',[]))} распознанных товаров, {len(old.get('cheques_log',[]))} чеков")
 
 
-def main():
-    # Сначала просто пересоздадим БД, если нужна миграция
-    # Для первого запуска удаляем старые таблицы и создаём новые
-    db_exists = os.path.exists(DB_PATH)
-    
-    conn = connect(DB_PATH)
-    
-    if db_exists and check_is_initialized(conn):
-        ensure_indexes(conn)
-        print("БД уже инициализирована. Пропускаю.")
-        conn.close()
-        return
-    
-    # Загружаем старые данные (если есть)
-    old_data = load_old_data(conn) if db_exists else {}
-    
-    # Пересоздаём схему
-    for tbl in ['subscriptions','alerts','cheques_log','recognized_items_log','items',
-                'purchases','categories','profiles']:
-        conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+def restore_old_data(conn, old_data):
+    """Переносит сохранённые строки из старой схемы в новую."""
+    for table in OLD_TABLES:
+        if table == 'purchases':
+            for p in old_data.get('purchases', []):
+                conn.execute('''
+                    INSERT OR IGNORE INTO purchases 
+                        (id, purchase_date, source, store_name, order_number, email_message_id, receipt_url, notes, data_origin)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (p['id'], p['purchase_date'], p.get('source', 'ozon'),
+                      p.get('store_name', 'Ozon'), p.get('order_number'),
+                      p.get('email_uid'), p.get('receipt_url'), p.get('notes'),
+                      p.get('data_origin', 'local')))
+        elif table == 'purchase_items':
+            for pi in old_data.get('purchase_items', []):
+                conn.execute('''
+                    INSERT OR IGNORE INTO items 
+                        (name, status, purchase_id, purchase_source, data_origin)
+                    VALUES (?, 'in_use', ?, ?, 'local')
+                ''', (pi['name'], pi.get('purchase_id'), 'ozon'))
+        elif table == 'recognized_items':
+            for ri in old_data.get('recognized_items', []):
+                conn.execute('''
+                    INSERT OR IGNORE INTO recognized_items_log 
+                        (source_file, source_type, recognized_product, confidence, notes)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (ri.get('source_file', ''), ri.get('source_type', ''),
+                      ri['recognized_product'], ri.get('confidence', ''),
+                      ri.get('notes', '')))
+        elif table == 'cheques_log':
+            for cl in old_data.get('cheques_log', []):
+                conn.execute('''
+                    INSERT OR IGNORE INTO cheques_log 
+                        (email_uid, source, cheque_date, subject, receipt_url)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (cl.get('email_uid'), 'ozon', cl.get('cheque_date'),
+                      cl.get('subject'), cl.get('receipt_url')))
 
-    
-    create_new_schema(conn)
-    ensure_indexes(conn)
-    ensure_default_profile(conn)
-    seed_categories(conn)
-    
-    if old_data:
-        # Переносим старые данные
-        for table in OLD_TABLES:
-            if table == 'purchases':
-                for p in old_data.get('purchases', []):
-                    conn.execute('''
-                        INSERT OR IGNORE INTO purchases 
-                            (id, purchase_date, source, store_name, order_number, email_message_id, receipt_url, notes, data_origin)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (p['id'], p['purchase_date'], p.get('source', 'ozon'),
-                          p.get('store_name', 'Ozon'), p.get('order_number'),
-                          p.get('email_uid'), p.get('receipt_url'), p.get('notes'),
-                          p.get('data_origin', 'local')))
-            elif table == 'purchase_items':
-                for pi in old_data.get('purchase_items', []):
-                    conn.execute('''
-                        INSERT OR IGNORE INTO items 
-                            (name, status, purchase_id, purchase_source, data_origin)
-                        VALUES (?, 'in_use', ?, ?, 'local')
-                    ''', (pi['name'], pi.get('purchase_id'), 'ozon'))
-            elif table == 'recognized_items':
-                for ri in old_data.get('recognized_items', []):
-                    conn.execute('''
-                        INSERT OR IGNORE INTO recognized_items_log 
-                            (source_file, source_type, recognized_product, confidence, notes)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (ri.get('source_file', ''), ri.get('source_type', ''),
-                          ri['recognized_product'], ri.get('confidence', ''),
-                          ri.get('notes', '')))
-            elif table == 'cheques_log':
-                for cl in old_data.get('cheques_log', []):
-                    conn.execute('''
-                        INSERT OR IGNORE INTO cheques_log 
-                            (email_uid, source, cheque_date, subject, receipt_url)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (cl.get('email_uid'), 'ozon', cl.get('cheque_date'),
-                          cl.get('subject'), cl.get('receipt_url')))
-        
-        conn.commit()
-        print(f"Миграция завершена. Перенесено: {len(old_data.get('purchases',[]))} покупок, {len(old_data.get('purchase_items',[]))} позиций, {len(old_data.get('recognized_items',[]))} распознанных товаров, {len(old_data.get('cheques_log',[]))} чеков")
-    else:
-        conn.commit()
-        print("База данных инициализирована.")
-    
-    conn.close()
+    conn.commit()
+    print(
+        "Миграция завершена. Перенесено: "
+        f"{len(old_data.get('purchases', []))} покупок, "
+        f"{len(old_data.get('purchase_items', []))} позиций, "
+        f"{len(old_data.get('recognized_items', []))} распознанных товаров, "
+        f"{len(old_data.get('cheques_log', []))} чеков"
+    )
+
+
+def initialize_database(db_path=None, force=False):
+    """Создаёт/мигрирует БД. Используется и standalone, и legacy-монолитом."""
+    target_path = db_path or DB_PATH
+    db_exists = os.path.exists(target_path)
+    conn = connect(target_path)
+
+    try:
+        if db_exists and check_is_initialized(conn) and not force:
+            ensure_indexes(conn)
+            print("БД уже инициализирована. Пропускаю.")
+            return
+
+        old_data = load_old_data(conn) if db_exists and not force else {}
+
+        for tbl in MANAGED_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+
+        create_new_schema(conn)
+        ensure_indexes(conn)
+        ensure_default_profile(conn)
+        seed_categories(conn)
+
+        if old_data:
+            restore_old_data(conn, old_data)
+        else:
+            conn.commit()
+            print("База данных инициализирована.")
+    finally:
+        conn.close()
+
+
+def main():
+    initialize_database()
 
 
 if __name__ == '__main__':

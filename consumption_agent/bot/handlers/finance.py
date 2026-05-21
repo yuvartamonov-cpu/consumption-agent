@@ -32,6 +32,22 @@ def get_db(*args: Any, **kwargs: Any) -> Any:
     return _get_db(*args, **kwargs)
 
 
+def _resolve_duplicate_groups(conn: Any, *, days_back: int) -> list[dict[str, Any]]:
+    """Auto-hide obvious duplicates before building the expense report."""
+    try:
+        import purchase_duplicate_detector as pdd
+    except ImportError:
+        return []
+
+    unresolved: list[dict[str, Any]] = []
+    groups = pdd.find_suspected_duplicates(conn, days_back=days_back)
+    for group in groups:
+        resolved = pdd.auto_resolve_if_email_dedup(conn, group)
+        if resolved:
+            unresolved.append(resolved)
+    return unresolved
+
+
 async def cmd_alerts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     rows = conn.execute("SELECT alert_type,title,message FROM alerts WHERE status='pending' ORDER BY created_at").fetchall()
@@ -363,6 +379,7 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     try:
+        unresolved_groups = _resolve_duplicate_groups(conn, days_back=n_days)
         rows = conn.execute("""
             SELECT purchase_date, total_amount, store_name, source, notes
             FROM purchases
@@ -397,23 +414,15 @@ async def cmd_dayexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Проверка на подозрительные дубли (SMS/Email, близкие суммы)
     try:
         import purchase_duplicate_detector as pdd
-        conn = get_db()
-        try:
-            groups = pdd.find_suspected_duplicates(conn, days_back=n_days)
-            for group in groups:
-                resolved = pdd.auto_resolve_if_email_dedup(conn, group)
-                if resolved:
-                    resolved['_conn'] = conn  # для format_duplicate_question
-                    question = pdd.format_duplicate_question(resolved)
-                    kb = pdd.build_duplicate_keyboard(resolved)
-                    await safe_send_markdown_message(
-                        ctx.bot,
-                        update.effective_chat.id,
-                        question,
-                        reply_markup=kb,
-                    )
-        finally:
-            conn.close()
+        for group in unresolved_groups:
+            question = pdd.format_duplicate_question(group)
+            kb = pdd.build_duplicate_keyboard(group)
+            await safe_send_markdown_message(
+                ctx.bot,
+                update.effective_chat.id,
+                question,
+                reply_markup=kb,
+            )
     except ImportError:
         pass
     except Exception as e:
@@ -451,6 +460,7 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     try:
+        unresolved_groups = _resolve_duplicate_groups(conn, days_back=31)
         rows = conn.execute("""
             SELECT purchase_date, total_amount, store_name, source, notes
             FROM purchases
@@ -495,23 +505,15 @@ async def cmd_monthexp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Проверка на подозрительные дубли
     try:
         import purchase_duplicate_detector as pdd
-        conn = get_db()
-        try:
-            groups = pdd.find_suspected_duplicates(conn)
-            for group in groups:
-                resolved = pdd.auto_resolve_if_email_dedup(conn, group)
-                if resolved:
-                    resolved['_conn'] = conn
-                    question = pdd.format_duplicate_question(resolved)
-                    kb = pdd.build_duplicate_keyboard(resolved)
-                    await safe_send_markdown_message(
-                        ctx.bot,
-                        update.effective_chat.id,
-                        question,
-                        reply_markup=kb,
-                    )
-        finally:
-            conn.close()
+        for group in unresolved_groups:
+            question = pdd.format_duplicate_question(group)
+            kb = pdd.build_duplicate_keyboard(group)
+            await safe_send_markdown_message(
+                ctx.bot,
+                update.effective_chat.id,
+                question,
+                reply_markup=kb,
+            )
     except ImportError:
         pass
     except Exception as e:

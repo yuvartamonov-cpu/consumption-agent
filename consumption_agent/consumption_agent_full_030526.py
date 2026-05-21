@@ -115,52 +115,6 @@ try:
     from rapidfuzz import fuzz as _fuzz; HAS_FUZZ = True
 except ImportError:
     HAS_FUZZ = False
-try:
-    from fpdf import FPDF; HAS_PDF = True
-except ImportError:
-    HAS_PDF = False
-
-# ───────────────────────────────────────────────────────────────
-# 1. СХЕМА БД
-# ───────────────────────────────────────────────────────────────
-SCHEMA = '''
-PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
-CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY DEFAULT 'default', name TEXT DEFAULT 'Default', currency TEXT DEFAULT 'RUB', timezone TEXT DEFAULT 'Europe/Moscow', notification_config TEXT DEFAULT '{}', created_at TEXT DEFAULT (datetime("now")), updated_at TEXT DEFAULT (datetime("now")));
-CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES categories(id), name TEXT NOT NULL, slug TEXT NOT NULL, sort_order INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime("now")));
-CREATE TABLE IF NOT EXISTS purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', purchase_date TEXT NOT NULL, total_amount REAL, currency TEXT DEFAULT 'RUB', payment_method TEXT, source TEXT, store_name TEXT, order_number TEXT, receipt_url TEXT, email_message_id TEXT UNIQUE, notes TEXT, data_origin TEXT DEFAULT 'local', created_at TEXT DEFAULT (datetime("now")), deleted_at TEXT);
-CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', category_id TEXT REFERENCES categories(id), name TEXT NOT NULL, brand TEXT, model TEXT, sku TEXT, description TEXT, attributes TEXT DEFAULT '{}', status TEXT DEFAULT 'in_use' CHECK (status IN ('wishlist','in_use','low_stock','storage','expired','broken','disposed','replaced')), quantity INTEGER DEFAULT 1, unit TEXT, remaining REAL, purchase_date TEXT, purchase_price REAL, purchase_currency TEXT DEFAULT 'RUB', purchase_source TEXT, purchase_url TEXT, purchase_id INTEGER REFERENCES purchases(id), warranty_months INTEGER, expiry_date TEXT, lifespan_months INTEGER, priority TEXT CHECK (priority IN ('critical','must','planned','backlog','wish')), target_price REAL, current_price REAL, price_tracking INTEGER DEFAULT 0, discovery_source TEXT, replaces_id INTEGER REFERENCES items(id), notes TEXT, tags TEXT DEFAULT '[]', data_origin TEXT DEFAULT 'local', created_at TEXT DEFAULT (datetime("now")), updated_at TEXT DEFAULT (datetime("now")), deleted_at TEXT);
-CREATE TABLE IF NOT EXISTS recognized_items_log (id INTEGER PRIMARY KEY AUTOINCREMENT, source_file TEXT NOT NULL, source_type TEXT NOT NULL, recognized_product TEXT NOT NULL, confidence TEXT, matched_item_id INTEGER REFERENCES items(id), notes TEXT, imported_at TEXT DEFAULT (datetime("now")));
-CREATE TABLE IF NOT EXISTS cheques_log (id INTEGER PRIMARY KEY AUTOINCREMENT, email_uid TEXT UNIQUE, source TEXT DEFAULT 'ozon', cheque_date TEXT, subject TEXT, receipt_url TEXT, imported_at TEXT DEFAULT (datetime("now")));
-CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', item_id INTEGER REFERENCES items(id), purchase_id INTEGER REFERENCES purchases(id), alert_type TEXT NOT NULL CHECK (alert_type IN ('warranty_expiring','warranty_expired','expiry_approaching','expired','low_stock','price_drop','seasonal_reminder','dependency_alert','budget_warning','replace_reminder')), title TEXT NOT NULL, message TEXT, scheduled_at TEXT, sent_at TEXT, status TEXT DEFAULT 'pending' CHECK (status IN ('pending','sent','dismissed','actioned')), created_at TEXT DEFAULT (datetime("now")));
-CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, provider TEXT, price_monthly REAL, price_yearly REAL, currency TEXT DEFAULT 'RUB', billing_date INTEGER, next_billing TEXT, status TEXT DEFAULT 'active' CHECK (status IN ('active','paused','cancelled','expired')), auto_renew INTEGER DEFAULT 1, notes TEXT, created_at TEXT DEFAULT (datetime("now")));
-CREATE INDEX IF NOT EXISTS idx_items_deleted ON items(deleted_at);
-CREATE INDEX IF NOT EXISTS idx_items_category ON items(category_id);
-CREATE INDEX IF NOT EXISTS idx_items_purchase ON items(purchase_id);
-CREATE INDEX IF NOT EXISTS idx_items_warranty ON items(warranty_months) WHERE warranty_months IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_items_lifespan ON items(lifespan_months) WHERE lifespan_months IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_purchases_deleted ON purchases(deleted_at);
-CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
-'''
-
-CATS = [
-    ('cat_clothing',None,'Одежда и обувь','clothing',10), ('cat_tech',None,'Техника и электроника','tech',20),
-    ('cat_food',None,'Продукты питания','food',30), ('cat_cosmetics',None,'Косметика и уход','cosmetics',40),
-    ('cat_health',None,'Здоровье и аптека','health',50), ('cat_home',None,'Дом и ремонт','home',60),
-    ('cat_sports',None,'Спорт и активный отдых','sports',70), ('cat_auto',None,'Авто и транспорт','auto',80),
-    ('cat_hobbies',None,'Хобби и развлечения','hobbies',90), ('cat_digital',None,'Цифровое','digital',100),
-    ('cat_pets',None,'Животные','pets',110), ('cat_subscriptions',None,'Подписки','subscriptions',120),
-    ('cat_clo_outer','cat_clothing','Верхняя одежда','outerwear',1), ('cat_clo_everyday','cat_clothing','Повседневная одежда','everyday',2),
-    ('cat_clo_shoes','cat_clothing','Обувь','shoes',3), ('cat_clo_access','cat_clothing','Аксессуары','accessories',4),
-    ('cat_clo_underwear','cat_clothing','Бельё и домашнее','underwear',5), ('cat_tech_comp','cat_tech','Компьютеры и планшеты','computers',1),
-    ('cat_tech_audio','cat_tech','Аудио и видео','audio_video',2), ('cat_tech_phone','cat_tech','Телефоны и носимые','phones',3),
-    ('cat_tech_appl','cat_tech','Бытовые приборы','appliances',4), ('cat_tech_kitchen','cat_tech','Кухонная техника','kitchen',5),
-    ('cat_pets_food','cat_pets','Корм для животных','pet_food',1), ('cat_pets_med','cat_pets','Ветеринария','vet',2),
-    ('cat_pets_access','cat_pets','Зоотовары','pet_access',3), ('cat_home_furn','cat_home','Мебель','furniture',1),
-    ('cat_home_decor','cat_home','Декор','decor',2), ('cat_home_kitchen','cat_home','Кухня и хранение','home_kitchen',3),
-    ('cat_sport','cat_sports','Спортивные товары','sport_goods',1), ('cat_culture_books','cat_hobbies','Книги и культура','books',1),
-    ('cat_sexual','cat_hobbies','Интимные товары','sexual',2), ('cat_other','cat_hobbies','Прочее','other',99),
-    ('cat_health_med','cat_health','Лекарства','medicine',1), ('cat_health_vit','cat_health','Витамины и БАДы','vitamins',2),
-]
 
 # ───────────────────────────────────────────────────────────────
 # 2. ФУНКЦИИ
@@ -207,23 +161,9 @@ def _is_garbage(text):
 # ───────────────────────────────────────────────────────────────
 
 def cmd_init(args):
-    conn = sqlite3.connect(args.db or DB_PATH)
-    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='profiles'").fetchone() and not args.force:
-        print('БД уже инициализирована. Используйте --force.'); conn.close(); return
-    if args.force:
-        for t in ['subscriptions','alerts','cheques_log','recognized_items_log','items','purchases','categories','profiles']:
-            conn.execute(f'DROP TABLE IF EXISTS {t}')
-    conn.executescript(SCHEMA)
-    # Добавляем колонку is_delivery в items, если её нет
-    try:
-        conn.execute("ALTER TABLE items ADD COLUMN is_delivery INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    conn.execute("INSERT OR IGNORE INTO profiles (id,name) VALUES ('default','Default')")
-    for c in CATS:
-        conn.execute("INSERT OR IGNORE INTO categories (id,parent_id,name,slug,sort_order) VALUES (?,?,?,?,?)", c)
-    conn.commit(); conn.close()
-    print(f'БД инициализирована: {args.db or DB_PATH}')
+    from init_db import initialize_database
+
+    initialize_database(args.db or DB_PATH, force=args.force)
 
 
 def _dedup_senders_by_from(senders):
@@ -952,109 +892,10 @@ def cmd_check(args):
 # ───────────────────────────────────────────────────────────────
 
 def cmd_report(args):
-    if not HAS_PDF: print('Установите fpdf2: pip install fpdf2'); return
-    if not os.path.exists(FONT_DIR): print(f'Шрифты не найдены в {FONT_DIR}'); return
-    db_path = args.db or DB_PATH
-    if not os.path.exists(db_path): print(f'БД не найдена: {db_path}'); return
+    from gen_report import generate_report
 
-    class R(FPDF):
-        def __init__(s):
-            super().__init__()
-            s.add_font('DJV','',os.path.join(FONT_DIR,'DejaVuSans.ttf'))
-            s.add_font('DJV','B',os.path.join(FONT_DIR,'DejaVuSans-Bold.ttf'))
-            s.add_font('DJV','I',os.path.join(FONT_DIR,'DejaVuSansMono-Oblique.ttf'))
-        def header(s):
-            s.set_font('DJV','B',9); s.cell(0,6,'Consumption Agent \u2014 Project Status Report',align='C',new_x='LMARGIN',new_y='NEXT'); s.ln(8)
-        def footer(s):
-            s.set_y(-15); s.set_font('DJV','I',7)
-            s.cell(0,8,f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}  |  Page {s.page_no()}/{{nb}}',align='C',new_x='LMARGIN',new_y='NEXT')
-        def h1(s,t): s.set_font('DJV','B',13); s.set_fill_color(40,60,90); s.set_text_color(255,255,255); s.cell(0,8,f'  {t}',fill=True,new_x='LMARGIN',new_y='NEXT'); s.ln(4)
-        def h2(s,t): s.set_font('DJV','B',10); s.set_text_color(40,60,90); s.cell(0,6,t,new_x='LMARGIN',new_y='NEXT'); s.ln(2)
-        def bd(s,t,sz=8.5): s.set_font('DJV','',sz); s.set_text_color(30,30,30); s.multi_cell(0,4.5,t); s.ln(1)
-        def kv(s,k,v): s.set_font('DJV','B',8.5); s.set_text_color(50,50,50); s.cell(55,5,f'{k}: '); s.set_font('DJV','',8.5); s.set_text_color(30,30,30); s.cell(0,5,str(v),new_x='LMARGIN',new_y='NEXT')
-        def th(s,cols,ws): s.set_font('DJV','B',7); s.set_fill_color(50,70,100); s.set_text_color(255,255,255); [s.cell(ws[i],5,c,border=1,fill=True,align='C') for i,c in enumerate(cols)]; s.ln()
-        def tr(s,cells,ws,fill=False):
-            s.set_font('DJV','',7); s.set_text_color(30,30,30)
-            s.set_fill_color(240,243,248) if fill else s.set_fill_color(255,255,255)
-            for i,c in enumerate(cells): s.cell(ws[i],5,str(c)[:60],border=1,fill=fill)
-            s.ln()
-        def info(s,t,c,color=(230,240,250)):
-            s.set_fill_color(*color); s.set_draw_color(180,190,210); s.set_font('DJV','B',8.5); s.set_text_color(40,60,90)
-            s.cell(0,5,f'  {t}',fill=True,new_x='LMARGIN',new_y='NEXT',border='TLR')
-            s.set_font('DJV','',7.5); s.set_text_color(50,50,50); s.multi_cell(0,4.5,f'  {c}',fill=True,border='BLR'); s.ln(3)
-
-    db = sqlite3.connect(db_path); db.row_factory = sqlite3.Row
-    pdf = R(); pdf.alias_nb_pages(); pdf.set_auto_page_break(auto=True,margin=20); pdf.add_page()
-    pdf.ln(15)
-    pdf.set_font('DJV','B',22); pdf.set_text_color(40,60,90); pdf.cell(0,10,'Consumption Agent',align='C',new_x='LMARGIN',new_y='NEXT')
-    pdf.set_font('DJV','',10); pdf.set_text_color(80,80,80)
-    pdf.cell(0,6,'Persistent Inventory & Lifecycle Tracking System',align='C',new_x='LMARGIN',new_y='NEXT')
-    pdf.cell(0,6,f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} MSK',align='C',new_x='LMARGIN',new_y='NEXT'); pdf.ln(10)
-
-    stats = {}
-    for q,k in [
-        ("SELECT COUNT(*) FROM items WHERE deleted_at IS NULL","items"),
-        ("SELECT COUNT(*) FROM purchases WHERE deleted_at IS NULL","purchases"),
-        ("SELECT COUNT(*) FROM categories","cats"),
-    ]:
-        stats[k] = db.execute(q).fetchone()[0]
-
-    pdf.h1('Executive Summary')
-    pdf.info('Project Overview','Consumption Agent \u2014 inventory & lifecycle tracking system.')
-    pdf.h2('Key Metrics')
-    for k,v in stats.items(): pdf.kv(k,v)
-
-    pdf.add_page(); pdf.h1('Purchases')
-    pdf.th(['ID','Date','Store','Amount','Items'],[8,22,30,20,20])
-    alt = False
-    for i,r in enumerate(db.execute('SELECT p.id,p.purchase_date,p.store_name,p.total_amount,COUNT(i.id) as ic FROM purchases p LEFT JOIN items i ON i.purchase_id=p.id AND i.deleted_at IS NULL WHERE p.deleted_at IS NULL GROUP BY p.id ORDER BY p.purchase_date DESC').fetchall()):
-        pdf.tr([r['id'],(r['purchase_date'] or '')[:10],(r['store_name'] or '')[:10],f'{r["total_amount"]:.0f}' if r['total_amount'] else '-',str(r['ic'] or 0)],[8,22,30,20,20],fill=alt); alt = not alt
-
-    # Items by category
-    pdf.add_page(); pdf.h1('Items by Category')
-    cats_items = db.execute('SELECT c.name AS cat, COUNT(i.id) AS cnt, SUM(COALESCE(i.purchase_price,0)) AS total FROM items i JOIN categories c ON i.category_id=c.id WHERE i.deleted_at IS NULL GROUP BY c.name ORDER BY cnt DESC').fetchall()
-    pdf.th(['Category','Count','Total ₽'],[70,20,20])
-    alt = False
-    for r in cats_items:
-        pdf.tr([r['cat'][:50],str(r['cnt']),f'{r["total"]:.0f}'],[70,20,20],fill=alt); alt = not alt
-
-    # Top 10 most expensive items
-    pdf.ln(6)
-    pdf.h2('Top 10 Most Expensive Items')
-    top_items = db.execute('SELECT i.name,i.purchase_price,c.name AS cat FROM items i LEFT JOIN categories c ON i.category_id=c.id WHERE i.deleted_at IS NULL AND i.purchase_price IS NOT NULL ORDER BY i.purchase_price DESC LIMIT 10').fetchall()
-    if top_items:
-        pdf.th(['Name','Price ₽','Category'],[60,20,30])
-        alt = False
-        for r in top_items:
-            pdf.tr([r['name'][:55],f'{r["purchase_price"]:.0f}',r['cat'][:25]],[60,20,30],fill=alt); alt = not alt
-
-    # Active alerts
-    pdf.add_page(); pdf.h1('Active Alerts')
-    alerts = db.execute("SELECT alert_type,title,message,created_at FROM alerts WHERE status='pending' ORDER BY created_at DESC").fetchall()
-    if alerts:
-        pdf.th(['Type','Title','Message','Created'],[25,45,45,20])
-        alt = False
-        for r in alerts:
-            pdf.tr([r['alert_type'][:15],r['title'][:40],r['message'][:40],(r['created_at'] or '')[:10]],[25,45,45,20],fill=alt); alt = not alt
-    else:
-        pdf.bd('No active alerts. All warranties and expiry dates are current.')
-
-    # Warranty summary
-    pdf.ln(6)
-    pdf.h2('Warranty Coverage')
-    wr = db.execute("SELECT COUNT(*) AS cnt FROM items WHERE warranty_months IS NOT NULL AND deleted_at IS NULL").fetchone()
-    we = db.execute("SELECT COUNT(*) AS cnt FROM items WHERE warranty_months IS NOT NULL AND purchase_date IS NOT NULL AND deleted_at IS NULL AND date(purchase_date,'+'||warranty_months||' months') <= date('now')").fetchone()
-    pdf.bd(f'Items with warranty: {wr["cnt"]}  |  Expired warranties: {we["cnt"]}')
-
-    # OCR matching summary
-    pdf.ln(4)
-    pdf.h2('OCR & Recognition')
-    ocr_t = db.execute('SELECT COUNT(*) AS cnt FROM recognized_items_log').fetchone()['cnt']
-    ocr_m = db.execute('SELECT COUNT(*) AS cnt FROM recognized_items_log WHERE matched_item_id IS NOT NULL').fetchone()['cnt']
-    pdf.bd(f'Total recognized: {ocr_t}  |  Matched to items: {ocr_m}  |  Precision: {100*ocr_m//ocr_t if ocr_t else 0}%')
-
-    db.close(); pdf.output(REPORT_PATH)
-    print(f'PDF: {REPORT_PATH}')
+    report_path = generate_report(db_path=args.db or DB_PATH, report_path=REPORT_PATH)
+    print(f'PDF: {report_path}')
 
 
 def cmd_all_safe(args):

@@ -143,6 +143,57 @@ def find_suspected_duplicates(
             'purchases': purchases,
         })
 
+    # --- Режим 1b: один источник + одна дата + одна сумма, но магазин "Неизвестный"
+    # и нормальный магазин одновременно. Это типичный дубль photo/OCR потока.
+    unknown_rows = conn.execute(
+        """
+        SELECT purchase_date, source, total_amount, COUNT(*) as cnt,
+               GROUP_CONCAT(
+                   id || char(30) || COALESCE(source,'?') || char(30) || COALESCE(store_name,'') || char(30) || COALESCE(ROUND(total_amount, 2), '0'),
+                   char(31)
+               ) as id_src_store_amt
+        FROM purchases
+        WHERE purchase_date >= date('now', ?)
+          AND deleted_at IS NULL
+          AND total_amount IS NOT NULL
+          AND total_amount > 0
+          AND source IS NOT NULL
+          AND source != ''
+        GROUP BY purchase_date, source, total_amount
+        HAVING cnt >= 2
+        ORDER BY purchase_date DESC, total_amount DESC
+        """,
+        (f'-{days_back} days',),
+    ).fetchall()
+
+    for r in unknown_rows:
+        raw_pairs = _row_val(r, 'id_src_store_amt', 4)
+        purchases = []
+        stores = []
+        for pair in raw_pairs.split(chr(31)):
+            parts = pair.split(chr(30))
+            pid = int(parts[0])
+            src = parts[1] if len(parts) > 1 else '?'
+            store = parts[2] if len(parts) > 2 else ''
+            amt = float(parts[3]) if len(parts) > 3 else 0.0
+            purchases.append({'id': pid, 'source': src, 'amount': amt, 'store_name': store})
+            stores.append((store or '').strip())
+
+        if 'Неизвестный' not in stores:
+            continue
+        named_stores = [store for store in stores if store and store != 'Неизвестный']
+        if not named_stores:
+            continue
+
+        groups.append({
+            'purchase_date': _row_val(r, 'purchase_date', 0),
+            'store_name': named_stores[0],
+            'total_amount': float(_row_val(r, 'total_amount', 2)),
+            'count': len(purchases),
+            'purchases': purchases,
+            'prefer_named_store': True,
+        })
+
     # --- Режим 2: один день + один магазин + близкие суммы из разных источников ---
     store_rows = conn.execute(
         """
@@ -241,6 +292,22 @@ def auto_resolve_if_email_dedup(
     Если в группе SMS+email с близкими суммами - не авто-решаем."""
     if group['count'] < 2:
         return None
+
+    if group.get('prefer_named_store'):
+        named = [p for p in group['purchases'] if p.get('store_name') and p.get('store_name') != 'Неизвестный']
+        unknown = [p for p in group['purchases'] if p.get('store_name') == 'Неизвестный']
+        if named and unknown:
+            for p in unknown:
+                conn.execute(
+                    'UPDATE purchases SET deleted_at = datetime("now") WHERE id = ? AND deleted_at IS NULL',
+                    (p['id'],),
+                )
+                log.info(
+                    "auto-dedup: deleted #%s (unknown store), kept named store candidate",
+                    p['id'],
+                )
+            conn.commit()
+            return None
 
     # Группируем по источнику
     by_source: dict[str, list] = {}

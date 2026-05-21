@@ -16,6 +16,8 @@ STORE_ALIASES = (
     (('умный ритейл', 'умныи ритеил', 'умный ритеил', 'smart retail', 'samokat', 'самокат'), 'Самокат'),
     (('sberchaevye', 'sbertips', 'сберчаевые'), 'СберЧаевые'),
     (('гку ампп', 'ампп'), 'ГКУ "АМПП"'),
+    (('яндекс плюс', 'яндексплюс', 'yandex plus', 'yandexplus'), 'Яндекс Плюс'),
+    (('интернет решения', 'internet resheniya', 'ooo internet resheniya'), 'Ozon'),
 )
 
 DUPLICATE_HIDDEN_MARKER = '[duplicate_hidden]'

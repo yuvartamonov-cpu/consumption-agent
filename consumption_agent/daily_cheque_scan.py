@@ -117,6 +117,69 @@ TARGET_SENDERS = [
     (['transit', 'транзит', 'электронная накладная'], 'Платные дороги'),
 ]
 
+STRICT_AMOUNT_PATTERNS = [
+    r'(?:итого|итог|сумма заказа|сумма к оплате|к оплате|оплачено|оплата|списание|списано|платеж|покупка|order total|amount charged)[:\s]*([\d\s]+[.,]?\d*)\s*(?:₽|руб|р\.|rub)',
+]
+
+GENERIC_RECEIPT_MARKERS = (
+    'кассовый чек',
+    'электронный чек',
+    'receipt',
+    'чек',
+    'оплата',
+    'оплачено',
+    'платеж',
+    'покупка',
+    'списание',
+    'списано',
+    'итого',
+    'к оплате',
+)
+
+GENERIC_MARKETING_MARKERS = (
+    'промокод',
+    'скидк',
+    'акци',
+    'подборк',
+    'новинки',
+    'подар',
+    'кэшбэк',
+    'кешбэк',
+    'балл',
+    'бонус',
+    'выгод',
+    'распродаж',
+    'подпишитесь',
+    'рекомендуем',
+    'советуем',
+)
+
+STORE_RULES = {
+    'Яндекс Плюс': {
+        'must_have_any': (
+            'списан',
+            'списали',
+            'списание',
+            'оплата',
+            'оплачено',
+            'платеж',
+            'автопродлен',
+            'автопродление',
+            'продлен',
+            'продлена',
+            'электронный чек',
+            'кассовый чек',
+        ),
+        'block_if_any': GENERIC_MARKETING_MARKERS + (
+            'кинопоиск',
+            'новинки мая',
+            'чем заняться',
+            'сериал',
+            'фильм',
+        ),
+    },
+}
+
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================
@@ -138,6 +201,48 @@ def decode_mime(s):
 def normalize_sender(from_val):
     m = re.search(r'<([^>]+)>', from_val)
     return (m.group(1) if m else from_val).lower().strip()
+
+
+def _normalize_text_for_filter(value):
+    return re.sub(r'\s+', ' ', (value or '').replace('\xa0', ' ').lower()).strip()
+
+
+def _has_any_marker(text, markers):
+    return any(marker in text for marker in markers)
+
+
+def looks_like_marketing_email(subject, body='', html=''):
+    subject_text = _normalize_text_for_filter(subject)
+    full_text = _normalize_text_for_filter(f'{subject} {body} {html}')
+    if not full_text:
+        return False
+    if _has_any_marker(subject_text, GENERIC_MARKETING_MARKERS):
+        return True
+    return _has_any_marker(full_text, GENERIC_MARKETING_MARKERS) and not _has_any_marker(full_text, GENERIC_RECEIPT_MARKERS)
+
+
+def should_accept_sender_detected_purchase(store_name, subject, body='', html=''):
+    full_text = _normalize_text_for_filter(f'{subject} {body} {html}')
+    if not full_text:
+        return False
+    if looks_like_marketing_email(subject, body, html):
+        return False
+
+    rules = STORE_RULES.get(store_name, {})
+    must_have_any = rules.get('must_have_any', GENERIC_RECEIPT_MARKERS)
+    block_if_any = rules.get('block_if_any', ())
+
+    if not _has_any_marker(full_text, must_have_any):
+        return False
+    if block_if_any and _has_any_marker(full_text, block_if_any):
+        return False
+    return True
+
+
+def build_sms_dedup_key(from_addr, body):
+    normalized_sender = _normalize_text_for_filter(from_addr)
+    normalized_body = _normalize_text_for_filter(body)
+    return f'{normalized_sender}|{normalized_body}'
 
 
 def is_already_imported(conn, date_str, amount, store_name, *, event_time=None, email_msg_id=None, delivery_fee=None):
@@ -252,23 +357,11 @@ def parse_ofd_cheque(html):
 def extract_amount_from_body(body, html):
     """Извлекает сумму из тела письма (для магазинов без ОФД)."""
     text = f"{body} {html}"
-    patterns = [
-        r'(?:Итого|Сумма|К? ?оплате|Всего|Order total)[:\s]*([\d\s]+[.,]?\d*)\s*(?:₽|руб|р\.|rub)',
-        r'(?:к оплате|оплачено)[:\s]*([\d\s]+[.,]?\d*)\s*(?:₽|руб|р\.)',
-    ]
-    for pat in patterns:
+    for pat in STRICT_AMOUNT_PATTERNS:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
             try: return float(m.group(1).replace(' ', '').replace(',', '.'))
             except: pass
-    
-    # просто первое число с ₽
-    nums = re.findall(r'([\d\s]+[.,]?\d*)\s*(?:₽|руб|р\.)', text)
-    if nums:
-        try:
-            parsed = [float(n.replace(' ', '').replace(',', '.')) for n in nums if n.strip()]
-            return max(parsed) if parsed else None
-        except: pass
     return None
 
 
@@ -426,22 +519,26 @@ def scan_mailbox(config, conn):
                             delivery_fee = None
                     
                     # 3. Яндекс Плюс
-                    if not store_name and ('yandex plus' in full_text or 'яндекс плюс' in full_text):
-                        store_name = canonical_store_name('Яндекс Плюс')
-                        total = extract_amount_from_body(body, html)
-                        if not total:
-                            if 'подписк' in full_text or 'plus' in full_text:
-                                total = 449.0
-                        delivery_fee = None
+                    if not store_name and ('yandex plus' in full_text or 'яндекс плюс' in full_text or 'яндексплюс' in full_text):
+                        if should_accept_sender_detected_purchase('Яндекс Плюс', subj_val, body, html):
+                            store_name = canonical_store_name('Яндекс Плюс')
+                            total = extract_amount_from_body(body, html)
+                            delivery_fee = None
+                        else:
+                            log.info(f"   ⏭ Пропущено как маркетинг/не чек: {subj_val[:60]}")
                     
                     # 4. Определение магазина по отправителю
                     if not store_name:
                         sender_subj = (sender_email + ' ' + subj_val.lower()).lower()
                         for keywords, sname in TARGET_SENDERS:
                             if any(kw in sender_subj for kw in keywords):
-                                store_name = canonical_store_name(sname)
-                                total = extract_amount_from_body(body, html)
-                                delivery_fee = None
+                                candidate_store = canonical_store_name(sname)
+                                if should_accept_sender_detected_purchase(candidate_store, subj_val, body, html):
+                                    store_name = candidate_store
+                                    total = extract_amount_from_body(body, html)
+                                    delivery_fee = None
+                                else:
+                                    log.info(f"   ⏭ Пропущено как маркетинг/не чек: {subj_val[:60]}")
                                 break
                     
                     # 5. Если магазин определён — добавляем
@@ -572,6 +669,7 @@ def scan_sms_today(parent_conn):
         return 0
     
     total_added = 0
+    seen_sms_keys = set()
     for db_path in db_paths:
         log.info(f"   📱 Phone Link: {db_path}")
         local_db = copy_db_bundle(db_path)
@@ -612,6 +710,11 @@ def scan_sms_today(parent_conn):
 
                 if not body.strip():
                     continue
+
+                sms_dedup_key = build_sms_dedup_key(from_addr, body)
+                if sms_dedup_key in seen_sms_keys:
+                    continue
+                seen_sms_keys.add(sms_dedup_key)
 
                 text = f"{from_addr} {body}".lower()
 
@@ -668,8 +771,8 @@ def scan_sms_today(parent_conn):
 
                 store = canonical_store_name(store)
 
-                if amount > 10000 and store == 'SMS payment':
-                    log.info(f"   ⏭ SMS пропущен (крупная сумма, не расход): {amount:.0f} ₽")
+                if store == 'SMS payment':
+                    log.info("   ⏭ SMS пропущен (generic SMS payment без уверенного магазина)")
                     continue
 
                 sms_found += 1
@@ -719,14 +822,8 @@ def main():
         except Exception as e:
             log.error(f"❌ {cfg['name']}: {e}")
     
-    # 2. SMS (Phone Link) — старая логика
-    try:
-        log.info("📱 SMS (Phone Link)...")
-        total += scan_sms_today(conn)
-    except Exception as e:
-        log.error(f"❌ SMS: {e}")
-    
-    # 2.1. SMS через sms_expense_monitor (новая логика для всех банков)
+    # 2. SMS через sms_expense_monitor — единственный authoritative-конвейер.
+    # Старая scan_sms_today() давала дубли при параллельном запуске с monitor.
     try:
         log.info("📱 SMS Expense Monitor (все банки)...")
         # Импортируем и запускаем

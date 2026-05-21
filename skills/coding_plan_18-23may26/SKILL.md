@@ -15,22 +15,21 @@ skills/coding_plan_18-23may26/references/week_plan.md
 
 ## Current Baseline
 
-**Updated 18.05.2026 evening — Days 1–4 ahead of schedule.**
+**Updated 21.05.2026 afternoon.**
 
-- Current synchronized commit: `6278ba8 feat: LLM-translate, source matcher, smart source routing`.
-- `master`, `origin/master`, `github/master`, `gh-consumption/master`, `github-consumption/master` in sync.
-- `telegram_bot.py` shrunk from ~3 485 → **1 274 lines** (target ≤1500 already met).
-- `bot/` module structure complete: `app.py`, `callbacks.py` (865), `markdown.py`, `ui.py`, and `bot/handlers/{help,finance,items,memory_lane,carsharing}.py`.
-- `bot/handlers/photos.py` is **still a 10-line placeholder** — `photo_handler` (~543 lines) lives in `telegram_bot.py`.
-- `services/photo_pipeline.py` does **not exist yet** — receipt_pipeline, ocr, images are in place.
+- Telegram split moved further: `telegram_bot.py` is down to ~720 lines and acts mainly as entrypoint/shared wiring.
+- `bot/handlers/photos.py` is no longer a placeholder; photo/tag/text flow lives there, with heavy reusable logic in `services/photo_pipeline.py`.
+- `services/photo_pipeline.py` exists and is part of the active production path.
 - `repositories/`: `alerts.py`, `credit.py`, `items.py`, `purchases.py`, `media.py` exist.
-- `consumption.db.connect` is the default. Remaining direct `sqlite3.connect` in production code: `ml_source_matcher.py`, `ml_search_v2.py`, `daily_cheque_scan.py`, `scripts/fines_bot.py`, `sms_monitor.py`.
+- `consumption.db.connect` is the default. Remaining direct `sqlite3.connect` in production/legacy code: `ml_source_matcher.py`, `ml_search_v2.py`, `daily_cheque_scan.py`, `scripts/fines_bot.py`, `sms_monitor.py`, plus legacy branches in `consumption_agent_full_030526.py`.
+- `consumption_agent_full_030526.py` is now clearly legacy CLI glue: duplicated `init` and `report` logic removed; they delegate to `init_db.initialize_database(...)` and `gen_report.generate_report(...)`.
+- Email/SMS dedup rules were tightened on 21.05.2026; authoritative search/anti-dup rules live in `skills/email-access/SKILL.md`.
+- Historical duplicate purchases since `2026-05-01` were soft-deleted in DB after backup (`consumption.db.bak_2026-05-21_pre_dedup`).
 - `/ml_find`, `/ml_profile` — not implemented.
 - Governance tables (`action_proposals`, `approvals`, `audit_events`) — not implemented.
-- Bonus shipped today: `ml_translate.py` (LLM-перевод GPT-4o-mini) + `ml_source_matcher.py` (49 источников, learned ranking).
-- Tests: **529 passed.**
+- Tests: full `pytest -q` green on 21.05.2026 after monolith cleanup + dedup fixes.
 
-## Status of Days 1–4 (closed today, Mon 18.05)
+## Status of Days 1–4
 
 | Day | Plan | Status | Commit |
 |---|---|---|---|
@@ -40,7 +39,10 @@ skills/coding_plan_18-23may26/references/week_plan.md
 | 4 | Telegram Commands & Callbacks | ✅ | `1d72232` |
 | — | Bonus: LLM-translate + source matcher | ✅ | `6278ba8` |
 
-The plan for Tue 19.05 → Thu 21.05 was rewritten — see `references/week_plan.md`.
+Tue 19.05 → Thu 21.05 follow-up execution changed the baseline further:
+- photo handler extraction completed enough for production use;
+- monolith cleanup started with safe delegation instead of big-bang removal;
+- dedup/search rules for email + SMS were hardened and documented in skills.
 
 ## Execution Rules
 

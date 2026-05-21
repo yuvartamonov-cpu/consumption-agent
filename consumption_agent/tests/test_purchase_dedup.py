@@ -42,6 +42,14 @@ def test_canonical_store_name_maps_umny_reteyl_to_samokat():
     assert canonical_store_name("ООО УМНЫЙ РИТЕЙЛ") == "Самокат"
 
 
+def test_canonical_store_name_maps_yandexplus_alias():
+    assert canonical_store_name("ЯндексПлюс") == "Яндекс Плюс"
+
+
+def test_canonical_store_name_maps_internet_resheniya_to_ozon():
+    assert canonical_store_name("Интернет Решения, ООО") == "Ozon"
+
+
 def test_extract_delivery_fee_reads_delivery_note():
     assert extract_delivery_fee("Самокат: чек (доставка 92 ₽; время 20:20)") == 92.0
 
